@@ -26,7 +26,16 @@ class BaseApplication : public QFrame
 public:
     BaseApplication(QFrame *parent = 0);
     void CreateWindow();
+    void AddTab(QStackedLayout *stack, EdenTabBar *tb);
+
     ~BaseApplication();
+
+
+    // Shortcuts
+
+private:
+
+    int tabCount;
 
     // vars
     QString title;
@@ -34,10 +43,6 @@ public:
     QVBoxLayout layout;
     QHBoxLayout WindowBorderLayout;
 
-    // Shortcuts
-
-
-    int tabCount;
 
     // Buttons
     QPushButton AddTabButton;
@@ -70,16 +75,23 @@ public:
 
     // Main View
     QWidget Container;
-    QStackedLayout ContainerLayout;
+    QVBoxLayout ContainerLayout;
+
+    QVBoxLayout TabLayout;
+    QWebEngineView* TabContent;
+    QWebEnginePage TabContentPage;
+    QSplitter SplitView;
+    QUrl TabUrl;
+    QWidget newtab;
 
 protected:
     virtual void mousePressEvent(QMouseEvent*);
     virtual void mouseMoveEvent(QMouseEvent*);
     void center();
-    void AddTab();
+
 
 public slots:
-
+    void AddTabContent();
 
 
 

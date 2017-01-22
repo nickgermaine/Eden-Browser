@@ -75,7 +75,7 @@ void BaseApplication::CreateWindow(){
 
     TabBar->setObjectName(QString("TabBar"));
     int TabCount = 0;
-    TabBar->AddTab(QString("tab 1"));
+
 
     WindowBorderLayout->addWidget(TabBar);
     WindowBorderLayout->addStretch();
@@ -138,6 +138,7 @@ void BaseApplication::CreateWindow(){
      */
 
     QWidget *Container = new QWidget();
+    Container->setContentsMargins(no_margins);
     QStackedLayout *ContainerLayout = new QStackedLayout();
 
     Container->setLayout(ContainerLayout);
@@ -157,14 +158,10 @@ void BaseApplication::CreateWindow(){
     layout->addWidget(ToolBar);
     layout->addWidget(Container);
 
+
     this->setLayout(layout);
-    this->show();
-    this->AddTab();
-    this->AddTab();
-    this->AddTab();
-
-
-
+    show();
+    this->AddTab(ContainerLayout, TabBar);
 
 
 
@@ -189,9 +186,18 @@ void BaseApplication::center(){
     move(qr.topLeft());
 }
 
-void BaseApplication::AddTab(){
-    Tab *newtab = new Tab(&TabCount);
+void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
+
+    Tab *newtab = new Tab(&TabCount, stack);
     Tabs.append(newtab);
-    std::cout << "added tab " << TabCount << std::endl;
+
+    QObject::connect(newtab, &Tab::titleChanged, this, &BaseApplication::AddTabContent);
+
+
+    std::cout << "counting" << ContainerLayout.count() << std::endl;
     TabCount++;
+}
+
+void BaseApplication::AddTabContent(){
+    std::cout << "adding tab content" << std::endl;
 }
