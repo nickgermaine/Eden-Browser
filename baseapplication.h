@@ -5,17 +5,24 @@
 #include <QFrame>
 #include <QFile>
 #include <QVBoxLayout>
-#include <QShortcut>
 #include <QPushButton>
 #include <QTabBar>
 #include <QWidget>
+#include <QStackedLayout>
+#include <QMouseEvent>
+#include <QPoint>
 
-class BaseApplication : public QMainWindow
+// Eden Includes
+#include <tabbar.h>
+#include <addressbar.h>
+
+
+class BaseApplication : public QFrame
 {
     Q_OBJECT
 
 public:
-    BaseApplication(QWidget *parent = 0);
+    BaseApplication(QFrame *parent = 0);
     void CreateWindow();
     ~BaseApplication();
 
@@ -23,13 +30,10 @@ public:
     QString title;
     QFile jquery;
     QVBoxLayout layout;
+    QHBoxLayout WindowBorderLayout;
 
     // Shortcuts
-    QShortcut sc_refresh;
-    QShortcut sc_refresh2;
-    QShortcut sc_refresh3;
-    QShortcut sc_newTab;
-    QShortcut sc_devTools;
+
 
     int tabCount;
 
@@ -44,10 +48,36 @@ public:
     QPushButton MenuButton;
 
     // Tab Bar
-    QTabBar TabBar;
+    EdenTabBar TabBar;
+
+    // Toolbar
+    QWidget ToolBar;
+    QHBoxLayout ToolBarLayout;
+    EdenAddressBar AddressBar;
 
     // Window Border
     QWidget WindowBorder;
+    QWidget window;
+
+    // Other window stuff
+    QSize BaseSize;
+    QPoint oldPos;
+
+
+    // Main View
+    QWidget Container;
+    QStackedLayout ContainerLayout;
+
+protected:
+    virtual void mousePressEvent(QMouseEvent*);
+    virtual void mouseMoveEvent(QMouseEvent*);
+    int m_nMouseClick_X_Coordinate;
+    int m_nMouseClick_Y_Coordinate;
+
+
+public slots:
+
+
 
 
 };

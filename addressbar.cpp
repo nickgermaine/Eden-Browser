@@ -1,11 +1,8 @@
+#include <iostream>
 #include "addressbar.h"
 
-AddressBar::AddressBar(QWidget *parent)
-    : QLineEdit(parent)
+EdenAddressBar::EdenAddressBar(QLineEdit *parent) : QLineEdit(parent)
 {
-
+    //connect(this, SIGNAL(mousePressEvent()), this, SLOT(selectAll()));
 }
 
-void AddressBar::mousePressEvent(){
-    this->selectAll();
-}

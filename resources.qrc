@@ -1,0 +1,44 @@
+<RCC>
+    <qresource prefix="/">
+        <file>resources/stylesheets/material.css</file>
+        <file>resources/icons/addtab.png</file>
+        <file>resources/icons/back.png</file>
+        <file>resources/icons/browser.ico</file>
+        <file>resources/icons/close.png</file>
+        <file>resources/icons/forward.png</file>
+        <file>resources/icons/ic_account_circle_black_24px.svg</file>
+        <file>resources/icons/ic_add_black_24px.svg</file>
+        <file>resources/icons/ic_add_box_black_24px.svg</file>
+        <file>resources/icons/ic_add_circle_black_24px.svg</file>
+        <file>resources/icons/ic_add_circle_outline_black_24px.svg</file>
+        <file>resources/icons/ic_apps_black_24px.svg</file>
+        <file>resources/icons/ic_aspect_ratio_black_24px.svg</file>
+        <file>resources/icons/ic_bookmark_black_24px.svg</file>
+        <file>resources/icons/ic_bookmark_border_black_24px.svg</file>
+        <file>resources/icons/ic_border_horizontal_black_24px.svg</file>
+        <file>resources/icons/ic_border_vertical_black_24px.svg</file>
+        <file>resources/icons/ic_check_box_black_24px.svg</file>
+        <file>resources/icons/ic_check_box_outline_blank_black_24px.svg</file>
+        <file>resources/icons/ic_clear_all_black_24px.svg</file>
+        <file>resources/icons/ic_clear_black_24px.svg</file>
+        <file>resources/icons/ic_close_black_24px.svg</file>
+        <file>resources/icons/ic_crop_din_black_24px.svg</file>
+        <file>resources/icons/ic_dehaze_black_24px.svg</file>
+        <file>resources/icons/ic_delete_black_24px.svg</file>
+        <file>resources/icons/ic_done_black_24px.svg</file>
+        <file>resources/icons/ic_extension_black_24px.svg</file>
+        <file>resources/icons/ic_fullscreen_black_24px.svg</file>
+        <file>resources/icons/ic_highlight_off_black_24px.svg</file>
+        <file>resources/icons/ic_insert_drive_file_black_24px.svg</file>
+        <file>resources/icons/ic_keyboard_arrow_left_black_24px.svg</file>
+        <file>resources/icons/ic_keyboard_arrow_right_black_24px.svg</file>
+        <file>resources/icons/ic_more_vert_black_24px.svg</file>
+        <file>resources/icons/ic_refresh_black_24px.svg</file>
+        <file>resources/icons/ic_remove_black_24px.svg</file>
+        <file>resources/icons/ic_share_black_24px.svg</file>
+        <file>resources/icons/ic_web_asset_black_24px.svg</file>
+        <file>resources/icons/menu.png</file>
+        <file>resources/pages/inspect.html</file>
+        <file>resources/pages/new-tab.html</file>
+    </qresource>
+</RCC>

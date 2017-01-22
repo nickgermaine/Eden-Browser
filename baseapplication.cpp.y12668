@@ -4,8 +4,8 @@
 #include <iostream>
 #include <QApplication>
 
-BaseApplication::BaseApplication(QFrame *parent)
-    : QFrame(parent)
+BaseApplication::BaseApplication(QWidget *parent)
+    : QWidget(parent)
 {
 
     this->CreateWindow();
@@ -28,7 +28,7 @@ void BaseApplication::CreateWindow(){
     no_margins.setTop(0);
 
     // Create Main Window
-    QWidget *window = this;
+    QWidget *window = new QWidget;
 
 
 
@@ -44,13 +44,10 @@ void BaseApplication::CreateWindow(){
     QHBoxLayout *WindowBorderLayout = new QHBoxLayout;
 
     WindowBorderLayout->setContentsMargins(no_margins);
-    WindowBorderLayout->setSpacing(0);
 
     EdenTabBar *TabBar = new EdenTabBar;
     QVBoxLayout *layout = new QVBoxLayout;
     layout->setContentsMargins(no_margins);
-    layout->setSpacing(0);
-    this->setObjectName("BrowserWindow");
 
     // Close/Max/Min Buttons
     QPushButton *CloseBrowserButton = new QPushButton();
@@ -73,7 +70,6 @@ void BaseApplication::CreateWindow(){
     TabBar->AddTab(QString("tab 1"));
 
     WindowBorderLayout->addWidget(TabBar);
-    WindowBorderLayout->addStretch();
     WindowBorderLayout->addWidget(MinBrowserButton);
     WindowBorderLayout->addWidget(MaxBrowserButton);
     WindowBorderLayout->addWidget(CloseBrowserButton);
@@ -97,7 +93,7 @@ void BaseApplication::CreateWindow(){
 
     QWidget *ToolBar = new QWidget;
     QHBoxLayout *ToolBarLayout = new QHBoxLayout;
-    ToolBar->setObjectName("TabControls");
+    ToolBar->setObjectName("toolbar");
 
     ToolBar->setLayout(ToolBarLayout);
 
@@ -138,37 +134,23 @@ void BaseApplication::CreateWindow(){
     Container->setLayout(ContainerLayout);
 
     this->title = "Eden Browser";
-    this->setWindowTitle(this->title);
-    this->setWindowFlags(Qt::FramelessWindowHint);
+    window->setWindowTitle(this->title);
 
     QSize BaseSize;
 
     BaseSize.setHeight(768);
     BaseSize.setWidth(1366);
-    this->setBaseSize(BaseSize);
-    this->setMinimumSize(1366,768);
+    window->setBaseSize(BaseSize);
+    window->setMinimumSize(1377,768);
 
     layout->addWidget(WindowBorder);
     layout->addWidget(ToolBar);
     layout->addWidget(Container);
 
-    this->setLayout(layout);
-    this->show();
-
-
+    window->setLayout(layout);
+    window->show();
 
 
 
 }
 
-
-void BaseApplication::mousePressEvent(QMouseEvent *event) {
-
-    oldPos = event->globalPos();
-}
-
-void BaseApplication::mouseMoveEvent(QMouseEvent *event) {
-    QPoint delta = QPoint(event->globalPos() - oldPos);
-    move(this->x() + delta.x(), this->y() + delta.y());
-    oldPos = event->globalPos();
-}

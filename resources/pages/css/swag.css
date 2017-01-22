@@ -1,0 +1,244 @@
+body {
+    font-family: 'Roboto', sans-serif;
+}
+
+.header {
+    background: #03a9f4;
+    padding: 140px 0px;
+    max-height: 100vh;
+    text-align: center;
+    box-shadow: 0px 5px 20px rgba(0,0,0,.3);
+}
+
+.header h1, .header p, .header h2, .header h3, .header h4 {
+    color:#fff;
+}
+
+.header h4 {
+    max-width: 700px;
+    margin: auto;
+    line-height: 22px;
+    letter-spacing: 1px;
+}
+
+.signup-form input.form-control {
+
+    background: #fff !important;
+    border-radius: 2px;
+    max-width: 300px;
+    margin: auto;
+    padding: 20px;
+    box-shadow: 2px 4px 4px rgba(0,0,0,.2) !important;
+
+}
+
+.footer {
+    text-align: center;
+    padding: 20px;
+    background: #fff;
+    font-size: 8px;
+    border-top: none;
+    box-shadow: 0px 0px 10px rgba(0,0,0,.2);
+
+}
+
+.footer h5 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #aaa;
+}
+
+.main-section, .success-section, .duplicate-section {
+    padding: 100px 0px;
+
+}
+
+.footer p {
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: uppercase;
+    max-width: 400px;
+    /* text-align: center; */
+    margin: auto;
+    color: #aaa;
+    margin-top: 20px;
+    border-top: 1px solid;
+    padding-top: 20px;
+}
+
+.main-logo >.mdi {
+    font-size: 120px;
+    color: #fff;
+}
+
+.section {
+    padding: 200px 0px;
+}
+
+.mdi-xl {
+    text-align: center;
+    font-size: 220px;
+    margin-top: -30px;
+}
+
+.mdi-xl.mdi-language-javascript:before {
+    background: -webkit-linear-gradient(#55e6be, #31c0ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.mdi-xl.mdi-responsive:before {
+
+    background: -webkit-linear-gradient(#00c4ff, #2462cc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.mdi-xl.mdi-television-guide:before {
+    background: -webkit-linear-gradient(#ff00b1, #cc2424);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.section.bg-white {
+    background: #fff;
+    box-shadow: 0px 0px 20px rgba(0,0,0,.2);
+
+}
+
+p {
+    font-size: 16px;
+}
+
+.section h3 {
+    margin-top: 0px;
+    margin-bottom: 30px;
+}
+
+.navbar-nav li.active {
+    border-bottom: 2px solid #fff;
+    background: transparent;
+}
+
+.navbar-nav li.active a {
+    background:transparent !important;
+}
+
+.navbar-nav > li a {
+    text-transform: uppercase;
+    font-weight: 500;
+    font-size: 12px;
+    letter-spacing: 1px;
+}
+
+.nav.navbar-right.navbar-nav.social-links>li>a {
+    padding: 10px;
+    width: 42px;
+    margin-right: 10px;
+    font-size: 20px;
+}
+
+.navbar-fixed-top {
+    transition:all .5s;
+}
+
+.navbar.navbar-info.navbar-fixed-top {
+    background:transparent;
+}
+
+.navbar.navbar-info.navbar-fixed-top.floaty {
+    box-shadow: 0px 0px 15px rgba(0,0,0,.5);
+    background:#03a9f4;
+
+
+}
+
+.navbar.navbar-info .dropdown-menu .active > a, .navbar.navbar-info .dropdown-menu .active > a:hover {
+    color: rgb(0, 0, 0);
+}
+
+.navbar.navbar-info .dropdown-menu .active > a:hover {
+    background-color:#eee;
+    color: rgb(0, 0, 0);
+}
+
+.current_page_item > a:hover {
+    background-color:#eee;
+}
+
+.navbar.navbar-info .dropdown-menu li > a:hover, .navbar.navbar-info .dropdown-menu li > a:focus {
+    color: #03a9f4 !important;
+    background-color: #eeeeee !important;;
+}
+
+.main-area {
+    min-height: calc(100vh - 100px);
+}
+
+.post-link {
+    text-decoration: none !important;
+    color:#777 !important;
+}
+
+.card .card-image {
+    height: 200px;
+    background-size: cover !important;
+    background-position: center !important;
+}
+
+.card .card-image .panel-heading {
+    position: absolute;
+    bottom: 10px;
+    color: #fff;
+}
+
+.img-info {
+    background-size: cover !important;
+    background-position: center !important;
+    background-color:rgba(0,0,0,.7);
+    background-blend-mode: multiply;
+}
+
+.card {
+    box-shadow:0 2px 2px 0 rgba(0, 0, 0, 0.1), 0 2px 2px 0 rgba(0, 0, 0, 0.19);
+    transition:all .2s;
+}
+
+.card:hover {
+    box-shadow:0 2px 2px 0 rgba(0, 0, 0, 0.1), 0px 5px 15px 0 rgba(0, 0, 0, 0.19);
+}
+
+.card-icon .mdi {
+    font-size: 84px;
+    text-align: center;
+    display: block;
+    margin: 20px 0px;
+
+}
+
+.portfolio-item {
+    background-blend-mode: overlay;
+    color: #fff;
+    padding: 200px 0px;
+    background-size: cover !important;
+    background-position: center !important;
+    border-bottom:2px solid;
+}
+
+.max-700 {
+    margin:auto;
+    max-width:700px;
+}
+
+.btn.btn-ghost {
+    color: #fff;
+    border: 2px solid;
+}
+
+[data-animated="true"] {
+    opacity:0;
+}
+
+.bg-dark {
+    background:#111;
+}
