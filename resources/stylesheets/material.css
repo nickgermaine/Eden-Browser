@@ -89,7 +89,7 @@ QTabBar::tab {
 
 #TabBar::close-button {
 
-    border-image: url('resources/icons/ic_clear_black_24px.svg') 0 0 0 0 stretch stretch;
+    border-image: url(':/resources/icons/ic_clear_black_24px.svg') 0 0 0 0 stretch stretch;
     height: 15px;
     width:15px;
     padding:10px;

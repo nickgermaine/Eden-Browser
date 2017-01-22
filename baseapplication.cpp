@@ -3,13 +3,14 @@
 #include <QWidget>
 #include <iostream>
 #include <QApplication>
+#include <QDesktopWidget>
 
 BaseApplication::BaseApplication(QFrame *parent)
     : QFrame(parent)
 {
 
     this->CreateWindow();
-
+    this->center();
 
 
 }
@@ -48,6 +49,10 @@ void BaseApplication::CreateWindow(){
 
     EdenTabBar *TabBar = new EdenTabBar;
     QVBoxLayout *layout = new QVBoxLayout;
+
+    QList<QWidget*> tabs;
+
+
     layout->setContentsMargins(no_margins);
     layout->setSpacing(0);
     this->setObjectName("BrowserWindow");
@@ -68,8 +73,8 @@ void BaseApplication::CreateWindow(){
     // Connect Window Buttons
     QObject::connect(CloseBrowserButton, SIGNAL(clicked()), QApplication::instance(), SLOT(quit()));
 
-    TabBar->setObjectName(QString("TabBarContainer"));
-
+    TabBar->setObjectName(QString("TabBar"));
+    int TabCount = 0;
     TabBar->AddTab(QString("tab 1"));
 
     WindowBorderLayout->addWidget(TabBar);
@@ -154,6 +159,10 @@ void BaseApplication::CreateWindow(){
 
     this->setLayout(layout);
     this->show();
+    this->AddTab();
+    this->AddTab();
+    this->AddTab();
+
 
 
 
@@ -171,4 +180,18 @@ void BaseApplication::mouseMoveEvent(QMouseEvent *event) {
     QPoint delta = QPoint(event->globalPos() - oldPos);
     move(this->x() + delta.x(), this->y() + delta.y());
     oldPos = event->globalPos();
+}
+
+void BaseApplication::center(){
+    QRect qr = frameGeometry();
+    QPoint cp = QDesktopWidget().availableGeometry().center();
+    qr.moveCenter(cp);
+    move(qr.topLeft());
+}
+
+void BaseApplication::AddTab(){
+    Tab *newtab = new Tab(&TabCount);
+    Tabs.append(newtab);
+    std::cout << "added tab " << TabCount << std::endl;
+    TabCount++;
 }

@@ -26,11 +26,13 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += main.cpp\
         baseapplication.cpp \
     addressbar.cpp \
-    tabbar.cpp
+    tabbar.cpp \
+    tab.cpp
 
 HEADERS  += baseapplication.h \
     addressbar.h \
-    tabbar.h
+    tabbar.h \
+    tab.h
 
 RESOURCES += \
     resources.qrc

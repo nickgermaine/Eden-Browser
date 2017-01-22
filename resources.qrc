@@ -38,7 +38,5 @@
         <file>resources/icons/ic_share_black_24px.svg</file>
         <file>resources/icons/ic_web_asset_black_24px.svg</file>
         <file>resources/icons/menu.png</file>
-        <file>resources/pages/inspect.html</file>
-        <file>resources/pages/new-tab.html</file>
     </qresource>
 </RCC>

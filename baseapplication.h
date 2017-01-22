@@ -11,6 +11,8 @@
 #include <QStackedLayout>
 #include <QMouseEvent>
 #include <QPoint>
+#include <QList>
+#include <tab.h>
 
 // Eden Includes
 #include <tabbar.h>
@@ -49,6 +51,8 @@ public:
 
     // Tab Bar
     EdenTabBar TabBar;
+    QList<QWidget*> Tabs;
+    int TabCount;
 
     // Toolbar
     QWidget ToolBar;
@@ -71,9 +75,8 @@ public:
 protected:
     virtual void mousePressEvent(QMouseEvent*);
     virtual void mouseMoveEvent(QMouseEvent*);
-    int m_nMouseClick_X_Coordinate;
-    int m_nMouseClick_Y_Coordinate;
-
+    void center();
+    void AddTab();
 
 public slots:
 
