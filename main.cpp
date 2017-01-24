@@ -1,6 +1,9 @@
 #include "baseapplication.h"
 #include <QApplication>
 #include <QFile>
+#include <QWebEngineProfile>
+#include "urlintercepter.h"
+
 
 int main(int argc, char *argv[])
 {
@@ -22,6 +25,9 @@ int main(int argc, char *argv[])
     a.setStyleSheet(StyleSheet);
 
 
+    RequestInterceptor *ads = new RequestInterceptor;
+
+        QWebEngineProfile::defaultProfile()->setRequestInterceptor(ads);
 
     return a.exec();
 }

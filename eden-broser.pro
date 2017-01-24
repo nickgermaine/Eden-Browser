@@ -25,14 +25,18 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += main.cpp\
         baseapplication.cpp \
-    addressbar.cpp \
-    tabbar.cpp \
-    tab.cpp
+    toolbar/addressbar.cpp \
+    tabs/tabbar.cpp \
+    tabs/tab.cpp \
+    urlintercepter.cpp
 
 HEADERS  += baseapplication.h \
-    addressbar.h \
-    tabbar.h \
-    tab.h
+    toolbar/addressbar.h \
+    tabs/tabbar.h \
+    tabs/tab.h \
+    urlintercepter.h
 
 RESOURCES += \
     resources.qrc
+
+

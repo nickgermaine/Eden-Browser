@@ -10,8 +10,5 @@ I started implementing this in Python, using PyQt5, and was able to do a lot of 
 
 ### Screenshots
 
-#### Current State
-![Alt text](screenshots/screen1.png?raw=true "Eden 0.1.3")
 
-#### Pythons last implementation
 ![Alt text](screenshots/old-python-screen.png?raw=true "Eden 0.1.3")

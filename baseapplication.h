@@ -12,11 +12,17 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QList>
-#include <tab.h>
+#include <tabs/tab.h>
+#include <toolbar/addressbar.h>
+#include <QtWebEngineWidgets/qwebengineview.h>
+#include <QtWebEngineWidgets/qwebenginepage.h>
+#include <QApplication>
+#include <QUrl>
+#include <QShortcut>
 
 // Eden Includes
-#include <tabbar.h>
-#include <addressbar.h>
+#include <tabs/tabbar.h>
+#include <toolbar/addressbar.h>
 
 
 class BaseApplication : public QFrame
@@ -25,17 +31,17 @@ class BaseApplication : public QFrame
 
 public:
     BaseApplication(QFrame *parent = 0);
-    void CreateWindow();
+    void ECreateWindow();
     void AddTab(QStackedLayout *stack, EdenTabBar *tb);
 
     ~BaseApplication();
-
-
-    // Shortcuts
-
-private:
-
-    int tabCount;
+    int TabCount;
+    // Tab Bar
+    EdenTabBar TabBar;
+    QList<Tab*> Tabs;
+    Tab* CurrentTab;
+    EdenAddressBar AddressBar;
+    QPushButton NewTabButton;
 
     // vars
     QString title;
@@ -47,22 +53,20 @@ private:
     // Buttons
     QPushButton AddTabButton;
     QPushButton CloseBrowserButton;
-    QPushButton MaximizeBrowserButton;
-    QPushButton MinimizeBrowserButton;
+    QPushButton MaxBrowserButton;
+    QPushButton MinBrowserButton;
     QPushButton BackButton;
     QPushButton ForwardButton;
     QPushButton RefreshButton;
     QPushButton MenuButton;
 
-    // Tab Bar
-    EdenTabBar TabBar;
-    QList<QWidget*> Tabs;
-    int TabCount;
+
+
 
     // Toolbar
     QWidget ToolBar;
     QHBoxLayout ToolBarLayout;
-    EdenAddressBar AddressBar;
+
 
     // Window Border
     QWidget WindowBorder;
@@ -75,7 +79,7 @@ private:
 
     // Main View
     QWidget Container;
-    QVBoxLayout ContainerLayout;
+    QStackedLayout ContainerLayout;
 
     QVBoxLayout TabLayout;
     QWebEngineView* TabContent;
@@ -84,14 +88,35 @@ private:
     QUrl TabUrl;
     QWidget newtab;
 
+
+    // Shortcuts
+
+private:
+
+
+
+
+
 protected:
     virtual void mousePressEvent(QMouseEvent*);
     virtual void mouseMoveEvent(QMouseEvent*);
     void center();
 
 
+signals:
+    void titleChanged(const QString &title, const QString &tab_name);
+    void iconChanged(const QIcon &icon, const QString &tab_name);
+    void currentUrlChanged(const QString &newurl);
+
+
 public slots:
-    void AddTabContent();
+
+    void selectCurrentTab(int i);
+    void loadPage();
+    void toggleMax();
+    void goBack();
+    void goForward();
+    void refresh();
 
 
 
