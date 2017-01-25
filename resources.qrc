@@ -38,5 +38,6 @@
         <file>resources/icons/ic_share_black_24px.svg</file>
         <file>resources/icons/ic_web_asset_black_24px.svg</file>
         <file>resources/icons/menu.png</file>
+        <file>resources/stylesheets/material-dark.css</file>
     </qresource>
 </RCC>

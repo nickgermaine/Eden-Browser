@@ -27,6 +27,7 @@ signals:
 public slots:
     void updateTitle(const QString &title, const QString &tab_name);
     void updateIcon(const QIcon &icon, const QString &tab_name);
+    void ShowContextMenu(const QPoint &pos);
 
 };
 

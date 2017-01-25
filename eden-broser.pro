@@ -8,7 +8,7 @@ QT       += core gui webenginewidgets
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
-TARGET = eden-broser
+TARGET = eden-browser
 TEMPLATE = app
 
 # The following define makes your compiler emit warnings if you use
@@ -28,15 +28,21 @@ SOURCES += main.cpp\
     toolbar/addressbar.cpp \
     tabs/tabbar.cpp \
     tabs/tab.cpp \
-    urlintercepter.cpp
+    urlintercepter.cpp \
+
+
 
 HEADERS  += baseapplication.h \
     toolbar/addressbar.h \
     tabs/tabbar.h \
     tabs/tab.h \
-    urlintercepter.h
+    urlintercepter.h \
+
 
 RESOURCES += \
     resources.qrc
+
+DISTFILES += \
+    resources/stylesheets/material-dark.css
 
 

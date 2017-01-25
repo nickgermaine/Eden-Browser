@@ -19,7 +19,7 @@
 #include <QApplication>
 #include <QUrl>
 #include <QShortcut>
-
+#include <QContextMenuEvent>
 // Eden Includes
 #include <tabs/tabbar.h>
 #include <toolbar/addressbar.h>
@@ -42,6 +42,7 @@ public:
     Tab* CurrentTab;
     EdenAddressBar AddressBar;
     QPushButton NewTabButton;
+    QListView contextMenu;
 
     // vars
     QString title;
@@ -117,6 +118,8 @@ public slots:
     void goBack();
     void goForward();
     void refresh();
+    void ShowContextMenu(const QPoint &pos);
+    void ShowMainMenu();
 
 
 

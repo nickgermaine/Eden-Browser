@@ -71,6 +71,24 @@ QWidget#toolbar {
 
 }
 
+QMenu {
+    background:#fff;
+    border:1px solid #aaa;
+    padding:0px;
+    margin:0px;
+    color:#666;
+    width:250px;
+
+}
+
+QMenu::item {
+    font-size:13px;
+    padding:5px;
+    height:20px;
+    padding-left:20px;
+
+}
+
 QWebEngineView, #TabView {
     height:900px;
 }
@@ -125,4 +143,11 @@ QListView::item::selected {
     color:#333;
     border: none;
     background:#eee;
+}
+
+QListView#MainMenu {
+    position:absolute;
+    top:0px;
+    left:0px;
+    z-index: 500;
 }

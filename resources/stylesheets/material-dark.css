@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css?family=Roboto');
+
+* {
+    font-family: 'Roboto', sans-serif;
+}
+
+QPushButton {
+    border:none;
+    background:transparent;
+    padding:10px;
+
+}
+
+QPushButton:hover {
+    background:rgba(0,0,0,.05);
+}
+
+QLineEdit {
+    background: rgba(0,0,0,.2);
+    padding:10px;
+    border-radius:3px;
+
+    font-size:14px;
+    color:#ccc;
+
+}
+
+QTabBar {
+    background:transparent;
+    border:none !important;
+    border-bottom:0px solid #444;
+
+}
+
+QTabBar::tab {
+    padding:10px;
+    border:none;
+    background:transparent;
+    padding-left:20px;
+    padding-right:10px;
+    color:#aaa;
+}
+
+QTabBar::tab QPushButton {
+    border:initial;
+    background:initial;
+    padding:initial;
+
+}
+
+QTabBar::tab:selected {
+    border-left:1px solid #222;
+    border-right:1px solid #222;
+    background:#444;
+    color:#fff;
+    padding-left:10px;
+
+}
+
+QTabBar::tab:!selected {
+    padding-left:10px;
+    border-right:1px solid #222;
+    color:#ccc;
+}
+
+QWidget#toolbar {
+    background:#444;
+    border-bottom:0px solid rgba(0,0,0,.1);
+    border-top:none;
+    border-bottom:0px solid #444;
+}
+
+#BrowserWindow {
+    border: 1px solid #888 !important;
+
+}
+
+QWebEngineView, #TabView {
+    height:900px;
+}
+
+QTabBar::tab {
+    border: none !important;
+    margin:0px;
+    padding:10px;
+    text-align:left !important;
+    font-size:14px;
+    font-weight:400;
+    color:#666;
+    width:200px;
+    padding-left:0px;
+}
+
+#TabBar::close-button {
+
+    border-image: url(':/resources/icons/ic_clear_black_24px.svg') 0 0 0 0 stretch stretch;
+    height: 15px;
+    width:15px;
+    padding:10px;
+    padding-left:-20px;
+
+
+}
+
+QWidget#TabControls {
+    border-bottom:2px solid #333;
+    background:#444;
+    padding-bottom:15px;
+}
+
+#popup {
+    font-size:14px;
+
+    background:#fff;
+    border:1px solid #ddd;
+
+
+
+}
+
+QListView::item {
+    padding:5px 10px;
+    padding-left:30px;
+    position:relative;
+    background:#fff;
+}
+
+QListView::item::selected {
+    color:#444;
+    border: none;
+    background:#eee;
+}
+
+#windowControls {
+    background:#333;
+}
+
+QIcon {
+color: #fff;
+}

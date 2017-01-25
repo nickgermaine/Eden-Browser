@@ -4,6 +4,8 @@
 #include <iostream>
 #include <QApplication>
 #include <QDesktopWidget>
+#include <QGraphicsEffect>
+#include <QGraphicsDropShadowEffect>
 
 
 BaseApplication::BaseApplication(QFrame *parent)
@@ -12,6 +14,11 @@ BaseApplication::BaseApplication(QFrame *parent)
 
     ECreateWindow();
     this->center();
+
+    this->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    connect(this, SIGNAL(customContextMenuRequested(const QPoint &)),
+            this, SLOT(ShowContextMenu(const QPoint &)));
 
 
 }
@@ -30,7 +37,7 @@ void BaseApplication::ECreateWindow(){
     no_margins.setTop(0);
 
     // Create Main Window
-    QWidget *window = this;
+    QWidget *window = new QWidget;
 
 
 
@@ -47,6 +54,8 @@ void BaseApplication::ECreateWindow(){
 
     WindowBorderLayout.setContentsMargins(no_margins);
     WindowBorderLayout.setSpacing(0);
+
+    WindowBorderLayout.setObjectName("windowControls");
 
     TabBar;
     layout;
@@ -100,6 +109,55 @@ void BaseApplication::ECreateWindow(){
 
 
 
+    QAction newtab("New tab", this);
+    QAction newwindow("New window", this);
+    QAction newprivatewindow("New incognito window", this);
+
+    QAction bookmarks("Bookmarks", this);
+    QAction history("History", this);
+    QAction reading("Reading list", this);
+
+    QAction savepage("Save Page", this);
+    QAction settings("Settings", this);
+    QAction about("About Eden Browser", this);
+    QAction help("Help", this);
+
+    QAction quit("Quit", this);
+    contextMenu.setObjectName("MainMenu");
+
+    QPoint localPoint;
+    localPoint.setX(0);
+    localPoint.setY(0);
+
+    contextMenu.mapToParent(localPoint);
+    contextMenu.setGeometry(0, 0, 300, 500);
+
+    contextMenu.addAction(&newtab);
+    contextMenu.addAction(&newwindow);
+    contextMenu.addAction(&newprivatewindow);
+
+    contextMenu.addAction(&bookmarks);
+    contextMenu.addAction(&history);
+    contextMenu.addAction(&reading);
+    contextMenu.addAction(&savepage);
+
+    contextMenu.addAction(&settings);
+    contextMenu.addAction(&about);
+    contextMenu.addAction(&help);
+
+    contextMenu.addAction(&quit);
+
+    QGraphicsDropShadowEffect* effect = new QGraphicsDropShadowEffect();
+    effect->setBlurRadius(100);
+    qreal *offset = new qreal();
+
+    effect->setOffset(0.00);
+    contextMenu.setGraphicsEffect(effect);
+    contextMenu.setVisible(false);
+    WindowBorderLayout.addWidget(&contextMenu);
+
+
+
 
 
 
@@ -149,6 +207,8 @@ void BaseApplication::ECreateWindow(){
     ToolBarLayout.addWidget(&AddressBar);
     ToolBarLayout.addWidget(MenuButton);
 
+    connect(MenuButton, &QPushButton::clicked, this, &BaseApplication::ShowMainMenu);
+
 
     /*
      *
@@ -165,7 +225,7 @@ void BaseApplication::ECreateWindow(){
 
     this->title = "Eden Browser";
     this->setWindowTitle(this->title);
-    this->setWindowFlags(Qt::FramelessWindowHint);
+    this->setWindowFlags(this->windowFlags() | Qt::FramelessWindowHint);
 
     QSize BaseSize;
 
@@ -177,6 +237,7 @@ void BaseApplication::ECreateWindow(){
     layout.addWidget(&WindowBorder);
     layout.addWidget(&ToolBar);
     layout.addWidget(&Container);
+
 
 
     this->setLayout(&layout);
@@ -290,4 +351,21 @@ void BaseApplication::toggleMax(){
     }else{
         showMaximized();
     }
+}
+
+void BaseApplication::ShowContextMenu(const QPoint &pos)
+{
+   QMenu contextMenu(tr("Context menu"), this);
+
+   QAction action1("Remove Data Point", this);
+   connect(&action1, SIGNAL(triggered()), this, SLOT(removeDataPoint()));
+   contextMenu.addAction(&action1);
+
+   contextMenu.exec(mapToGlobal(pos));
+}
+
+void BaseApplication::ShowMainMenu(){
+
+
+    //contextMenu.setVisible(true);
 }
