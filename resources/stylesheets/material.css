@@ -15,14 +15,29 @@ QPushButton:hover {
     background:rgba(0,0,0,.05);
 }
 
-QLineEdit {
+#AddressBarContainer {
     background: rgba(0,0,0,.05);
-    padding:10px;
+
     border-radius:3px;
 
     font-size:14px;
     color:#666;
+    opacity:.5;
 
+}
+
+#AddressBarContainer QLineEdit {
+    background: transparent;
+    padding:5px;
+    border-radius:3px;
+    border:none;
+    padding-left:0px;
+    font-size:14px;
+    color:#666;
+}
+
+#AddressBarContainer QPushButton {
+    opacity:.5;
 }
 
 QTabBar {
@@ -82,10 +97,10 @@ QMenu {
 }
 
 QMenu::item {
-    font-size:13px;
-    padding:5px;
-    height:20px;
-    padding-left:20px;
+    font-size:15px;
+    padding:15px;
+    margin-left:15px;
+    padding-left:30px;
 
 }
 
@@ -145,9 +160,14 @@ QListView::item::selected {
     background:#eee;
 }
 
-QListView#MainMenu {
-    position:absolute;
-    top:0px;
-    left:0px;
-    z-index: 500;
+
+#menutest {
+z-index:999999999;
+border:2px solid #000;
+height:300px;
+width:200px;
+position:absolute !important;
+right:0 !important;
+top:0;
+margin:10px;
 }

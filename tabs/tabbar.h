@@ -29,6 +29,7 @@ public slots:
     void updateIcon(const QIcon &icon, const QString &tab_name);
     void ShowContextMenu(const QPoint &pos);
 
+
 };
 
 #endif // TABBAR_H

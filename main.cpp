@@ -3,11 +3,15 @@
 #include <QFile>
 #include <QWebEngineProfile>
 #include "urlintercepter.h"
+#include <QWebEngineSettings>
+
+
 
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    qputenv("QTWEBENGINE_REMOTE_DEBUGGING", "0.0.0.0:667");
     BaseApplication w;
 
     /*
@@ -25,9 +29,11 @@ int main(int argc, char *argv[])
     a.setStyleSheet(StyleSheet);
 
 
+
+
     RequestInterceptor *ads = new RequestInterceptor;
 
-        QWebEngineProfile::defaultProfile()->setRequestInterceptor(ads);
+    QWebEngineProfile::defaultProfile()->setRequestInterceptor(ads);
 
     return a.exec();
 }

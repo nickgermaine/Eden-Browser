@@ -10,7 +10,7 @@
 #include <QObject>
 #include <QWebEngineProfile>
 #include "urlintercepter.h"
-
+#include "devtools/devtoolscontainer.h"
 
 class Tab : public QWidget
 {
@@ -25,6 +25,8 @@ public:
     QUrl TabUrl;
     int tabcount;
     void webTitleChanged();
+    void OpenDevTools();
+
 
 signals:
     void titleChanged(const QString &title, const QString &tab_name);
@@ -34,6 +36,8 @@ signals:
 
 
 public slots:
+        void destroyTab();
+
 
 };
 

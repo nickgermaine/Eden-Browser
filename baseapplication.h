@@ -23,6 +23,7 @@
 // Eden Includes
 #include <tabs/tabbar.h>
 #include <toolbar/addressbar.h>
+#include <QListWidget>
 
 
 class BaseApplication : public QFrame
@@ -42,13 +43,18 @@ public:
     Tab* CurrentTab;
     EdenAddressBar AddressBar;
     QPushButton NewTabButton;
-    QListView contextMenu;
+    QMenu contextMenu;
+    int TabUnderMouse;
 
     // vars
     QString title;
     QFile jquery;
     QVBoxLayout layout;
     QHBoxLayout WindowBorderLayout;
+
+    QMenu* MainMenu;
+    QGridLayout windowLayout;
+    QWidget window;
 
 
     // Buttons
@@ -61,6 +67,13 @@ public:
     QPushButton RefreshButton;
     QPushButton MenuButton;
 
+    QPushButton GNotifications;
+    QPushButton ShareButton;
+    QPushButton BookmarkButton;
+    QPushButton LockButton;
+    QWidget AddressBarContainer;
+    QHBoxLayout AddressBarLayout;
+
 
 
 
@@ -71,7 +84,7 @@ public:
 
     // Window Border
     QWidget WindowBorder;
-    QWidget window;
+
 
     // Other window stuff
     QSize BaseSize;
@@ -120,6 +133,9 @@ public slots:
     void refresh();
     void ShowContextMenu(const QPoint &pos);
     void ShowMainMenu();
+    void CloseTab(const int &i);
+    void ShowTabContextMenu(const QPoint &post);
+    void CloseOtherTabs(int i);
 
 
 

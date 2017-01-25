@@ -7,7 +7,7 @@
 void RequestInterceptor::interceptRequest(QWebEngineUrlRequestInfo &info)
 {
     if (!info.requestUrl().host().contains("qt")) {
-        qDebug() << "blocking" << info.requestUrl();
+        //qDebug() << "blocking" << info.requestUrl();
         //info.block(true);
     }
 }

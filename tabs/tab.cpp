@@ -20,8 +20,11 @@ Tab::Tab(int *tc, QStackedLayout *c, QWidget *parent) : QWidget(parent)
     TabContent.load(TabUrl->fromUserInput("http://google.com"));
 
     this->setLayout(TabLayout);
-    TabLayout->addWidget(&TabContent);
-    this->show();
+    TabLayout->addWidget(&SplitView);
+    SplitView.addWidget(&TabContent);
+
+    SplitView.setOrientation(Qt::Vertical);
+    //this->show();
 
     // Load finished
     connect(&TabContent, &QWebEngineView::loadFinished, [this](const bool &ok){
@@ -54,4 +57,18 @@ Tab::~Tab(){
 
 void Tab::webTitleChanged(){
 
+}
+
+void Tab::OpenDevTools(){
+
+    DevToolsContainer *devtools = new DevToolsContainer;
+    SplitView.addWidget(devtools);
+
+
+}
+
+
+void Tab::destroyTab(){
+    qDebug() << "destroying " << this->TabContent.title();
+    this->destroy();
 }

@@ -2,6 +2,7 @@
 #include <iostream>
 #include <QVariant>
 #include <QMenu>
+#include <QDebug>
 
 EdenTabBar::EdenTabBar(QTabBar *parent) : QTabBar(parent)
 {
@@ -14,7 +15,7 @@ EdenTabBar::EdenTabBar(QTabBar *parent) : QTabBar(parent)
     this->setTabsClosable(true);
 
     this->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(this, &EdenTabBar::customContextMenuRequested, this, &EdenTabBar::ShowContextMenu);
+    //connect(this, &EdenTabBar::customContextMenuRequested, this, &EdenTabBar::ShowContextMenu);
 
 }
 
@@ -27,8 +28,10 @@ void EdenTabBar::AddTab(QString tabText){
 }
 
 void EdenTabBar::updateTitle(const QString &title, const QString &tab_name){
-
+    qDebug() << "actually changing " << tab_name << " to " << title;
+    qDebug() << "tabbar length " << this->count();
     for(int i = 0;i <= this->count();i++){
+        qDebug() << " current tab is " << tabData(i).toString();
         std::cout << tabData(i).toString().toStdString() << std::endl;
         if(tabData(i).toString() == tab_name){
             this->setTabText(i, title);
@@ -87,3 +90,5 @@ void EdenTabBar::ShowContextMenu(const QPoint &pos)
 
    contextMenu.exec(mapToGlobal(pos));
 }
+
+

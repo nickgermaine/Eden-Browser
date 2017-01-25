@@ -6,6 +6,12 @@
 #include <QDesktopWidget>
 #include <QGraphicsEffect>
 #include <QGraphicsDropShadowEffect>
+#include <QGridLayout>
+#include <QRect>
+#include <QDebug>
+#include <QStringListModel>
+#include <QListData>
+#include <QToolButton>
 
 
 BaseApplication::BaseApplication(QFrame *parent)
@@ -19,6 +25,9 @@ BaseApplication::BaseApplication(QFrame *parent)
 
     connect(this, SIGNAL(customContextMenuRequested(const QPoint &)),
             this, SLOT(ShowContextMenu(const QPoint &)));
+
+    TabBar.setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(&TabBar, &EdenTabBar::customContextMenuRequested, this, &BaseApplication::ShowTabContextMenu);
 
 
 }
@@ -37,9 +46,6 @@ void BaseApplication::ECreateWindow(){
     no_margins.setTop(0);
 
     // Create Main Window
-    QWidget *window = new QWidget;
-
-
 
     /*
      *
@@ -85,7 +91,7 @@ void BaseApplication::ECreateWindow(){
     connect(&MaxBrowserButton, &QPushButton::clicked, this, &BaseApplication::toggleMax);
     QObject::connect(&CloseBrowserButton, &QPushButton::clicked, [this](){
         destroy();
-        QApplication::instance()->quit();
+        //QApplication::instance()->quit();
     });
 
     this->TabBar.setObjectName(QString("TabBar"));
@@ -94,7 +100,7 @@ void BaseApplication::ECreateWindow(){
     connect(this, &BaseApplication::titleChanged, &TabBar, &EdenTabBar::updateTitle);
     connect(this, &BaseApplication::iconChanged, &TabBar, &EdenTabBar::updateIcon);
     connect(&TabBar, &EdenTabBar::tabBarClicked, this, &BaseApplication::selectCurrentTab);
-
+    connect(&TabBar, &EdenTabBar::tabCloseRequested, this, &BaseApplication::CloseTab);
     NewTabButton;
     NewTabButton.setIcon(QIcon(":/resources/icons/ic_add_black_24px.svg"));
 
@@ -105,57 +111,6 @@ void BaseApplication::ECreateWindow(){
     WindowBorderLayout.addWidget(&MaxBrowserButton);
     WindowBorderLayout.addWidget(&CloseBrowserButton);
     WindowBorder.setLayout(&WindowBorderLayout);
-
-
-
-
-    QAction newtab("New tab", this);
-    QAction newwindow("New window", this);
-    QAction newprivatewindow("New incognito window", this);
-
-    QAction bookmarks("Bookmarks", this);
-    QAction history("History", this);
-    QAction reading("Reading list", this);
-
-    QAction savepage("Save Page", this);
-    QAction settings("Settings", this);
-    QAction about("About Eden Browser", this);
-    QAction help("Help", this);
-
-    QAction quit("Quit", this);
-    contextMenu.setObjectName("MainMenu");
-
-    QPoint localPoint;
-    localPoint.setX(0);
-    localPoint.setY(0);
-
-    contextMenu.mapToParent(localPoint);
-    contextMenu.setGeometry(0, 0, 300, 500);
-
-    contextMenu.addAction(&newtab);
-    contextMenu.addAction(&newwindow);
-    contextMenu.addAction(&newprivatewindow);
-
-    contextMenu.addAction(&bookmarks);
-    contextMenu.addAction(&history);
-    contextMenu.addAction(&reading);
-    contextMenu.addAction(&savepage);
-
-    contextMenu.addAction(&settings);
-    contextMenu.addAction(&about);
-    contextMenu.addAction(&help);
-
-    contextMenu.addAction(&quit);
-
-    QGraphicsDropShadowEffect* effect = new QGraphicsDropShadowEffect();
-    effect->setBlurRadius(100);
-    qreal *offset = new qreal();
-
-    effect->setOffset(0.00);
-    contextMenu.setGraphicsEffect(effect);
-    contextMenu.setVisible(false);
-    WindowBorderLayout.addWidget(&contextMenu);
-
 
 
 
@@ -188,8 +143,7 @@ void BaseApplication::ECreateWindow(){
     RefreshButton->setIcon(QIcon(":/resources/icons/ic_refresh_black_24px.svg"));
 
 
-    QPushButton *MenuButton = new QPushButton();
-    MenuButton->setIcon(QIcon(":/resources/icons/ic_more_vert_black_24px.svg"));
+    MenuButton.setIcon(QIcon(":/resources/icons/ic_more_vert_black_24px.svg"));
 
     AddressBar;
 
@@ -199,16 +153,30 @@ void BaseApplication::ECreateWindow(){
     connect(ForwardButton, &QPushButton::clicked, this, &BaseApplication::goForward);
     connect(RefreshButton, &QPushButton::clicked, this, &BaseApplication::refresh);
 
+    // Build Address Bar
+
+    BookmarkButton.setIcon(QIcon(":/resources/icons/ic_bookmark_border_black_24px.svg"));
+    LockButton.setIcon(QIcon(":/resources/icons/ic_language_black_24px.svg"));
+
+    AddressBarContainer.setLayout(&AddressBarLayout);
+    AddressBarLayout.setContentsMargins(0,0,0,0);
+    AddressBarContainer.setObjectName("AddressBarContainer");
+    AddressBarLayout.addWidget(&LockButton);
+    AddressBarLayout.addWidget(&AddressBar);
+    AddressBarLayout.addWidget(&BookmarkButton);
 
     // Add Objects to ToolBar
     ToolBarLayout.addWidget(BackButton);
     ToolBarLayout.addWidget(ForwardButton);
     ToolBarLayout.addWidget(RefreshButton);
-    ToolBarLayout.addWidget(&AddressBar);
-    ToolBarLayout.addWidget(MenuButton);
+    ToolBarLayout.addWidget(&AddressBarContainer);
+    ToolBarLayout.addWidget(&MenuButton);
 
-    connect(MenuButton, &QPushButton::clicked, this, &BaseApplication::ShowMainMenu);
 
+    //QObject::connect(&MenuButton, &QToolButton::triggered, &MenuButton, &QToolButton::setDefaultAction);
+
+
+    connect(&MenuButton, &QToolButton::clicked, this, &BaseApplication::ShowMainMenu);
 
     /*
      *
@@ -238,9 +206,11 @@ void BaseApplication::ECreateWindow(){
     layout.addWidget(&ToolBar);
     layout.addWidget(&Container);
 
+    window.setLayout(&layout);
 
 
-    this->setLayout(&layout);
+
+    // end main menu
     show();
     this->AddTab(&ContainerLayout, &TabBar);
 
@@ -251,10 +221,23 @@ void BaseApplication::ECreateWindow(){
     QShortcut *shortcut = new QShortcut(QKeySequence(tr("Ctrl+T", "New Tab")),
                              this);
 
+    QShortcut *devtools = new QShortcut(QKeySequence(tr("Ctrl+Shift+I", "Open Developer Tools")), this);
+
     connect(shortcut, &QShortcut::activated, [this](){
         this->AddTab(&ContainerLayout, &TabBar);
     });
 
+    connect(devtools, &QShortcut::activated, [this](){
+       CurrentTab->OpenDevTools();
+    });
+
+
+    windowLayout.addWidget(&window, 0,0,0,0);
+    //windowLayout.addWidget(menuContainer, 0,0,0,0);
+    windowLayout.setSpacing(0);
+    windowLayout.setContentsMargins(0, 0, 0, 0);
+
+    setLayout(&windowLayout);
 
 
 
@@ -281,7 +264,7 @@ void BaseApplication::center(){
 
 void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
 
-
+    qDebug() << " current tabcount is " << TabCount;
     Tab *newtab = new Tab(&TabCount, &ContainerLayout);
     Tabs.append(newtab);
 
@@ -291,9 +274,12 @@ void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
     QUrl *nu = new QUrl;
 
     tb->addTab(QString("New Tab"));
-    tb->setTabData(TabCount, QVariant(QString("tab" + QString::number(TabCount))));
+    int t = TabBar.count() - 1;
+    qDebug() << " tab count when adding new " << t;
+    tb->setTabData(t, QVariant(QString("tab" + QString::number(TabCount))));
 
     connect(newtab, &Tab::titleChanged, [this, newtab](const QString &title, const QString &tab_name){
+        qDebug() << "tryng to change tab " << tab_name << " to " << title;
         emit titleChanged(title, tab_name);
     });
 
@@ -310,14 +296,54 @@ void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
 
     ContainerLayout.addWidget(Tabs[TabCount]);
     ContainerLayout.setCurrentWidget(Tabs[TabCount]);
-    TabBar.setCurrentIndex(TabCount);
+    TabBar.setCurrentIndex(t);
     TabCount++;
+}
+
+void BaseApplication::CloseOtherTabs(int i){
+    QVariant tab_name = TabBar.tabData(i);
+
+    for(int a = 0;a < TabBar.count(); a++){
+        if(TabBar.tabData(a) != tab_name){
+            this->CloseTab(a);
+        }
+    }
+}
+
+void BaseApplication::CloseTab(const int &i = -1){
+    if(i == -1){
+        int a = TabUnderMouse;
+
+        QString tab_name = TabBar.tabData(a).toString();
+        Tab *ct = Container.findChild<Tab *>(tab_name);
+        //ContainerLayout.removeWidget(ct);
+        //ct->destroyTab();
+
+        qDebug() << " tabs length " << Tabs.count() << " i is " << i + 1;
+        qDebug() << " should remove tab ";
+        Tabs[a]->destroyTab();
+        TabBar.removeTab(a);
+        TabCount;
+    }else{
+        QString tab_name = TabBar.tabData(i).toString();
+        Tab *ct = Container.findChild<Tab *>(tab_name);
+        //ContainerLayout.removeWidget(ct);
+        //ct->destroyTab();
+
+        qDebug() << " tabs length " << Tabs.count() << " i is " << i + 1;
+        qDebug() << " should remove tab ";
+        Tabs[i]->destroyTab();
+        TabBar.removeTab(i);
+        TabCount;
+    }
+
 }
 
 
 void BaseApplication::selectCurrentTab(int i){
 
     QString tab_name = this->TabBar.tabData(i).toString();
+    qDebug() << "clicked Tab " << tab_name << " at index " << i;
     CurrentTab = Container.findChild<Tab *>(tab_name);
 
     ContainerLayout.setCurrentWidget(CurrentTab);
@@ -367,5 +393,129 @@ void BaseApplication::ShowContextMenu(const QPoint &pos)
 void BaseApplication::ShowMainMenu(){
 
 
-    //contextMenu.setVisible(true);
+
+    QMenu MainMenu(tr("Context menu"), this);
+
+    QAction newtab("New tab", this);
+    newtab.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+
+    QAction newwindow("New window", this);
+    newwindow.setIcon(QIcon(QString(":/resources/icons/ic_launch_black_24px.svg")));
+
+    QAction newpwindow("New private window", this);
+    newpwindow.setIcon(QIcon(QString(":/resources/icons/ic_lock_black_24px.svg")));
+
+    QAction bookmarks("Bookmarks", this);
+    bookmarks.setIcon(QIcon(QString(":/resources/icons/ic_bookmark_border_black_24px.svg")));
+
+    QAction reading("Reading list", this);
+    reading.setIcon(QIcon(QString(":/resources/icons/ic_chrome_reader_mode_black_24px.svg")));
+
+    QAction history("History", this);
+    history.setIcon(QIcon(QString(":/resources/icons/ic_restore_black_24px.svg")));
+
+
+    QAction downloads("Downloads", this);
+    downloads.setIcon(QIcon(QString(":/resources/icons/ic_file_download_black_24px.svg")));
+
+
+    QAction settings("Settings", this);
+    settings.setIcon(QIcon(QString(":/resources/icons/ic_settings_black_24px.svg")));
+
+
+    QAction about("About Eden Browser", this);
+    about.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+
+
+    QAction help("Help", this);
+    help.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+
+
+    QAction quit("Quit", this);
+    quit.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+
+    MainMenu.addAction(&newtab);
+    MainMenu.addAction(&newwindow);
+    MainMenu.addAction(&newpwindow);
+    MainMenu.addAction(&bookmarks);
+    MainMenu.addAction(&reading);
+    MainMenu.addAction(&history);
+    MainMenu.addAction(&downloads);
+    MainMenu.addAction(&settings);
+    MainMenu.addAction(&about);
+    MainMenu.addAction(&help);
+    MainMenu.addAction(&quit);
+
+
+
+
+    int offsetX = this->geometry().width() + this->geometry().left() - 255;
+    int offsetY = this->geometry().top() + 85;
+
+
+    MainMenu.exec(QPoint(offsetX, offsetY));
+    MainMenu.move(QPoint(offsetX, offsetY));
+    QGraphicsDropShadowEffect *e = new QGraphicsDropShadowEffect;
+    e->setColor(QColor(40,40,40,245));
+    e->setOffset(0,10);
+    e->setBlurRadius(50);
+
+    MainMenu.setGraphicsEffect(e);
+    qDebug() << "populate x: " << offsetX << " and y: " << offsetY;
 }
+
+void BaseApplication::ShowTabContextMenu(const QPoint &pos)
+{
+    if (pos.isNull()){
+            return;
+    }
+
+    int tabIndex = TabBar.tabAt(pos);
+    TabUnderMouse = tabIndex;
+
+   QMenu contextMenu(tr("Context menu"), this);
+
+   QAction action1("New tab", this);
+   connect(&action1, &QAction::triggered, [this](){
+       this->AddTab(&ContainerLayout, &TabBar);
+   });
+
+   QAction action2("Reload", this);
+   connect(&action2, &QAction::triggered, this, &BaseApplication::refresh);
+
+   QAction action3("Duplicate", this);
+   QAction action4("Pin tab", this);
+   QAction action5("Mute", this);
+
+   QAction action6("Close tab", this);
+   connect(&action6, &QAction::triggered, [this](){
+       this->CloseTab();
+   });
+
+   QAction action7("Close other tabs", this);
+   connect(&action7, &QAction::triggered, [this](){
+       this->CloseOtherTabs(TabUnderMouse);
+   });
+
+   QAction action8("Add to bookmarks", this);
+   QAction action9("Add to reading list", this);
+
+   connect(&action1, SIGNAL(triggered()), this, SLOT(removeDataPoint()));
+   contextMenu.addAction(&action1);
+   contextMenu.addSeparator();
+   contextMenu.addAction(&action2);
+   contextMenu.addAction(&action3);
+   contextMenu.addAction(&action4);
+   contextMenu.addAction(&action5);
+   contextMenu.addSeparator();
+   contextMenu.addAction(&action6);
+   contextMenu.addAction(&action7);
+   contextMenu.addAction(&action8);
+   contextMenu.addAction(&action9);
+
+
+   contextMenu.exec(mapToGlobal(pos));
+}
+
+
+
