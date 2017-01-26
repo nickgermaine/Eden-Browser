@@ -20,7 +20,7 @@ DevTools has been added.
 ![Alt text](screenshots/jan25.png?raw=true "Eden 0.1.3")
 
 I added support for some Google notifications.  A lot of improvements to be made on it.
-![Alt text](screenshots/google-notifications.png?raw=true "Eden 0.1.3")
+![Alt text](screenshots/notifications-shadow.png?raw=true "Eden 0.1.3")
 
 Eden already has a partially working main menu.
 ![Alt text](screenshots/jan25-partial-menu.png?raw=true "Eden 0.1.3")

@@ -243,7 +243,7 @@ void BaseApplication::ECreateWindow(){
     NotificationView.setUrl(NotificationUrl.fromUserInput(QString("https://plus.google.com/notifications/all")));
 
     QGraphicsDropShadowEffect *dropshadow = new QGraphicsDropShadowEffect;
-    dropshadow->setBlurRadius(10);
+    dropshadow->setBlurRadius(20);
     dropshadow->setColor(QColor(0, 0, 0, 150));
     dropshadow->setOffset(QPointF(2, 2));
 
@@ -256,11 +256,11 @@ void BaseApplication::ECreateWindow(){
     NotificationContainer.setObjectName("NotificationDropdown");
     windowLayout.addWidget(&NotificationContainer, 0, 0, 1, 1);
     NotificationContainer.raise();
-    NotificationContainer.setContentsMargins(1,1,1,1);
+    NotificationContainer.setContentsMargins(0, 0, 0, 0);
 
     NotificationContainer.setFixedHeight(560);
     NotificationContainer.setFixedWidth(400);
-    //NotificationContainer.setGraphicsEffect(dropshadow);
+    NotificationContainer.setGraphicsEffect(dropshadow);
     NotificationLayout.setContentsMargins(0, 0, 0, 0);
     //NotificationContainer.setVisible(false);
 
