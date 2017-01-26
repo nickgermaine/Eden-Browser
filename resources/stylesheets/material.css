@@ -171,3 +171,16 @@ right:0 !important;
 top:0;
 margin:10px;
 }
+
+/* Notifications... */
+
+#NotificationDropdown {
+    width:200px;
+    height:500px;
+    z-index:999999999;
+    border:2px solid #aaa;
+    height:300px;
+    width:200px;
+    position:absolute !important;
+
+}

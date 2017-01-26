@@ -31,9 +31,9 @@ int main(int argc, char *argv[])
 
 
 
-    RequestInterceptor *ads = new RequestInterceptor;
+    //RequestInterceptor *ads = new RequestInterceptor;
 
-    QWebEngineProfile::defaultProfile()->setRequestInterceptor(ads);
+    //QWebEngineProfile::defaultProfile()->setRequestInterceptor(ads);
 
     return a.exec();
 }

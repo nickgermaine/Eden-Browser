@@ -142,6 +142,7 @@ void BaseApplication::ECreateWindow(){
     QPushButton *RefreshButton = new QPushButton();
     RefreshButton->setIcon(QIcon(":/resources/icons/ic_refresh_black_24px.svg"));
 
+    NotificationButton.setIcon(QIcon(":/resources/icons/ic_notifications_none_black_24px.svg"));
 
     MenuButton.setIcon(QIcon(":/resources/icons/ic_more_vert_black_24px.svg"));
 
@@ -170,6 +171,7 @@ void BaseApplication::ECreateWindow(){
     ToolBarLayout.addWidget(ForwardButton);
     ToolBarLayout.addWidget(RefreshButton);
     ToolBarLayout.addWidget(&AddressBarContainer);
+    ToolBarLayout.addWidget(&NotificationButton);
     ToolBarLayout.addWidget(&MenuButton);
 
 
@@ -232,10 +234,45 @@ void BaseApplication::ECreateWindow(){
     });
 
 
-    windowLayout.addWidget(&window, 0,0,0,0);
+    windowLayout.addWidget(&window, 0,0,1,1);
     //windowLayout.addWidget(menuContainer, 0,0,0,0);
     windowLayout.setSpacing(0);
     windowLayout.setContentsMargins(0, 0, 0, 0);
+
+    // Notifications... experimental
+    NotificationView.setUrl(NotificationUrl.fromUserInput(QString("https://plus.google.com/notifications/all")));
+
+    QGraphicsDropShadowEffect *dropshadow = new QGraphicsDropShadowEffect;
+    dropshadow->setBlurRadius(10);
+    dropshadow->setColor(QColor(0, 0, 0, 150));
+    dropshadow->setOffset(QPointF(2, 2));
+
+
+    //NotificationShadow.setGraphicsEffect(dropshadow);
+    //NotificationLayout.addWidget(&Notification);
+    NotificationLayout.addWidget(&NotificationView);
+    NotificationView.raise();
+    NotificationContainer.setLayout(&NotificationLayout);
+    NotificationContainer.setObjectName("NotificationDropdown");
+    windowLayout.addWidget(&NotificationContainer, 0, 0, 1, 1);
+    NotificationContainer.raise();
+    NotificationContainer.setContentsMargins(1,1,1,1);
+
+    NotificationContainer.setFixedHeight(560);
+    NotificationContainer.setFixedWidth(400);
+    //NotificationContainer.setGraphicsEffect(dropshadow);
+    NotificationLayout.setContentsMargins(0, 0, 0, 0);
+    //NotificationContainer.setVisible(false);
+
+    int offsetX = this->geometry().width() + this->geometry().left() - 255;
+    int offsetY = this->geometry().top() + 85;
+
+    qDebug() << offsetX << " x " << offsetY << NotificationContainer.geometry();
+    NotificationContainer.move(QPoint(offsetX, offsetY));
+    qDebug() << offsetX << " x " << offsetY << NotificationContainer.geometry();
+
+
+    connect(&NotificationButton, &QPushButton::clicked, this, &BaseApplication::ShowNotifications);
 
     setLayout(&windowLayout);
 
@@ -515,6 +552,22 @@ void BaseApplication::ShowTabContextMenu(const QPoint &pos)
 
 
    contextMenu.exec(mapToGlobal(pos));
+}
+
+void BaseApplication::ShowNotifications(){
+
+
+    int offsetX = this->geometry().width() + this->geometry().left() - 525;
+    int offsetY = this->geometry().top() + 47;
+
+
+    if(NotificationContainer.isVisible() == true){
+        NotificationContainer.setVisible(false);
+    }else{
+
+        NotificationContainer.setVisible(true);
+        NotificationContainer.move(QPoint(offsetX, offsetY));
+    }
 }
 
 

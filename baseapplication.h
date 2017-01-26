@@ -24,7 +24,10 @@
 #include <tabs/tabbar.h>
 #include <toolbar/addressbar.h>
 #include <QListWidget>
-
+#include <QGraphicsWidget>
+#include <QGraphicsLayout>
+#include <QGraphicsLayoutItem>
+#include <QGraphicsScene>
 
 class BaseApplication : public QFrame
 {
@@ -55,6 +58,18 @@ public:
     QMenu* MainMenu;
     QGridLayout windowLayout;
     QWidget window;
+
+    // Notifications... experimental:
+    QPushButton NotificationButton;
+    QWidget NotificationContainer;
+    QWidget NotificationShadow;
+    QVBoxLayout NotificationLayout;
+    QWidget Notification;
+    QWebEngineView NotificationView;
+    QUrl NotificationUrl;
+
+    QGraphicsView NS;
+
 
 
     // Buttons
@@ -136,6 +151,7 @@ public slots:
     void CloseTab(const int &i);
     void ShowTabContextMenu(const QPoint &post);
     void CloseOtherTabs(int i);
+    void ShowNotifications();
 
 
 
