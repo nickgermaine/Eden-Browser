@@ -4,15 +4,19 @@
 #include <QWebEngineProfile>
 #include "urlintercepter.h"
 #include <QWebEngineSettings>
-
+#include "core.h"
 
 
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    a.setQuitOnLastWindowClosed(true);
     qputenv("QTWEBENGINE_REMOTE_DEBUGGING", "0.0.0.0:667");
-    BaseApplication w;
+
+    Core *w = new Core();
+
+
 
     /*
     QFile *stylesheet = new QFile(QString(":/resources/stylesheets/material.css"));
@@ -22,11 +26,6 @@ int main(int argc, char *argv[])
     }
     */
 
-    QFile File(":/resources/stylesheets/material.css");
-    File.open(QFile::ReadOnly);
-    QString StyleSheet = QLatin1String(File.readAll());
-
-    a.setStyleSheet(StyleSheet);
 
 
 

@@ -29,7 +29,8 @@ SOURCES += main.cpp\
     tabs/tabbar.cpp \
     tabs/tab.cpp \
     urlintercepter.cpp \
-    devtools/devtoolscontainer.cpp
+    devtools/devtoolscontainer.cpp \
+    core.cpp
 
 
 
@@ -39,7 +40,8 @@ HEADERS  += baseapplication.h \
     tabs/tab.h \
     urlintercepter.h \
     devtools/devtoolscontainer.h \
-    json/json.hpp
+    json/json.hpp \
+    core.h
 
 
 RESOURCES += \

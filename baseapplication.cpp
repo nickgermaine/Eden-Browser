@@ -1,3 +1,19 @@
+/****************************************************************************
+ *
+ * Base Application
+ * Author: Nick Germaine
+ *
+ * This is the top level of each browser window.  We use this to control the
+ * toolbar, tabbar, and also loop back to the core application to create new
+ * windows.
+ *
+ *
+ *
+ *
+ * **************************************************************************/
+
+
+
 #include "baseapplication.h"
 #include <QSize>
 #include <QWidget>
@@ -14,20 +30,33 @@
 #include <QToolButton>
 
 
-BaseApplication::BaseApplication(QFrame *parent)
-    : QFrame(parent)
+BaseApplication::BaseApplication(QString mode)
+    : QFrame()
 {
 
-    ECreateWindow();
-    this->center();
+    // Always create a new Eden Window
+    // Check window mode, and set
+    std::cout << "window mode " << mode.toStdString() << std::endl;
+    if(mode.toStdString() == "normal"){
+        ic = QString("black");
+    }else{
+        ic = QString("white");
+    }
 
+    ECreateWindow();
+
+    this->center();
     this->setContextMenuPolicy(Qt::CustomContextMenu);
 
+    // Special top level context menu
     connect(this, SIGNAL(customContextMenuRequested(const QPoint &)),
             this, SLOT(ShowContextMenu(const QPoint &)));
 
+    // Tab bar also has its own custom context menu
     TabBar.setContextMenuPolicy(Qt::CustomContextMenu);
     connect(&TabBar, &EdenTabBar::customContextMenuRequested, this, &BaseApplication::ShowTabContextMenu);
+
+
 
 
 }
@@ -55,35 +84,24 @@ void BaseApplication::ECreateWindow(){
      */
 
 
-    WindowBorder;
-    WindowBorderLayout;
-
+    // Set some important properties
     WindowBorderLayout.setContentsMargins(no_margins);
     WindowBorderLayout.setSpacing(0);
-
     WindowBorderLayout.setObjectName("windowControls");
 
-    TabBar;
-    layout;
-
-    Tabs;
-
-
+    // Same for layout
     layout.setContentsMargins(no_margins);
     layout.setSpacing(0);
     this->setObjectName("BrowserWindow");
 
     // Close/Max/Min Buttons
-    CloseBrowserButton;
-    CloseBrowserButton.setIcon(QIcon(":/resources/icons/ic_close_black_24px.svg"));
+    CloseBrowserButton.setIcon(QIcon(":/resources/icons/ic_close_" + ic + "_24px.svg"));
     CloseBrowserButton.setFixedWidth(48);
 
-    MaxBrowserButton;
-    MaxBrowserButton.setIcon(QIcon(":/resources/icons/ic_aspect_ratio_black_24px.svg"));
+    MaxBrowserButton.setIcon(QIcon(":/resources/icons/ic_aspect_ratio_" + ic + "_24px.svg"));
     MaxBrowserButton.setFixedWidth(48);
 
-    MinBrowserButton;
-    MinBrowserButton.setIcon(QIcon(":/resources/icons/ic_remove_black_24px.svg"));
+    MinBrowserButton.setIcon(QIcon(":/resources/icons/ic_remove_" + ic + "_24px.svg"));
     MinBrowserButton.setFixedWidth(48);
 
     // Connect Window Buttons
@@ -94,15 +112,30 @@ void BaseApplication::ECreateWindow(){
         //QApplication::instance()->quit();
     });
 
+
+    // And begin the tabbar
     this->TabBar.setObjectName(QString("TabBar"));
     TabCount = 0;
 
+    // Need to connect signals so the webviews can update the titles/icons on tabs
     connect(this, &BaseApplication::titleChanged, &TabBar, &EdenTabBar::updateTitle);
     connect(this, &BaseApplication::iconChanged, &TabBar, &EdenTabBar::updateIcon);
     connect(&TabBar, &EdenTabBar::tabBarClicked, this, &BaseApplication::selectCurrentTab);
     connect(&TabBar, &EdenTabBar::tabCloseRequested, this, &BaseApplication::CloseTab);
-    NewTabButton;
-    NewTabButton.setIcon(QIcon(":/resources/icons/ic_add_black_24px.svg"));
+
+    // New tab button goes directly right of the tabs list
+    NewTabButton.setIcon(QIcon(":/resources/icons/ic_add_" + ic + "_24px.svg"));
+    connect(&NewTabButton, &QPushButton::clicked, [this](){
+        AddTab(&ContainerLayout, &TabBar);
+    });
+
+    QPushButton *privateWindow = new QPushButton();
+    privateWindow->setIcon(QIcon(":/resources/icons/ic_security_white_24px.svg"));
+
+    // Build window border
+    if(ic.toStdString() == "white"){
+        WindowBorderLayout.addWidget(privateWindow);
+    }
 
     WindowBorderLayout.addWidget(&TabBar);
     WindowBorderLayout.addWidget(&NewTabButton);
@@ -126,38 +159,40 @@ void BaseApplication::ECreateWindow(){
      *
      */
 
-    ToolBar;
-    ToolBarLayout;
-    ToolBar.setObjectName("TabControls");
 
+    // Some important properties for toolbar
+    ToolBar.setObjectName("TabControls");
     ToolBar.setLayout(&ToolBarLayout);
 
+    // Build the widgets
     QPushButton *BackButton = new QPushButton();
-    BackButton->setIcon(QIcon(":/resources/icons/ic_keyboard_arrow_left_black_24px.svg"));
+    BackButton->setIcon(QIcon(":/resources/icons/ic_keyboard_arrow_left_" + ic + "_24px.svg"));
 
     QPushButton *ForwardButton = new QPushButton();
-    ForwardButton->setIcon(QIcon(":/resources/icons/ic_keyboard_arrow_right_black_24px.svg"));
-
+    ForwardButton->setIcon(QIcon(":/resources/icons/ic_keyboard_arrow_right_" + ic + "_24px.svg"));
 
     QPushButton *RefreshButton = new QPushButton();
-    RefreshButton->setIcon(QIcon(":/resources/icons/ic_refresh_black_24px.svg"));
+    RefreshButton->setIcon(QIcon(":/resources/icons/ic_refresh_" + ic + "_24px.svg"));
 
-    NotificationButton.setIcon(QIcon(":/resources/icons/ic_notifications_none_black_24px.svg"));
 
-    MenuButton.setIcon(QIcon(":/resources/icons/ic_more_vert_black_24px.svg"));
+    // Experimental notification button.  I say "experimental" because for some reason,
+    // a webview will die if you set visibility to false and then true.  So our dropdown
+    // That should show the notifications essentially dies as soon as its born.
 
-    AddressBar;
+    // If anyone knows how to prevent this, let me know.  I might get as dirty as setting
+    // display:none in css, if that's possible...
+    NotificationButton.setIcon(QIcon(":/resources/icons/ic_notifications_none_" + ic + "_24px.svg"));
 
-    connect(&AddressBar, &EdenAddressBar::returnPressed, this, &BaseApplication::loadPage);
-
+    // Connect the buttons preceding the address bar
     connect(BackButton, &QPushButton::clicked, this, &BaseApplication::goBack);
     connect(ForwardButton, &QPushButton::clicked, this, &BaseApplication::goForward);
     connect(RefreshButton, &QPushButton::clicked, this, &BaseApplication::refresh);
 
     // Build Address Bar
+    BookmarkButton.setIcon(QIcon(":/resources/icons/ic_bookmark_border_" + ic + "_24px.svg"));
+    LockButton.setIcon(QIcon(":/resources/icons/ic_language_" + ic + "_24px.svg"));
 
-    BookmarkButton.setIcon(QIcon(":/resources/icons/ic_bookmark_border_black_24px.svg"));
-    LockButton.setIcon(QIcon(":/resources/icons/ic_language_black_24px.svg"));
+    connect(&AddressBar, &EdenAddressBar::returnPressed, this, &BaseApplication::loadPage);
 
     AddressBarContainer.setLayout(&AddressBarLayout);
     AddressBarLayout.setContentsMargins(0,0,0,0);
@@ -165,6 +200,10 @@ void BaseApplication::ECreateWindow(){
     AddressBarLayout.addWidget(&LockButton);
     AddressBarLayout.addWidget(&AddressBar);
     AddressBarLayout.addWidget(&BookmarkButton);
+
+    // Create menu button
+    MenuButton.setIcon(QIcon(":/resources/icons/ic_more_vert_" + ic + "_24px.svg"));
+    connect(&MenuButton, &QToolButton::clicked, this, &BaseApplication::ShowMainMenu);
 
     // Add Objects to ToolBar
     ToolBarLayout.addWidget(BackButton);
@@ -175,10 +214,7 @@ void BaseApplication::ECreateWindow(){
     ToolBarLayout.addWidget(&MenuButton);
 
 
-    //QObject::connect(&MenuButton, &QToolButton::triggered, &MenuButton, &QToolButton::setDefaultAction);
 
-
-    connect(&MenuButton, &QToolButton::clicked, this, &BaseApplication::ShowMainMenu);
 
     /*
      *
@@ -187,15 +223,17 @@ void BaseApplication::ECreateWindow(){
      *
      */
 
-    Container;
-    Container.setContentsMargins(no_margins);
-    ContainerLayout;
 
+    // Some important properties
+    Container.setContentsMargins(no_margins);
     Container.setLayout(&ContainerLayout);
 
+
+
+    // Set some final properties and show this window
     this->title = "Eden Browser";
     this->setWindowTitle(this->title);
-    this->setWindowFlags(this->windowFlags() | Qt::FramelessWindowHint);
+    this->setWindowFlags(Qt::FramelessWindowHint);
 
     QSize BaseSize;
 
@@ -210,19 +248,15 @@ void BaseApplication::ECreateWindow(){
 
     window.setLayout(&layout);
 
-
-
-    // end main menu
     show();
+
+    // Create new tab immediately!
     this->AddTab(&ContainerLayout, &TabBar);
 
-    connect(&NewTabButton, &QPushButton::clicked, [this](){
-        AddTab(&ContainerLayout, &TabBar);
-    });
 
-    QShortcut *shortcut = new QShortcut(QKeySequence(tr("Ctrl+T", "New Tab")),
-                             this);
 
+    // Instantiate some keyboard shortcuts because all the cool kids are doing it
+    QShortcut *shortcut = new QShortcut(QKeySequence(tr("Ctrl+T", "New Tab")), this);
     QShortcut *devtools = new QShortcut(QKeySequence(tr("Ctrl+Shift+I", "Open Developer Tools")), this);
 
     connect(shortcut, &QShortcut::activated, [this](){
@@ -234,8 +268,8 @@ void BaseApplication::ECreateWindow(){
     });
 
 
+    // Finish building our window by adding the window to the top level
     windowLayout.addWidget(&window, 0,0,1,1);
-    //windowLayout.addWidget(menuContainer, 0,0,0,0);
     windowLayout.setSpacing(0);
     windowLayout.setContentsMargins(0, 0, 0, 0);
 
@@ -267,10 +301,7 @@ void BaseApplication::ECreateWindow(){
     int offsetX = this->geometry().width() + this->geometry().left() - 255;
     int offsetY = this->geometry().top() + 85;
 
-    qDebug() << offsetX << " x " << offsetY << NotificationContainer.geometry();
     NotificationContainer.move(QPoint(offsetX, offsetY));
-    qDebug() << offsetX << " x " << offsetY << NotificationContainer.geometry();
-
 
     connect(&NotificationButton, &QPushButton::clicked, this, &BaseApplication::ShowNotifications);
 
@@ -301,7 +332,18 @@ void BaseApplication::center(){
 
 void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
 
-    qDebug() << " current tabcount is " << TabCount;
+    /***************************************************************
+     *
+     *
+     * Ok.  So,we create a tab, put it into Tabs[] and then add it to
+     * the stack layout.  Seems simple.
+     *
+     *
+     *
+     *
+     * */
+
+
     Tab *newtab = new Tab(&TabCount, &ContainerLayout);
     Tabs.append(newtab);
 
@@ -312,11 +354,11 @@ void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
 
     tb->addTab(QString("New Tab"));
     int t = TabBar.count() - 1;
-    qDebug() << " tab count when adding new " << t;
+
     tb->setTabData(t, QVariant(QString("tab" + QString::number(TabCount))));
 
     connect(newtab, &Tab::titleChanged, [this, newtab](const QString &title, const QString &tab_name){
-        qDebug() << "tryng to change tab " << tab_name << " to " << title;
+
         emit titleChanged(title, tab_name);
     });
 
@@ -434,42 +476,50 @@ void BaseApplication::ShowMainMenu(){
     QMenu MainMenu(tr("Context menu"), this);
 
     QAction newtab("New tab", this);
-    newtab.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+    newtab.setIcon(QIcon(QString(":/resources/icons/ic_add_" + ic + "_24px.svg")));
 
     QAction newwindow("New window", this);
-    newwindow.setIcon(QIcon(QString(":/resources/icons/ic_launch_black_24px.svg")));
+    newwindow.setIcon(QIcon(QString(":/resources/icons/ic_launch_" + ic + "_24px.svg")));
+
+    connect(&newwindow, &QAction::triggered, [this](){
+        emit createNewWindow(QString("normal"));
+    });
 
     QAction newpwindow("New private window", this);
-    newpwindow.setIcon(QIcon(QString(":/resources/icons/ic_lock_black_24px.svg")));
+    newpwindow.setIcon(QIcon(QString(":/resources/icons/ic_lock_" + ic + "_24px.svg")));
+
+    connect(&newpwindow, &QAction::triggered,[this](){
+        emit createNewWindow(QString("private"));
+    });
 
     QAction bookmarks("Bookmarks", this);
-    bookmarks.setIcon(QIcon(QString(":/resources/icons/ic_bookmark_border_black_24px.svg")));
+    bookmarks.setIcon(QIcon(QString(":/resources/icons/ic_bookmark_border_" + ic + "_24px.svg")));
 
     QAction reading("Reading list", this);
-    reading.setIcon(QIcon(QString(":/resources/icons/ic_chrome_reader_mode_black_24px.svg")));
+    reading.setIcon(QIcon(QString(":/resources/icons/ic_chrome_reader_mode_" + ic + "_24px.svg")));
 
     QAction history("History", this);
-    history.setIcon(QIcon(QString(":/resources/icons/ic_restore_black_24px.svg")));
+    history.setIcon(QIcon(QString(":/resources/icons/ic_restore_" + ic + "_24px.svg")));
 
 
     QAction downloads("Downloads", this);
-    downloads.setIcon(QIcon(QString(":/resources/icons/ic_file_download_black_24px.svg")));
+    downloads.setIcon(QIcon(QString(":/resources/icons/ic_file_download_" + ic + "_24px.svg")));
 
 
     QAction settings("Settings", this);
-    settings.setIcon(QIcon(QString(":/resources/icons/ic_settings_black_24px.svg")));
+    settings.setIcon(QIcon(QString(":/resources/icons/ic_settings_" + ic + "_24px.svg")));
 
 
     QAction about("About Eden Browser", this);
-    about.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+    about.setIcon(QIcon(QString(":/resources/icons/ic_add_" + ic + "_24px.svg")));
 
 
     QAction help("Help", this);
-    help.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+    help.setIcon(QIcon(QString(":/resources/icons/ic_add_" + ic + "_24px.svg")));
 
 
     QAction quit("Quit", this);
-    quit.setIcon(QIcon(QString(":/resources/icons/ic_add_black_24px.svg")));
+    quit.setIcon(QIcon(QString(":/resources/icons/ic_add_" + ic + "_24px.svg")));
 
     MainMenu.addAction(&newtab);
     MainMenu.addAction(&newwindow);

@@ -72,6 +72,7 @@ QWidget#toolbar {
 
 #BrowserWindow {
     border: 1px solid #888 !important;
+    background:#333;
 
 }
 

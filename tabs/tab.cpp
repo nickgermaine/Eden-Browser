@@ -69,6 +69,5 @@ void Tab::OpenDevTools(){
 
 
 void Tab::destroyTab(){
-    qDebug() << "destroying " << this->TabContent.title();
     this->destroy();
 }

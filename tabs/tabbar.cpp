@@ -28,11 +28,8 @@ void EdenTabBar::AddTab(QString tabText){
 }
 
 void EdenTabBar::updateTitle(const QString &title, const QString &tab_name){
-    qDebug() << "actually changing " << tab_name << " to " << title;
-    qDebug() << "tabbar length " << this->count();
+
     for(int i = 0;i <= this->count();i++){
-        qDebug() << " current tab is " << tabData(i).toString();
-        std::cout << tabData(i).toString().toStdString() << std::endl;
         if(tabData(i).toString() == tab_name){
             this->setTabText(i, title);
         }
@@ -44,7 +41,6 @@ void EdenTabBar::updateTitle(const QString &title, const QString &tab_name){
 
 void EdenTabBar::updateIcon(const QIcon &icon, const QString &tab_name){
     for(int i = 0;i <= this->count();i++){
-        std::cout << tabData(i).toString().toStdString() << std::endl;
         if(tabData(i).toString() == tab_name){
             this->setTabIcon(i, icon);
         }

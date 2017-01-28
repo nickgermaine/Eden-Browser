@@ -34,7 +34,7 @@ class BaseApplication : public QFrame
     Q_OBJECT
 
 public:
-    BaseApplication(QFrame *parent = 0);
+    explicit BaseApplication(QString mode = "normal");
     void ECreateWindow();
     void AddTab(QStackedLayout *stack, EdenTabBar *tb);
 
@@ -48,6 +48,9 @@ public:
     QPushButton NewTabButton;
     QMenu contextMenu;
     int TabUnderMouse;
+
+    // For icon color in windows
+    QString ic;
 
     // vars
     QString title;
@@ -136,6 +139,7 @@ signals:
     void titleChanged(const QString &title, const QString &tab_name);
     void iconChanged(const QIcon &icon, const QString &tab_name);
     void currentUrlChanged(const QString &newurl);
+    void createNewWindow(QString mode);
 
 
 public slots:
