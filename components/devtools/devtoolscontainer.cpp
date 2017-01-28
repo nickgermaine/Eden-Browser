@@ -1,6 +1,6 @@
 #include "devtoolscontainer.h"
 #include <QDebug>
-#include "json/json.hpp"
+#include "components/json/json.hpp"
 
 // for convenience
 using json = nlohmann::json;

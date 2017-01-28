@@ -2,7 +2,7 @@
 #define CORE_H
 
 #include <QWidget>
-#include "baseapplication.h"
+#include "components/base/baseapplication.h"
 
 class Core : public QWidget
 {

@@ -24,24 +24,32 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 
 SOURCES += main.cpp\
-        baseapplication.cpp \
-    toolbar/addressbar.cpp \
-    tabs/tabbar.cpp \
-    tabs/tab.cpp \
-    urlintercepter.cpp \
-    devtools/devtoolscontainer.cpp \
-    core.cpp
+        components/base/baseapplication.cpp \
+    components/toolbar/addressbar.cpp \
+    components/tabs/tabbar.cpp \
+    components/tabs/tab.cpp \
+    components/networkmanager/urlintercepter.cpp \
+    components/devtools/devtoolscontainer.cpp \
+    components/core/core.cpp \
+    components/tabs/edenpinnedtabbar.cpp \
+    components/base/baseapplication.cpp \
+    components/core/core.cpp \
+    components/networkmanager/urlintercepter.cpp
 
 
 
-HEADERS  += baseapplication.h \
-    toolbar/addressbar.h \
-    tabs/tabbar.h \
-    tabs/tab.h \
-    urlintercepter.h \
-    devtools/devtoolscontainer.h \
-    json/json.hpp \
-    core.h
+HEADERS  += components/base/baseapplication.h \
+    components/toolbar/addressbar.h \
+    components/tabs/tabbar.h \
+    components/tabs/tab.h \
+    components/networkmanager/urlintercepter.h \
+    components/devtools/devtoolscontainer.h \
+    components/json/json.hpp \
+    components/core/core.h \
+    components/tabs/edenpinnedtabbar.h \
+    components/base/baseapplication.h \
+    components/core/core.h \
+    components/networkmanager/urlintercepter.h
 
 
 RESOURCES += \

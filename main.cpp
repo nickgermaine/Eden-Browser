@@ -1,10 +1,10 @@
-#include "baseapplication.h"
+#include "components/base/baseapplication.h"
 #include <QApplication>
 #include <QFile>
 #include <QWebEngineProfile>
-#include "urlintercepter.h"
+#include "components/networkmanager/urlintercepter.h"
 #include <QWebEngineSettings>
-#include "core.h"
+#include "components/core/core.h"
 
 
 

@@ -12,8 +12,8 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QList>
-#include <tabs/tab.h>
-#include <toolbar/addressbar.h>
+#include <components/tabs/tab.h>
+#include <components/toolbar/addressbar.h>
 #include <QtWebEngineWidgets/qwebengineview.h>
 #include <QtWebEngineWidgets/qwebenginepage.h>
 #include <QApplication>
@@ -21,8 +21,9 @@
 #include <QShortcut>
 #include <QContextMenuEvent>
 // Eden Includes
-#include <tabs/tabbar.h>
-#include <toolbar/addressbar.h>
+#include <components/tabs/tabbar.h>
+#include <components/tabs/edenpinnedtabbar.h>
+#include <components/toolbar/addressbar.h>
 #include <QListWidget>
 #include <QGraphicsWidget>
 #include <QGraphicsLayout>
@@ -37,6 +38,7 @@ public:
     explicit BaseApplication(QString mode);
     void ECreateWindow();
     void AddTab(QString mode= QString("normal"));
+    void ConvertToPinnedTab(int &tabIndex);
 
     ~BaseApplication();
     int TabCount;
@@ -46,6 +48,9 @@ public:
 
     // Tab Bar
     EdenTabBar TabBar;
+    EdenPinnedTabBar PinnedTabBar;
+    QList<Tab*> PinnedTabs;
+    int PinnedTabCount;
     QList<Tab*> Tabs;
     Tab* CurrentTab;
     EdenAddressBar AddressBar;

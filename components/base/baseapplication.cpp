@@ -44,6 +44,8 @@ BaseApplication::BaseApplication(QString mode)
         ic = QString("white");
     }
 
+    PinnedTabCount = 0;
+
     ECreateWindow();
 
     this->center();
@@ -137,7 +139,7 @@ void BaseApplication::ECreateWindow(){
     if(ic.toStdString() == "white"){
         WindowBorderLayout.addWidget(privateWindow);
     }
-
+    //WindowBorderLayout.addWidget(&PinnedTabBar);
     WindowBorderLayout.addWidget(&TabBar);
     WindowBorderLayout.addWidget(&NewTabButton);
     WindowBorderLayout.addStretch();
@@ -559,8 +561,10 @@ void BaseApplication::ShowTabContextMenu(const QPoint &pos)
 
    QAction action3("Duplicate", this);
    QAction action4("Pin tab", this);
-   QAction action5("Mute", this);
 
+   connect(&action4, &QAction::triggered, [this](){
+       this->ConvertToPinnedTab(TabUnderMouse);
+   });
    QAction action6("Close tab", this);
    connect(&action6, &QAction::triggered, [this](){
        this->CloseTab();
@@ -580,7 +584,7 @@ void BaseApplication::ShowTabContextMenu(const QPoint &pos)
    contextMenu.addAction(&action2);
    contextMenu.addAction(&action3);
    contextMenu.addAction(&action4);
-   contextMenu.addAction(&action5);
+
    contextMenu.addSeparator();
    contextMenu.addAction(&action6);
    contextMenu.addAction(&action7);
@@ -607,5 +611,16 @@ void BaseApplication::ShowNotifications(){
     }
 }
 
+void BaseApplication::ConvertToPinnedTab(int &tabIndex){
+    QString tab_name = TabBar.tabData(tabIndex).toString();
+    QIcon tab_icon = TabBar.tabIcon(tabIndex);
+
+
+    PinnedTabBar.PinnedTabBar.addTab(QString(""));
+    PinnedTabBar.PinnedTabBar.setTabIcon(PinnedTabCount, tab_icon);
+    PinnedTabCount++;
+    TabBar.removeTab(tabIndex);
+
+}
 
 

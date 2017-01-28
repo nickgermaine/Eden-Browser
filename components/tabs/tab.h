@@ -9,8 +9,8 @@
 #include <QStackedLayout>
 #include <QObject>
 #include <QWebEngineProfile>
-#include "urlintercepter.h"
-#include "devtools/devtoolscontainer.h"
+#include "components/networkmanager/urlintercepter.h"
+#include "components/devtools/devtoolscontainer.h"
 
 class Tab : public QWidget
 {

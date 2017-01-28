@@ -40,11 +40,15 @@ QPushButton:hover {
     opacity:.5;
 }
 
-QTabBar {
+QTabBar#TabBar, #PinnedTabBar {
     background:transparent;
     border:none !important;
-    border-bottom:2px solid #eee;
+    border-bottom:2px solid transparent;
 
+}
+
+#PinnedTabBar::tab {
+    width:20px;
 }
 
 QTabBar::tab {
