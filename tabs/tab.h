@@ -16,7 +16,7 @@ class Tab : public QWidget
 {
     Q_OBJECT
 public:
-    explicit Tab(int *tc = 0, QStackedLayout *c = 0, QWidget *parent = 0);
+    explicit Tab(int *tc = 0, QStackedLayout *c = 0, QString mode = QString("normal"), QWidget *parent = 0);
     ~Tab();
     QVBoxLayout TabLayout;
     QWebEngineView TabContent;

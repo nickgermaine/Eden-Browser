@@ -34,12 +34,16 @@ class BaseApplication : public QFrame
     Q_OBJECT
 
 public:
-    explicit BaseApplication(QString mode = "normal");
+    explicit BaseApplication(QString mode);
     void ECreateWindow();
-    void AddTab(QStackedLayout *stack, EdenTabBar *tb);
+    void AddTab(QString mode= QString("normal"));
 
     ~BaseApplication();
     int TabCount;
+
+    // Top level stuff
+    QString Mode;
+
     // Tab Bar
     EdenTabBar TabBar;
     QList<Tab*> Tabs;

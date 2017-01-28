@@ -36,9 +36,10 @@ BaseApplication::BaseApplication(QString mode)
 
     // Always create a new Eden Window
     // Check window mode, and set
-    std::cout << "window mode " << mode.toStdString() << std::endl;
+    Mode = mode;
     if(mode.toStdString() == "normal"){
         ic = QString("black");
+
     }else{
         ic = QString("white");
     }
@@ -126,7 +127,7 @@ void BaseApplication::ECreateWindow(){
     // New tab button goes directly right of the tabs list
     NewTabButton.setIcon(QIcon(":/resources/icons/ic_add_" + ic + "_24px.svg"));
     connect(&NewTabButton, &QPushButton::clicked, [this](){
-        AddTab(&ContainerLayout, &TabBar);
+        AddTab(Mode);
     });
 
     QPushButton *privateWindow = new QPushButton();
@@ -251,7 +252,7 @@ void BaseApplication::ECreateWindow(){
     show();
 
     // Create new tab immediately!
-    this->AddTab(&ContainerLayout, &TabBar);
+    this->AddTab(Mode);
 
 
 
@@ -260,7 +261,7 @@ void BaseApplication::ECreateWindow(){
     QShortcut *devtools = new QShortcut(QKeySequence(tr("Ctrl+Shift+I", "Open Developer Tools")), this);
 
     connect(shortcut, &QShortcut::activated, [this](){
-        this->AddTab(&ContainerLayout, &TabBar);
+        this->AddTab(Mode);
     });
 
     connect(devtools, &QShortcut::activated, [this](){
@@ -302,6 +303,7 @@ void BaseApplication::ECreateWindow(){
     int offsetY = this->geometry().top() + 85;
 
     NotificationContainer.move(QPoint(offsetX, offsetY));
+    NotificationContainer.setHidden(true);
 
     connect(&NotificationButton, &QPushButton::clicked, this, &BaseApplication::ShowNotifications);
 
@@ -330,7 +332,7 @@ void BaseApplication::center(){
     move(qr.topLeft());
 }
 
-void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
+void BaseApplication::AddTab(QString mode){
 
     /***************************************************************
      *
@@ -344,18 +346,15 @@ void BaseApplication::AddTab(QStackedLayout *stack, EdenTabBar *tb){
      * */
 
 
-    Tab *newtab = new Tab(&TabCount, &ContainerLayout);
+    Tab *newtab = new Tab(&TabCount, &ContainerLayout, Mode);
     Tabs.append(newtab);
 
-    EdenAddressBar *topAddressBar = &AddressBar;
-
     CurrentTab = Tabs[TabCount];
-    QUrl *nu = new QUrl;
 
-    tb->addTab(QString("New Tab"));
+    TabBar.addTab(QString("New Tab"));
     int t = TabBar.count() - 1;
 
-    tb->setTabData(t, QVariant(QString("tab" + QString::number(TabCount))));
+    TabBar.setTabData(t, QVariant(QString("tab" + QString::number(TabCount))));
 
     connect(newtab, &Tab::titleChanged, [this, newtab](const QString &title, const QString &tab_name){
 
@@ -394,26 +393,14 @@ void BaseApplication::CloseTab(const int &i = -1){
         int a = TabUnderMouse;
 
         QString tab_name = TabBar.tabData(a).toString();
-        Tab *ct = Container.findChild<Tab *>(tab_name);
-        //ContainerLayout.removeWidget(ct);
-        //ct->destroyTab();
-
-        qDebug() << " tabs length " << Tabs.count() << " i is " << i + 1;
-        qDebug() << " should remove tab ";
         Tabs[a]->destroyTab();
         TabBar.removeTab(a);
-        TabCount;
+
     }else{
         QString tab_name = TabBar.tabData(i).toString();
-        Tab *ct = Container.findChild<Tab *>(tab_name);
-        //ContainerLayout.removeWidget(ct);
-        //ct->destroyTab();
-
-        qDebug() << " tabs length " << Tabs.count() << " i is " << i + 1;
-        qDebug() << " should remove tab ";
         Tabs[i]->destroyTab();
         TabBar.removeTab(i);
-        TabCount;
+
     }
 
 }
@@ -564,7 +551,7 @@ void BaseApplication::ShowTabContextMenu(const QPoint &pos)
 
    QAction action1("New tab", this);
    connect(&action1, &QAction::triggered, [this](){
-       this->AddTab(&ContainerLayout, &TabBar);
+       this->AddTab(Mode);
    });
 
    QAction action2("Reload", this);

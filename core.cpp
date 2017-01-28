@@ -37,6 +37,7 @@ void Core::createWindow(QString mode){
         BaseApplication *window = new BaseApplication(QString("normal"));
         window->setStyleSheet(StyleSheet);
         connect(window, &BaseApplication::createNewWindow, [this](QString mode){
+            qDebug() << "requesting " << mode;
             createWindow(mode);
         });
 
@@ -44,6 +45,7 @@ void Core::createWindow(QString mode){
         BaseApplication *window = new BaseApplication(QString("private"));
         window->setStyleSheet(PrivateStylesheet);
         connect(window, &BaseApplication::createNewWindow, [this](QString mode){
+            qDebug() << "requesting " << mode;
             createWindow(mode);
         });
 

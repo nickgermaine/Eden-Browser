@@ -1,13 +1,13 @@
 #include "tab.h"
 #include <iostream>
+#include <QDebug>
 
-Tab::Tab(int *tc, QStackedLayout *c, QWidget *parent) : QWidget(parent)
+Tab::Tab(int *tc, QStackedLayout *c, QString mode, QWidget *parent) : QWidget(parent)
 {
 
     // Create Objects
     QVBoxLayout *TabLayout = new QVBoxLayout;
     TabLayout->setContentsMargins(QMargins(0,0,0,0));
-    TabContent;
     QUrl *TabUrl = new QUrl;
 
     tabcount = *tc;
@@ -16,6 +16,13 @@ Tab::Tab(int *tc, QStackedLayout *c, QWidget *parent) : QWidget(parent)
 
     // SetNames
     TabLayout->setObjectName("TabView");
+
+    if(mode.toStdString() == "private"){
+        QWebEngineProfile *pf = new QWebEngineProfile();
+
+        qDebug() << " is OTR? " << TabContent.page()->profile()->isOffTheRecord();
+
+    }
 
     TabContent.load(TabUrl->fromUserInput("http://google.com"));
 
