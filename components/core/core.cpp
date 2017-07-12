@@ -13,6 +13,7 @@
 #include "core.h"
 #include <QDebug>
 #include <QFrame>
+#include <QWebEngineProfile>
 
 
 Core::Core(QWidget *parent, QString mode) : QWidget(parent)
@@ -24,16 +25,13 @@ Core::Core(QWidget *parent, QString mode) : QWidget(parent)
 
 void Core::createWindow(QString mode){
     // Open the material and material-dark stylesheets
-    QFile File(":/resources/stylesheets/material.css");
-    File.open(QFile::ReadOnly);
-    QString StyleSheet = QLatin1String(File.readAll());
-
-    QFile incognito(":/resources/stylesheets/material-dark.css");
-    incognito.open(QFile::ReadOnly);
-    QString PrivateStylesheet = QLatin1String(incognito.readAll());
 
     // If a normal window is requested, open in normal mode, otherwise, open in Private/dark mode.
     if(mode == QString("normal")){
+        QFile File(":/resources/stylesheets/material.css");
+        File.open(QFile::ReadOnly);
+        QString StyleSheet = QLatin1String(File.readAll());
+
         BaseApplication *window = new BaseApplication(QString("normal"));
         window->setStyleSheet(StyleSheet);
         connect(window, &BaseApplication::createNewWindow, [this](QString mode){
@@ -42,11 +40,20 @@ void Core::createWindow(QString mode){
         });
 
     }else{
+        QFile incognito(":/resources/stylesheets/material-dark.css");
+        incognito.open(QFile::ReadOnly);
+        QString PrivateStylesheet = QLatin1String(incognito.readAll());
+
         BaseApplication *window = new BaseApplication(QString("private"));
         window->setStyleSheet(PrivateStylesheet);
         connect(window, &BaseApplication::createNewWindow, [this](QString mode){
             qDebug() << "requesting " << mode;
             createWindow(mode);
+        });
+
+        connect(window, &BaseApplication::destroyed, [this](){
+           destroy();
+           deleteLater();
         });
 
     }

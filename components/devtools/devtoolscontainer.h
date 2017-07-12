@@ -19,6 +19,7 @@ public:
     QVBoxLayout DevToolsLayout;
     QWebEngineView DevTools;
     QPushButton DevToolsQuit;
+    QPushButton DevToolsOrient;
 
     QWidget DevToolsControls;
     QHBoxLayout DevToolsControlsLayout;
@@ -27,6 +28,7 @@ public:
     void PrintDevList();
 
 signals:
+    void orientation_switched(const QString &mode);
 
 public slots:
 };

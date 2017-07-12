@@ -19,6 +19,10 @@ DevToolsContainer::DevToolsContainer(QWidget *parent) : QWidget(parent)
 
     DevToolsControls.setLayout(&DevToolsControlsLayout);
     DevToolsControlsLayout.addStretch();
+
+    DevToolsOrient.setText("S");
+
+    DevToolsControlsLayout.addWidget(&DevToolsOrient);
     DevToolsControlsLayout.addWidget(&DevToolsQuit);
 
     DevToolsLayout.addWidget(&DevToolsControls);
@@ -31,6 +35,10 @@ DevToolsContainer::DevToolsContainer(QWidget *parent) : QWidget(parent)
         qDebug() << "destroying " << this;
         this->setParent(0);
         this->destroy();
+    });
+
+    connect(&DevToolsOrient, &QPushButton::clicked, [this](){
+        emit orientation_switched(QString("vertical"));
     });
 
     connect(&DevTools, &QWebEngineView::loadFinished, [this](){

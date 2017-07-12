@@ -19,6 +19,13 @@ Tab::Tab(int *tc, QStackedLayout *c, QString mode, QWidget *parent) : QWidget(pa
 
     if(mode.toStdString() == "private"){
         QWebEngineProfile *pf = new QWebEngineProfile();
+        QWebEnginePage *page = new QWebEnginePage(pf, &TabContent);
+        TabContent.setPage(page);
+
+        // FINALLY!!
+        // I screwed around with this null webengineprofile last month
+        // And could NOT get it working...
+        // Working now ;)
 
         qDebug() << " is OTR? " << TabContent.page()->profile()->isOffTheRecord();
 
@@ -71,10 +78,20 @@ void Tab::OpenDevTools(){
     DevToolsContainer *devtools = new DevToolsContainer;
     SplitView.addWidget(devtools);
 
+    connect(devtools, &DevToolsContainer::orientation_switched, [this](const QString &mode){
+        if(SplitView.orientation() == Qt::Vertical){
+            SplitView.setOrientation(Qt::Horizontal);
+        }else{
+            SplitView.setOrientation(Qt::Vertical);
+        }
+        qDebug() << "Mode";
+    });
 
 }
 
 
+
 void Tab::destroyTab(){
-    this->destroy();
+
+    this->deleteLater();
 }

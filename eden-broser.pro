@@ -4,7 +4,7 @@
 #
 #-------------------------------------------------
 
-QT       += core gui webenginewidgets
+QT       += core gui webenginewidgets winextras
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -57,5 +57,7 @@ RESOURCES += \
 
 DISTFILES += \
     resources/stylesheets/material-dark.css
+
+RC_ICONS = eden.ico
 
 

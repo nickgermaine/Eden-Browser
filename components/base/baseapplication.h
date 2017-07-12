@@ -73,14 +73,7 @@ public:
 
     // Notifications... experimental:
     QPushButton NotificationButton;
-    QWidget NotificationContainer;
-    QWidget NotificationShadow;
-    QVBoxLayout NotificationLayout;
-    QWidget Notification;
-    QWebEngineView NotificationView;
-    QUrl NotificationUrl;
 
-    QGraphicsView NS;
 
 
 

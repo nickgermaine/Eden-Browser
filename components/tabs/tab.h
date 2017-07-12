@@ -21,6 +21,7 @@ public:
     QVBoxLayout TabLayout;
     QWebEngineView TabContent;
     QWebEnginePage TabContentPage;
+
     QSplitter SplitView;
     QUrl TabUrl;
     int tabcount;
@@ -37,6 +38,7 @@ signals:
 
 public slots:
         void destroyTab();
+
 
 
 };

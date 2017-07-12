@@ -29,7 +29,6 @@
 #include <QListData>
 #include <QToolButton>
 
-
 BaseApplication::BaseApplication(QString mode)
     : QFrame()
 {
@@ -111,8 +110,8 @@ void BaseApplication::ECreateWindow(){
     connect(&MinBrowserButton, &QPushButton::clicked, this, &BaseApplication::showMinimized);
     connect(&MaxBrowserButton, &QPushButton::clicked, this, &BaseApplication::toggleMax);
     QObject::connect(&CloseBrowserButton, &QPushButton::clicked, [this](){
-        destroy();
-        //QApplication::instance()->quit();
+        //this->destroy();
+        QApplication::instance()->quit();
     });
 
 
@@ -213,7 +212,6 @@ void BaseApplication::ECreateWindow(){
     ToolBarLayout.addWidget(ForwardButton);
     ToolBarLayout.addWidget(RefreshButton);
     ToolBarLayout.addWidget(&AddressBarContainer);
-    ToolBarLayout.addWidget(&NotificationButton);
     ToolBarLayout.addWidget(&MenuButton);
 
 
@@ -276,38 +274,6 @@ void BaseApplication::ECreateWindow(){
     windowLayout.setSpacing(0);
     windowLayout.setContentsMargins(0, 0, 0, 0);
 
-    // Notifications... experimental
-    NotificationView.setUrl(NotificationUrl.fromUserInput(QString("https://plus.google.com/notifications/all")));
-
-    QGraphicsDropShadowEffect *dropshadow = new QGraphicsDropShadowEffect;
-    dropshadow->setBlurRadius(20);
-    dropshadow->setColor(QColor(0, 0, 0, 150));
-    dropshadow->setOffset(QPointF(2, 2));
-
-
-    //NotificationShadow.setGraphicsEffect(dropshadow);
-    //NotificationLayout.addWidget(&Notification);
-    NotificationLayout.addWidget(&NotificationView);
-    NotificationView.raise();
-    NotificationContainer.setLayout(&NotificationLayout);
-    NotificationContainer.setObjectName("NotificationDropdown");
-    windowLayout.addWidget(&NotificationContainer, 0, 0, 1, 1);
-    NotificationContainer.raise();
-    NotificationContainer.setContentsMargins(0, 0, 0, 0);
-
-    NotificationContainer.setFixedHeight(560);
-    NotificationContainer.setFixedWidth(400);
-    NotificationContainer.setGraphicsEffect(dropshadow);
-    NotificationLayout.setContentsMargins(0, 0, 0, 0);
-    //NotificationContainer.setVisible(false);
-
-    int offsetX = this->geometry().width() + this->geometry().left() - 255;
-    int offsetY = this->geometry().top() + 85;
-
-    NotificationContainer.move(QPoint(offsetX, offsetY));
-    NotificationContainer.setHidden(true);
-
-    connect(&NotificationButton, &QPushButton::clicked, this, &BaseApplication::ShowNotifications);
 
     setLayout(&windowLayout);
 
@@ -370,6 +336,11 @@ void BaseApplication::AddTab(QString mode){
     connect(newtab, &Tab::urlChanged, [this, newtab](const QUrl &url, const QString &tab_name){
         if(TabBar.tabData(TabBar.currentIndex()) == tab_name){
             AddressBar.setText(url.toString());
+            if(url.toString().indexOf("https") > -1){
+                LockButton.setIcon(QIcon(":/resources/icons/ic_https_black_24px.svg"));
+            }else{
+                LockButton.setIcon(QIcon(":/resources/icons/ic_language_" + ic + "_24px.svg"));
+            }
         }
     });
 
@@ -395,13 +366,17 @@ void BaseApplication::CloseTab(const int &i = -1){
         int a = TabUnderMouse;
 
         QString tab_name = TabBar.tabData(a).toString();
-        Tabs[a]->destroyTab();
         TabBar.removeTab(a);
+        ContainerLayout.setCurrentWidget(Tabs[0]);
+        Tabs[a]->destroyTab();
+
+
 
     }else{
         QString tab_name = TabBar.tabData(i).toString();
-        Tabs[i]->destroyTab();
+
         TabBar.removeTab(i);
+        Tabs[i]->destroyTab();
 
     }
 
@@ -421,7 +396,7 @@ void BaseApplication::selectCurrentTab(int i){
 
 
 void BaseApplication::loadPage(){
-
+    qDebug() << "loading url";
     QUrl *newUrl = new QUrl;
     CurrentTab->TabContent.load(newUrl->fromUserInput(AddressBar.text()));
 
@@ -531,12 +506,7 @@ void BaseApplication::ShowMainMenu(){
 
     MainMenu.exec(QPoint(offsetX, offsetY));
     MainMenu.move(QPoint(offsetX, offsetY));
-    QGraphicsDropShadowEffect *e = new QGraphicsDropShadowEffect;
-    e->setColor(QColor(40,40,40,245));
-    e->setOffset(0,10);
-    e->setBlurRadius(50);
 
-    MainMenu.setGraphicsEffect(e);
     qDebug() << "populate x: " << offsetX << " and y: " << offsetY;
 }
 
@@ -598,17 +568,7 @@ void BaseApplication::ShowTabContextMenu(const QPoint &pos)
 void BaseApplication::ShowNotifications(){
 
 
-    int offsetX = this->geometry().width() + this->geometry().left() - 525;
-    int offsetY = this->geometry().top() + 47;
 
-
-    if(NotificationContainer.isVisible() == true){
-        NotificationContainer.setVisible(false);
-    }else{
-
-        NotificationContainer.setVisible(true);
-        NotificationContainer.move(QPoint(offsetX, offsetY));
-    }
 }
 
 void BaseApplication::ConvertToPinnedTab(int &tabIndex){
