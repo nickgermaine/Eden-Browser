@@ -1,20 +1,45 @@
 # Eden Browser
-#### Reimagining the web
+#### Imagine, for a moment, a web browser crafted by someone who has *actually* used a web browser before
 
-My goal is the create the kind of browser that I want to use.  Some big features I'll be creating is a picture in picture video mode, reading lists, and adblocking.
+Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
-I started implementing this in Python, using PyQt5, and was able to do a lot of awesome stuff incredibly fast.  But the ridiculousness of attempting to compile python apps into binary lead me to reimplement the browser in cpp.
+## Requirements
 
-### Requirements
+### Building today (Qt6 baseline)
 
-- Qt5.8
-- Seriously, that's it.
+- CMake ≥ 3.21, GCC 12+ or Clang 15+ (C++17)
+- Qt ≥ 6.8 LTS (recommended: latest stable): Base, Declarative, WebEngine
+
+### Full scope
+#### *Some point in time that is not before now*
+
+- Qt ≥ 6.8 modules: Core, Gui, Network, Sql, DBus, Qml/Quick/QuickControls2, WebEngine (temporary, removed when CEF becomes the default engine)
+- GnuCOBOL ≥ 3.1 (`cobc`) for the Records Office batch programs
+- libsodium for password vault encryption
+- qtkeychain (Qt6) for OS keyring integration
+- Rust toolchain for the adblock engine
+- libpsl for public-suffix handling (per-site data scoping)
+- md4c for AI pane markdown rendering
+- NSS for Firefox password import
+- Python ≥ 3.10 for the benchmark harness
+- CEF is fetched automatically by CMake, no manual install
+
+### Runtime (Linux)
+
+- A Secret Service keyring (gnome-keyring / KWallet) for the password vault
+- D-Bus desktop notifications (any compliant desktop)
+- GeoClue2 (optional) as the geolocation backend
+
+### Building
+
+```
+cmake -S . -B build
+cmake --build build -j$(nproc)
+./build/eden-browser
+```
 
 
-On windows you need to use the MSVC version of Qt so that WebEngine can be built.  This has been tested and built using Qt5.8, but it might work (or partially work) with previous versions.  But I don't recommend it.
-
-
-### Screenshots
+### Screenshots -- 2017
 
 DevTools has been added.
 ![Alt text](screenshots/jan25.png?raw=true "Eden 0.1.3")
