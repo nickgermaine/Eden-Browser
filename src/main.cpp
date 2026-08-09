@@ -9,9 +9,13 @@
 
 int main(int argc, char *argv[])
 {
+    qputenv("QTWEBENGINE_REMOTE_DEBUGGING", "127.0.0.1:9222");
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-smooth-scrolling");
+
     QApplication a(argc, argv);
     a.setQuitOnLastWindowClosed(true);
-    qputenv("QTWEBENGINE_REMOTE_DEBUGGING", "0.0.0.0:667");
+
+    QWebEngineProfile::defaultProfile()->settings()->setAttribute(QWebEngineSettings::ScrollAnimatorEnabled, true);
 
     Core *w = new Core();
 

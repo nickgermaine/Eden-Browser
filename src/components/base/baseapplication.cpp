@@ -19,15 +19,15 @@
 #include <QWidget>
 #include <iostream>
 #include <QApplication>
-#include <QDesktopWidget>
+#include <QScreen>
 #include <QGraphicsEffect>
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QRect>
 #include <QDebug>
 #include <QStringListModel>
-#include <QListData>
 #include <QToolButton>
+#include <QWindow>
 
 BaseApplication::BaseApplication(QString mode)
     : QFrame()
@@ -47,6 +47,7 @@ BaseApplication::BaseApplication(QString mode)
 
     ECreateWindow();
 
+    this->setAttribute(Qt::WA_DeleteOnClose);
     this->center();
     this->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -57,6 +58,8 @@ BaseApplication::BaseApplication(QString mode)
     // Tab bar also has its own custom context menu
     TabBar.setContextMenuPolicy(Qt::CustomContextMenu);
     connect(&TabBar, &EdenTabBar::customContextMenuRequested, this, &BaseApplication::ShowTabContextMenu);
+
+    qApp->installEventFilter(this);
 
 
 
@@ -110,8 +113,7 @@ void BaseApplication::ECreateWindow(){
     connect(&MinBrowserButton, &QPushButton::clicked, this, &BaseApplication::showMinimized);
     connect(&MaxBrowserButton, &QPushButton::clicked, this, &BaseApplication::toggleMax);
     QObject::connect(&CloseBrowserButton, &QPushButton::clicked, [this](){
-        //this->destroy();
-        QApplication::instance()->quit();
+        this->close();
     });
 
 
@@ -241,7 +243,8 @@ void BaseApplication::ECreateWindow(){
     BaseSize.setHeight(768);
     BaseSize.setWidth(1366);
     this->setBaseSize(BaseSize);
-    this->setMinimumSize(1366,768);
+    this->setMinimumSize(900,600);
+    this->resize(1366,768);
 
     layout.addWidget(&WindowBorder);
     layout.addWidget(&ToolBar);
@@ -284,18 +287,44 @@ void BaseApplication::ECreateWindow(){
 
 void BaseApplication::mousePressEvent(QMouseEvent *event) {
 
-    oldPos = event->globalPos();
+    oldPos = event->globalPosition().toPoint();
 }
 
 void BaseApplication::mouseMoveEvent(QMouseEvent *event) {
-    QPoint delta = QPoint(event->globalPos() - oldPos);
+    if(!(event->buttons() & Qt::LeftButton) || isMaximized()){
+        return;
+    }
+    if(windowHandle() && windowHandle()->startSystemMove()){
+        return;
+    }
+    QPoint delta = QPoint(event->globalPosition().toPoint() - oldPos);
     move(this->x() + delta.x(), this->y() + delta.y());
-    oldPos = event->globalPos();
+    oldPos = event->globalPosition().toPoint();
+}
+
+bool BaseApplication::eventFilter(QObject *watched, QEvent *event){
+    if(event->type() == QEvent::MouseButtonPress && !isMaximized()){
+        QMouseEvent *me = static_cast<QMouseEvent*>(event);
+        QWidget *w = qobject_cast<QWidget*>(watched);
+        if(me->button() == Qt::LeftButton && w && w->window() == this && windowHandle()){
+            QPoint gp = me->globalPosition().toPoint();
+            QRect fr = frameGeometry();
+            Qt::Edges edges;
+            if(gp.x() <= fr.left() + 8) edges |= Qt::LeftEdge;
+            if(gp.x() >= fr.right() - 8) edges |= Qt::RightEdge;
+            if(gp.y() <= fr.top() + 8) edges |= Qt::TopEdge;
+            if(gp.y() >= fr.bottom() - 8) edges |= Qt::BottomEdge;
+            if(edges && windowHandle()->startSystemResize(edges)){
+                return true;
+            }
+        }
+    }
+    return QFrame::eventFilter(watched, event);
 }
 
 void BaseApplication::center(){
     QRect qr = frameGeometry();
-    QPoint cp = QDesktopWidget().availableGeometry().center();
+    QPoint cp = QGuiApplication::primaryScreen()->availableGeometry().center();
     qr.moveCenter(cp);
     move(qr.topLeft());
 }

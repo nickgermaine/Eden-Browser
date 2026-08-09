@@ -14,8 +14,8 @@
 #include <QList>
 #include <components/tabs/tab.h>
 #include <components/toolbar/addressbar.h>
-#include <QtWebEngineWidgets/qwebengineview.h>
-#include <QtWebEngineWidgets/qwebenginepage.h>
+#include <QWebEngineView>
+#include <QWebEnginePage>
 #include <QApplication>
 #include <QUrl>
 #include <QShortcut>
@@ -134,6 +134,7 @@ private:
 protected:
     virtual void mousePressEvent(QMouseEvent*);
     virtual void mouseMoveEvent(QMouseEvent*);
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void center();
 
 

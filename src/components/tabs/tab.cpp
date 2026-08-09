@@ -18,7 +18,7 @@ Tab::Tab(int *tc, QStackedLayout *c, QString mode, QWidget *parent) : QWidget(pa
     TabLayout->setObjectName("TabView");
 
     if(mode.toStdString() == "private"){
-        QWebEngineProfile *pf = new QWebEngineProfile();
+        QWebEngineProfile *pf = new QWebEngineProfile(this);
         QWebEnginePage *page = new QWebEnginePage(pf, &TabContent);
         TabContent.setPage(page);
 
@@ -31,7 +31,7 @@ Tab::Tab(int *tc, QStackedLayout *c, QString mode, QWidget *parent) : QWidget(pa
 
     }
 
-    TabContent.load(TabUrl->fromUserInput("http://google.com"));
+    TabContent.load(TabUrl->fromUserInput("https://google.com"));
 
     this->setLayout(TabLayout);
     TabLayout->addWidget(&SplitView);

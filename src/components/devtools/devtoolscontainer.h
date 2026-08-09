@@ -6,8 +6,8 @@
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QIcon>
-#include <QtWebEngineWidgets/qwebengineview.h>
-#include <QtWebEngineWidgets/qwebenginepage.h>
+#include <QWebEngineView>
+#include <QWebEnginePage>
 
 #include <QWebEngineProfile>
 

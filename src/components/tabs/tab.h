@@ -3,8 +3,8 @@
 
 #include <QWidget>
 #include <QVBoxLayout>
-#include <QtWebEngineWidgets/qwebengineview.h>
-#include <QtWebEngineWidgets/qwebenginepage.h>
+#include <QWebEngineView>
+#include <QWebEnginePage>
 #include <QSplitter>
 #include <QStackedLayout>
 #include <QObject>

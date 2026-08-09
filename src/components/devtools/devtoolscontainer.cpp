@@ -8,7 +8,7 @@ using json = nlohmann::json;
 DevToolsContainer::DevToolsContainer(QWidget *parent) : QWidget(parent)
 {
     QUrl *devtoolsurl = new QUrl;
-    DevTools.load(devtoolsurl->fromUserInput(QString("http://localhost:667/")));
+    DevTools.load(devtoolsurl->fromUserInput(QString("http://localhost:9222/")));
 
     DevToolsQuit.setIcon(QIcon(QString(":/resources/icons/ic_clear_black_24px.svg")));
     DevToolsQuit.setFixedHeight(24);
