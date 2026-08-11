@@ -28,6 +28,8 @@ ui_*.h
 CMakeLists.txt.user
 CMakeLists.txt.user.*
 
+third_party/
+
 .idea/
 .vs/
 .vscode/

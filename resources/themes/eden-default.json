@@ -1,0 +1,129 @@
+{
+    "author": "Eden",
+    "base": {
+        "colors": {
+            "onPrimary": "#FFFFFF",
+            "onPrimaryContainer": "#16324F",
+            "primary": "#3584E4",
+            "primaryContainer": "#99C1F1",
+            "privatePrimary": "#7651C9"
+        },
+        "icons": {
+            "activeStyle": "bold",
+            "disabledOpacity": 0.38,
+            "size": 20,
+            "style": "linear"
+        },
+        "metrics": {
+            "cardRadius": 12,
+            "contentBorderWidth": 0,
+            "contentRadius": 12,
+            "controlRadius": 20,
+            "focusBorderWidth": 2,
+            "menuBorderWidth": 0,
+            "menuRadius": 8,
+            "paneBorderWidth": 0,
+            "pinnedTabWidth": 44,
+            "tabMaximumWidth": 240,
+            "tabMinimumWidth": 96,
+            "windowBorderWidth": 0,
+            "windowRadius": 12,
+            "workspaceGap": 4,
+            "workspaceInset": 4
+        },
+        "motion": {
+            "longDuration": 500,
+            "mediumDuration": 350,
+            "shortDuration": 200
+        },
+        "shadow": {
+            "ambientBlur": 18,
+            "ambientVerticalOffset": 2,
+            "blur": 40,
+            "extent": 56,
+            "horizontalOffset": 4,
+            "overlayBlur": 24,
+            "overlaySpread": 0,
+            "overlayVerticalOffset": 6,
+            "spread": 0,
+            "verticalOffset": 10
+        },
+        "typography": {
+            "bodySize": 14,
+            "fontFamily": "Roboto Flex",
+            "labelSize": 13,
+            "titleSize": 18
+        }
+    },
+    "dark": {
+        "chrome": {
+            "angle": 105,
+            "endColor": "#151B21",
+            "middleColor": "#1B2229",
+            "middlePosition": 0.52,
+            "mode": "linear",
+            "startColor": "#222931"
+        },
+        "colors": {
+            "activeBackground": "#303A46",
+            "background": "#12161B",
+            "completionHint": "#818C99",
+            "contentBorder": "transparent",
+            "disabledForeground": "#8B96A3",
+            "error": "#FFB4AB",
+            "foreground": "#E7ECF2",
+            "hoverBackground": "#252D36",
+            "icon": "#EDF2F7",
+            "menuBorder": "#8994A1",
+            "mutedForeground": "#C2CAD4",
+            "outline": "#8994A1",
+            "paneBorder": "transparent",
+            "panelBackground": "#1C2229",
+            "privateBackground": "#121019",
+            "tabBarBackground": "#52000000",
+            "windowBorder": "#8994A1"
+        },
+        "shadow": {
+            "ambientColor": "#52000000",
+            "color": "#7A000000",
+            "overlayColor": "#82000000"
+        }
+    },
+    "formatVersion": 2,
+    "id": "eden-default",
+    "light": {
+        "chrome": {
+            "angle": 105,
+            "endColor": "#EDF2F7",
+            "middleColor": "#F3F6FA",
+            "middlePosition": 0.52,
+            "mode": "linear",
+            "startColor": "#F8FAFD"
+        },
+        "colors": {
+            "activeBackground": "#DDE5EE",
+            "background": "#FAFBFC",
+            "completionHint": "#7A8491",
+            "contentBorder": "transparent",
+            "disabledForeground": "#7A8491",
+            "error": "#BA1A1A",
+            "foreground": "#1B1F24",
+            "hoverBackground": "#E8EDF3",
+            "icon": "#475569",
+            "menuBorder": "#8893A0",
+            "mutedForeground": "#4B5563",
+            "outline": "#8893A0",
+            "paneBorder": "transparent",
+            "panelBackground": "#F2F4F7",
+            "privateBackground": "#F5F1FA",
+            "tabBarBackground": "#33000000",
+            "windowBorder": "#8893A0"
+        },
+        "shadow": {
+            "ambientColor": "#1F000000",
+            "color": "#38000000",
+            "overlayColor": "#42000000"
+        }
+    },
+    "name": "Eden Default Theme"
+}

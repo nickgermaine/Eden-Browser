@@ -7,7 +7,7 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
 ### Building today (Qt6 baseline)
 
-- CMake ≥ 3.21, GCC 12+ or Clang 15+ (C++17)
+- CMake ≥ 3.21, GCC 13+ or Clang 16+ (C++20)
 - Qt ≥ 6.8 LTS (recommended: latest stable): Base, Declarative, WebEngine
 
 ### Full scope
