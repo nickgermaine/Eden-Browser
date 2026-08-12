@@ -6,8 +6,10 @@ Item {
     id: strip
 
     required property var controller
-    signal systemMoveRequested
-    signal toggleMaximizedRequested
+    property bool verticalDropLayout: false
+    readonly property real dropNormalExtent: renderedTabWidth
+    readonly property real dropPinnedExtent: Theme.pinnedTabWidth
+    readonly property real dropSpacing: 4
     readonly property var tabModel: controller ? controller.tabs : null
     readonly property int tabCount: tabModel ? tabModel.count : 0
     readonly property int pinnedTabCount: tabModel ? tabModel.pinnedCount : 0
@@ -16,7 +18,13 @@ Item {
     readonly property real minimumTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * Theme.tabMinimumWidth + Math.max(0, tabCount - 1) * 4
     readonly property bool overflowing: minimumTabsContentWidth > baseTabsWidth
     readonly property real fittedTabWidth: normalTabCount > 0 ? (baseTabsWidth - pinnedTabCount * Theme.pinnedTabWidth - Math.max(0, tabCount - 1) * 4) / normalTabCount : Theme.tabMaximumWidth
+    readonly property real renderedTabWidth: Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, fittedTabWidth))
+    readonly property real renderedTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * renderedTabWidth + Math.max(0, tabCount - 1) * 4
 
+    signal systemMoveRequested()
+    signal toggleMaximizedRequested()
+
+    objectName: "tabDropArea"
     implicitHeight: 44
 
     TabStripNavigator {
@@ -50,6 +58,7 @@ Item {
     ListView {
         id: tabsView
 
+        objectName: "tabDropView"
         anchors.left: previousTabsButton.right
         anchors.right: nextTabsButton.left
         anchors.top: parent.top
@@ -94,7 +103,7 @@ Item {
 
         }
 
-        moveDisplaced: Transition {
+        displaced: Transition {
             NumberAnimation {
                 properties: "x,y"
                 duration: Theme.shortDuration
@@ -118,14 +127,15 @@ Item {
             required property var engineView
             required property string internalPage
             readonly property bool activeTab: ListView.isCurrentItem
+            readonly property bool dragging: strip.controller.tabDragIndex === index
 
             width: isPinned ? Theme.pinnedTabWidth : Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, strip.fittedTabWidth))
             height: 36
             anchors.verticalCenter: parent ? parent.verticalCenter : undefined
             radius: Theme.cardRadius
             color: "transparent"
-            scale: dragHandler.active ? 1.04 : 1
-            z: dragHandler.active ? 3 : 1
+            scale: dragging ? 1.04 : 1
+            z: dragging ? 3 : 1
 
             Rectangle {
                 anchors.fill: parent
@@ -216,14 +226,11 @@ Item {
 
                 target: null
                 xAxis.enabled: true
-                yAxis.enabled: false
+                yAxis.enabled: true
                 onActiveChanged: {
-                    if (!active) {
-                        const centerX = tab.x + tab.width / 2 + persistentTranslation.x;
-                        const targetIndex = navigator.destinationForDrag(tab.index, centerX);
-                        persistentTranslation = Qt.vector2d(0, 0);
-                        strip.controller.tabs.moveTab(tab.index, targetIndex);
-                    }
+                    if (active)
+                        strip.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
+
                 }
             }
 
@@ -267,7 +274,7 @@ Item {
                 }]
                 onTriggered: (actionId) => {
                     if (actionId === "new")
-                        strip.controller.newTab();
+                        strip.controller.newTabAndFocusOmnibox();
                     else if (actionId === "reload" && tab.engineView)
                         tab.engineView.reload();
                     else if (actionId === "duplicate")
@@ -284,7 +291,20 @@ Item {
             }
 
             transform: Translate {
-                x: dragHandler.activeTranslation.x
+                id: dragTranslation
+
+                x: strip.controller.tabDragRevision >= 0 ? strip.controller.tabDragTranslation(tab.index, tab.x) : 0
+
+                Behavior on x {
+                    enabled: !tab.dragging
+
+                    NumberAnimation {
+                        duration: Theme.shortDuration
+                        easing.type: Easing.OutCubic
+                    }
+
+                }
+
             }
 
             Behavior on scale {
@@ -323,12 +343,10 @@ Item {
     EdenButton {
         id: newTabButton
 
-        anchors.right: strip.overflowing ? parent.right : undefined
-        anchors.rightMargin: 4
         anchors.verticalCenter: parent.verticalCenter
-        x: strip.overflowing ? 0 : Math.min(tabsView.x + tabsView.contentWidth + 6, strip.width - width - 4)
+        x: strip.overflowing ? strip.width - width - 4 : Math.min(tabsView.x + strip.renderedTabsContentWidth + 6, strip.width - width - 4)
         iconName: "add"
-        onClicked: strip.controller.newTab()
+        onClicked: strip.controller.newTabAndFocusOmnibox()
     }
 
     Item {
@@ -352,6 +370,23 @@ Item {
             onDoubleTapped: strip.toggleMaximizedRequested()
         }
 
+    }
+
+    DropArea {
+        anchors.fill: parent
+        keys: ["application/x-eden-tab"]
+        onEntered: (drag) => {
+            return strip.controller.tabDragEntered(strip, drag.x, drag.y);
+        }
+        onPositionChanged: (drag) => {
+            return strip.controller.tabDragMoved(strip, drag.x, drag.y);
+        }
+        onExited: strip.controller.tabDragLeft()
+        onDropped: (drop) => {
+            if (strip.controller.tabDragDropped(strip, drop.x, drop.y))
+                drop.acceptProposedAction();
+
+        }
     }
 
 }

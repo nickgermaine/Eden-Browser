@@ -7,16 +7,10 @@
 
 namespace eden::core {
 
-TabModel::TabModel(QObject *parent)
-    : TabModel(
-          [] {
-              return engine::EngineFactory::create(engine::EngineFactory::Backend::QtWebEngine, engine::EngineProfile::defaultProfile());
-          },
-          false, parent) {}
-
-TabModel::TabModel(ViewFactory factory, bool privateMode, QObject *parent)
+TabModel::TabModel(ViewFactory factory, bool privateMode, QObject *parent, std::shared_ptr<engine::EngineProfile> profileLease)
     : QAbstractListModel(parent),
       m_factory(std::move(factory)),
+      m_profileLease(std::move(profileLease)),
       m_privateMode(privateMode) {
     m_undoTimer.setSingleShot(true);
     m_undoTimer.setInterval(10000);
@@ -94,6 +88,7 @@ QHash<int, QByteArray> TabModel::roleNames() const {
 int TabModel::addTab(const QUrl &url, bool background) {
     std::unique_ptr<Tab> tab = std::make_unique<Tab>();
     tab->privateMode = m_privateMode;
+    tab->profileLease = m_profileLease;
     const QUrl destination = url.isEmpty() ? QUrl("about:blank") : url;
     if (destination.scheme() == "eden") {
         tab->url = destination;
@@ -154,8 +149,9 @@ bool TabModel::undoClose() {
     if (!m_closedTab) {
         return false;
     }
-    const int row = std::min(m_closedTab->index, rowCount());
     const bool restoredPinned = m_closedTab->tab->pinned;
+    const int row =
+        restoredPinned ? std::clamp(m_closedTab->index, 0, pinnedCount()) : std::clamp(m_closedTab->index, pinnedCount(), rowCount());
     beginInsertRows({}, row, row);
     m_tabs.insert(m_tabs.begin() + row, std::move(m_closedTab->tab));
     endInsertRows();
@@ -195,32 +191,45 @@ void TabModel::pinTab(int row, bool pinned) {
     emit dataChanged(index(row), index(row), {PinnedRole});
     emit pinnedCountChanged();
     emit operationOccurred();
+    const int boundary = pinned ? pinnedCount() - 1 : pinnedCount();
+    if (row != boundary) {
+        moveTab(row, boundary);
+    }
 }
 
 int TabModel::duplicateTab(int row) {
     if (row < 0 || row >= rowCount()) {
         return -1;
     }
-    return addTab(data(index(row), UrlRole).toUrl(), false);
+    const int added = addTab(data(index(row), UrlRole).toUrl(), false);
+    if (added < 0) {
+        return added;
+    }
+    const int target = std::clamp(row + 1, pinnedCount(), rowCount() - 1);
+    if (target != added && moveTab(added, target)) {
+        return target;
+    }
+    return added;
 }
 
 void TabModel::closeOthers(int row) {
     if (row < 0 || row >= rowCount()) {
         return;
     }
-    const int previousPinnedCount = pinnedCount();
+    bool removedAny = false;
     for (int candidate = rowCount() - 1; candidate >= 0; --candidate) {
-        if (candidate == row) {
+        if (candidate == row || m_tabs.at(candidate)->pinned) {
             continue;
         }
         beginRemoveRows({}, candidate, candidate);
         m_tabs.erase(m_tabs.begin() + candidate);
         endRemoveRows();
+        removedAny = true;
+    }
+    if (!removedAny) {
+        return;
     }
     emit countChanged();
-    if (previousPinnedCount != pinnedCount()) {
-        emit pinnedCountChanged();
-    }
     emit operationOccurred();
 }
 
@@ -232,6 +241,52 @@ void TabModel::toggleMuted(int row) {
 
 QObject *TabModel::engineAt(int row) const {
     return engineViewAt(row);
+}
+
+bool TabModel::transferTabTo(int row, TabModel *destination, int destinationRow) {
+    if (!destination || row < 0 || row >= rowCount() || m_privateMode != destination->m_privateMode) {
+        return false;
+    }
+    const bool transferredPinned = m_tabs.at(row)->pinned;
+    if (destination == this) {
+        int target = std::clamp(destinationRow > row ? destinationRow - 1 : destinationRow, 0, rowCount() - 1);
+        target =
+            transferredPinned ? std::clamp(target, 0, std::max(0, pinnedCount() - 1)) : std::clamp(target, pinnedCount(), rowCount() - 1);
+        return target == row || moveTab(row, target);
+    }
+    destinationRow = transferredPinned ? std::clamp(destinationRow, 0, destination->pinnedCount())
+                                       : std::clamp(destinationRow, destination->pinnedCount(), destination->rowCount());
+
+    destination->m_tabs.reserve(destination->m_tabs.size() + 1);
+    engine::EngineView *view = m_tabs.at(row)->view.get();
+    if (view) {
+        disconnect(view, nullptr, this, nullptr);
+    }
+
+    beginRemoveRows({}, row, row);
+    std::unique_ptr<Tab> transferred = std::move(m_tabs.at(row));
+    m_tabs.erase(m_tabs.begin() + row);
+    endRemoveRows();
+    emit tabTransferredOut(view);
+
+    destination->connectTab(*transferred);
+    destination->beginInsertRows({}, destinationRow, destinationRow);
+    destination->m_tabs.insert(destination->m_tabs.begin() + destinationRow, std::move(transferred));
+    destination->endInsertRows();
+
+    emit countChanged();
+    emit destination->countChanged();
+    if (transferredPinned) {
+        emit pinnedCountChanged();
+        emit destination->pinnedCountChanged();
+    }
+    emit operationOccurred();
+    emit destination->operationOccurred();
+    emit destination->tabAdded(destinationRow, false);
+    if (m_tabs.empty()) {
+        emit tabCloseRequestedForWindow();
+    }
+    return true;
 }
 
 int TabModel::pinnedCount() const {
@@ -247,6 +302,13 @@ engine::EngineView *TabModel::engineViewAt(int row) const {
         return nullptr;
     }
     return m_tabs.at(row)->view.get();
+}
+
+engine::EngineProfile *TabModel::profileAt(int row) const {
+    if (row < 0 || row >= rowCount()) {
+        return nullptr;
+    }
+    return m_tabs.at(row)->profileLease ? m_tabs.at(row)->profileLease.get() : nullptr;
 }
 
 void TabModel::connectTab(Tab &tab) {

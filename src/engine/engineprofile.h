@@ -4,6 +4,8 @@
 #include <QUrl>
 #include <memory>
 
+class QQmlEngine;
+
 namespace eden::engine {
 
 class EngineProfile : public QObject {
@@ -17,8 +19,8 @@ class EngineProfile : public QObject {
     bool isPrivate() const;
     virtual QObject *nativeProfile() const = 0;
 
-    static EngineProfile *defaultProfile();
-    static std::unique_ptr<EngineProfile> createPrivateProfile(QObject *parent = nullptr);
+    static EngineProfile *defaultProfile(QQmlEngine *engine);
+    static std::unique_ptr<EngineProfile> createPrivateProfile(QQmlEngine *engine, QObject *parent = nullptr);
 
   signals:
     void downloadStarted(int id, const QString &fileName, const QUrl &sourceUrl, const QString &targetPath, qint64 totalBytes);

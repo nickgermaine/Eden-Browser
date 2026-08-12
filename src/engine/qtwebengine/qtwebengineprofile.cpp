@@ -2,19 +2,31 @@
 
 #include <QDir>
 #include <QFile>
+#include <QQmlComponent>
+#include <QQmlEngine>
 #include <QQuickWebEngineDownloadRequest>
 #include <QQuickWebEngineProfile>
 #include <QStandardPaths>
 
 namespace eden::engine {
 
-QtWebEngineProfile::QtWebEngineProfile(bool privateProfile, QObject *parent)
+QtWebEngineProfile::QtWebEngineProfile(bool privateProfile, QQmlEngine *engine, QObject *parent)
     : EngineProfile(privateProfile, parent),
-      m_profile(new QQuickWebEngineProfile(this)) {
+      m_profilePrototype(nullptr),
+      m_profile(nullptr) {
+    if (!engine) {
+        qFatal("A QML engine is required to create a web profile");
+    }
+    QQmlComponent component(engine);
+    component.setData("import QtWebEngine\nWebEngineProfilePrototype {}", QUrl());
+    if (component.isError()) {
+        qFatal("The Qt WebEngine profile prototype is unavailable: %s", qPrintable(component.errorString()));
+    }
+    QVariantMap properties;
     if (privateProfile) {
-        m_profile->setOffTheRecord(true);
-        m_profile->setHttpCacheType(QQuickWebEngineProfile::MemoryHttpCache);
-        m_profile->setPersistentCookiesPolicy(QQuickWebEngineProfile::NoPersistentCookies);
+        properties.insert("storageName", QString());
+        properties.insert("httpCacheType", QQuickWebEngineProfile::MemoryHttpCache);
+        properties.insert("persistentCookiesPolicy", QQuickWebEngineProfile::NoPersistentCookies);
     } else {
         const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/webengine";
         const QString cachePath = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/webengine";
@@ -22,12 +34,19 @@ QtWebEngineProfile::QtWebEngineProfile(bool privateProfile, QObject *parent)
         QDir().mkpath(cachePath);
         QFile::setPermissions(dataPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
         QFile::setPermissions(cachePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-        m_profile->setStorageName("Default");
-        m_profile->setOffTheRecord(false);
-        m_profile->setPersistentStoragePath(dataPath);
-        m_profile->setCachePath(cachePath);
-        m_profile->setPersistentCookiesPolicy(QQuickWebEngineProfile::AllowPersistentCookies);
-        m_profile->setHttpCacheType(QQuickWebEngineProfile::DiskHttpCache);
+        properties.insert("storageName", "Default");
+        properties.insert("persistentStoragePath", dataPath);
+        properties.insert("cachePath", cachePath);
+        properties.insert("persistentCookiesPolicy", QQuickWebEngineProfile::AllowPersistentCookies);
+        properties.insert("httpCacheType", QQuickWebEngineProfile::DiskHttpCache);
+    }
+    m_profilePrototype = component.createWithInitialProperties(properties);
+    if (!m_profilePrototype) {
+        qFatal("The Qt WebEngine profile prototype could not be created: %s", qPrintable(component.errorString()));
+    }
+    m_profilePrototype->setParent(this);
+    if (!QMetaObject::invokeMethod(m_profilePrototype, "instance", Q_RETURN_ARG(QQuickWebEngineProfile *, m_profile)) || !m_profile) {
+        qFatal("The Qt WebEngine profile could not be created");
     }
     connect(m_profile, &QQuickWebEngineProfile::downloadRequested, this, [this](QQuickWebEngineDownloadRequest *download) {
         const QString directory = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);

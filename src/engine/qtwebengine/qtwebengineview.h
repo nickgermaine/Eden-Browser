@@ -42,6 +42,7 @@ class QtWebEngineView final : public EngineView {
     void findInPage(const QString &text, FindFlags flags) override;
     void attach(QQuickItem *viewport) override;
     void setMuted(bool muted) override;
+    void executeContextMenuCommand(const QString &command) override;
 
     Q_INVOKABLE void handleNewWindow(QObject *requestObject);
     Q_INVOKABLE void handleFullScreen(bool fullscreen);

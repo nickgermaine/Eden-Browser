@@ -24,6 +24,7 @@ class ThemeManagerTest final : public QObject {
     void previewResolvesThemeTokens();
     void themeEditorPageLoads();
     void settingsPageLoads();
+    void searchEngineSelectionLivesInSettingsStore();
     void draftPreviewsSavesAndExports();
 
   private:
@@ -207,6 +208,23 @@ void ThemeManagerTest::themeEditorPageLoads() {
 
 void ThemeManagerTest::settingsPageLoads() {
     QVERIFY(loadPage("SettingsPage"));
+}
+
+void ThemeManagerTest::searchEngineSelectionLivesInSettingsStore() {
+    eden::core::SettingsStore *settings = eden::core::SettingsStore::instance();
+    settings->selectSearchEngine("custom");
+    QVERIFY(settings->customSearchEngine());
+    QCOMPARE(settings->searchEngineActions().constLast().toMap().value("icon").toString(), QString("check"));
+
+    settings->selectSearchEngine("Google");
+    QCOMPARE(settings->searchEngine(), QString("Google"));
+    QCOMPARE(settings->searchUrl(), QString("https://www.google.com/search?q=%1"));
+    QVERIFY(!settings->customSearchEngine());
+
+    const QString selectedUrl = settings->searchUrl();
+    settings->selectSearchEngine("missing");
+    QCOMPARE(settings->searchUrl(), selectedUrl);
+    settings->selectSearchEngine("DuckDuckGo");
 }
 
 void ThemeManagerTest::draftPreviewsSavesAndExports() {

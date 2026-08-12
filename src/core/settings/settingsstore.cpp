@@ -6,7 +6,39 @@
 #include <QStandardPaths>
 #include <QStyleHints>
 
+#include <algorithm>
+#include <array>
+
 namespace eden::core {
+
+struct SearchEnginePreset {
+    QString name;
+    QString url;
+};
+
+static const std::array<SearchEnginePreset, 6> &searchEnginePresets() {
+    static const std::array<SearchEnginePreset, 6> presets = {
+        SearchEnginePreset{"DuckDuckGo", "https://duckduckgo.com/?q=%1"},
+        SearchEnginePreset{"Google", "https://www.google.com/search?q=%1"},
+        SearchEnginePreset{"Bing", "https://www.bing.com/search?q=%1"},
+        SearchEnginePreset{"Brave Search", "https://search.brave.com/search?q=%1"},
+        SearchEnginePreset{"Startpage", "https://www.startpage.com/sp/search?query=%1"},
+        SearchEnginePreset{"Ecosia", "https://www.ecosia.org/search?q=%1"},
+    };
+    return presets;
+}
+
+static const SearchEnginePreset *searchEnginePreset(const QString &id) {
+    const auto &presets = searchEnginePresets();
+    const auto found =
+        std::find_if(presets.cbegin(), presets.cend(), [&id](const SearchEnginePreset &preset) { return preset.name == id; });
+    return found == presets.cend() ? nullptr : &*found;
+}
+
+static bool isPresetSearchUrl(const QString &url) {
+    const auto &presets = searchEnginePresets();
+    return std::any_of(presets.cbegin(), presets.cend(), [&url](const SearchEnginePreset &preset) { return preset.url == url; });
+}
 
 static QString settingsDirectory() {
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/eden";
@@ -15,6 +47,9 @@ static QString settingsDirectory() {
 SettingsStore::SettingsStore(QObject *parent)
     : QObject(parent) {
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &SettingsStore::systemDarkChanged);
+    connect(this, &SettingsStore::searchEngineChanged, this, &SettingsStore::searchEngineActionsChanged);
+    connect(this, &SettingsStore::searchUrlChanged, this, &SettingsStore::searchEngineActionsChanged);
+    connect(this, &SettingsStore::searchUrlChanged, this, &SettingsStore::customSearchEngineChanged);
 }
 
 SettingsStore::~SettingsStore() = default;
@@ -82,6 +117,30 @@ bool SettingsStore::searchSuggestions() const {
     return m_searchSuggestions;
 }
 
+QVariantList SettingsStore::searchEngineActions() const {
+    QVariantList actions;
+    const bool custom = customSearchEngine();
+    for (const SearchEnginePreset &preset : searchEnginePresets()) {
+        QVariantMap action;
+        action.insert("id", preset.name);
+        action.insert("title", preset.name);
+        action.insert("subtitle", preset.url);
+        action.insert("icon", !custom && preset.url == m_searchUrl ? "check" : "");
+        actions.append(action);
+    }
+    QVariantMap customAction;
+    customAction.insert("id", "custom");
+    customAction.insert("title", "Custom");
+    customAction.insert("subtitle", "Provide your own name and search URL");
+    customAction.insert("icon", custom ? "check" : "");
+    actions.append(customAction);
+    return actions;
+}
+
+bool SettingsStore::customSearchEngine() const {
+    return m_customSearchEngine || !isPresetSearchUrl(m_searchUrl);
+}
+
 bool SettingsStore::systemDark() const {
     return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
 }
@@ -95,6 +154,33 @@ QString SettingsStore::licenseText(const QString &fileName) const {
         return {};
     }
     return QString::fromUtf8(file.readAll());
+}
+
+void SettingsStore::selectSearchEngine(const QString &id) {
+    if (id == "custom") {
+        if (!m_customSearchEngine) {
+            m_customSearchEngine = true;
+            emit customSearchEngineChanged();
+            emit searchEngineActionsChanged();
+        }
+        return;
+    }
+    const SearchEnginePreset *preset = searchEnginePreset(id);
+    if (!preset) {
+        return;
+    }
+    const bool wasCustom = customSearchEngine();
+    const bool engineWillChange = m_searchEngine != preset->name;
+    const bool urlWillChange = m_searchUrl != preset->url;
+    m_customSearchEngine = false;
+    setSearchEngine(preset->name);
+    setSearchUrl(preset->url);
+    if (wasCustom && !urlWillChange) {
+        emit customSearchEngineChanged();
+    }
+    if (!urlWillChange && !engineWillChange) {
+        emit searchEngineActionsChanged();
+    }
 }
 
 void SettingsStore::setTheme(const QString &theme) {

@@ -2,9 +2,15 @@
 #include "engine/engineview.h"
 #include "engine/qtwebengine/qtwebengineview.h"
 
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
+
 #include <stdexcept>
 
 namespace eden::engine {
+
+void EngineFactory::initialize() {
+    QtWebEngineQuick::initialize();
+}
 
 std::unique_ptr<EngineView> EngineFactory::create(Backend backend, EngineProfile *profile) {
     if (backend == Backend::QtWebEngine) {

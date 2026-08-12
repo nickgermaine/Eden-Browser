@@ -28,7 +28,7 @@ Window {
             forwardHistoryMenu.close();
         }
     }
-    onClosing: controller.saveSession()
+    onClosing: controller.prepareToClose()
 
     WindowController {
         id: controller
@@ -329,9 +329,27 @@ Window {
                 width: active && item ? item.implicitWidth : 0
                 active: Settings.tabLayout === "sidebar"
                 sourceComponent: sidebarComponent
+                opacity: Settings.tabLayout === "sidebar" ? 1 : 0
                 z: 2
 
-                Behavior on width {
+                transform: Scale {
+                    id: sidebarScale
+
+                    origin.x: 0
+                    origin.y: sidebarLoader.height / 2
+                    xScale: Settings.tabLayout === "sidebar" ? 1 : 0.96
+
+                    Behavior on xScale {
+                        NumberAnimation {
+                            duration: Theme.mediumDuration
+                            easing.type: Easing.OutCubic
+                        }
+
+                    }
+
+                }
+
+                Behavior on opacity {
                     NumberAnimation {
                         duration: Theme.mediumDuration
                         easing.type: Easing.OutCubic
@@ -353,8 +371,8 @@ Window {
             Item {
                 id: viewportFrame
 
-                anchors.left: sidebarLoader.active ? sidebarLoader.right : parent.left
-                anchors.leftMargin: sidebarLoader.active ? Theme.workspaceGap : 0
+                anchors.left: Settings.tabLayout === "sidebar" ? sidebarLoader.right : parent.left
+                anchors.leftMargin: Settings.tabLayout === "sidebar" ? Theme.workspaceGap : 0
                 anchors.right: paneLoader.active ? paneLoader.left : parent.right
                 anchors.rightMargin: paneLoader.active ? Theme.workspaceGap : 0
                 anchors.top: parent.top
@@ -632,6 +650,22 @@ Window {
             }
         }
 
+        EdenMenu {
+            id: pageContextMenu
+
+            parent: shell
+            x: Math.max(8, Math.min(shell.width - width - 8, workspace.x + viewportFrame.x + controller.pageContextMenuPosition.x))
+            y: Math.max(8, Math.min(shell.height - height - 8, workspace.y + viewportFrame.y + controller.pageContextMenuPosition.y))
+            preferredWidth: 260
+            maximumHeight: shell.height - 16
+            z: 14
+            actions: controller.pageContextMenuActions
+            onClosed: controller.dismissPageContextMenu()
+            onTriggered: (command) => {
+                return controller.executePageContextMenuCommand(command);
+            }
+        }
+
         Instantiator {
             model: controller.commandPaletteVisible ? 1 : 0
 
@@ -648,6 +682,10 @@ Window {
         Connections {
             function onCloseWindowRequested() {
                 root.close();
+            }
+
+            function onPageContextMenuRequested() {
+                pageContextMenu.open();
             }
 
             target: controller
@@ -699,7 +737,7 @@ Window {
             }]
             onTriggered: (actionId) => {
                 if (actionId === "new_tab")
-                    controller.newTab();
+                    controller.newTabAndFocusOmnibox();
                 else if (actionId === "new_window")
                     controller.openNewWindow(false);
                 else if (actionId === "private_window")
@@ -811,10 +849,11 @@ Window {
                 cursorShape: parent.cursorShape
             }
 
-            TapHandler {
+            DragHandler {
+                target: null
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: {
-                    if (pressed)
+                onActiveChanged: {
+                    if (active)
                         frame.startSystemResize(parent.edges);
 
                 }

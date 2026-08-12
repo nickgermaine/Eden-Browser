@@ -15,13 +15,13 @@ bool EngineProfile::isPrivate() const {
     return m_privateProfile;
 }
 
-EngineProfile *EngineProfile::defaultProfile() {
-    static QtWebEngineProfile *profile = new QtWebEngineProfile(false, QCoreApplication::instance());
+EngineProfile *EngineProfile::defaultProfile(QQmlEngine *engine) {
+    static QtWebEngineProfile *profile = new QtWebEngineProfile(false, engine, QCoreApplication::instance());
     return profile;
 }
 
-std::unique_ptr<EngineProfile> EngineProfile::createPrivateProfile(QObject *parent) {
-    return std::make_unique<QtWebEngineProfile>(true, parent);
+std::unique_ptr<EngineProfile> EngineProfile::createPrivateProfile(QQmlEngine *engine, QObject *parent) {
+    return std::make_unique<QtWebEngineProfile>(true, engine, parent);
 }
 
 }

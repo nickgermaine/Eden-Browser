@@ -1,7 +1,7 @@
 #pragma once
 
 #include "engine/enginefactory.h"
-#include "engine/enginenewviewrequest.h"
+#include "engine/engineview.h"
 
 #include <QAbstractListModel>
 #include <QTimer>
@@ -12,7 +12,6 @@
 
 namespace eden::engine {
 class EngineProfile;
-class EngineView;
 }
 
 namespace eden::core {
@@ -40,8 +39,7 @@ class TabModel final : public QAbstractListModel {
 
     using ViewFactory = std::function<std::unique_ptr<engine::EngineView>()>;
 
-    explicit TabModel(QObject *parent = nullptr);
-    TabModel(ViewFactory factory, bool privateMode, QObject *parent = nullptr);
+    TabModel(ViewFactory factory, bool privateMode, QObject *parent = nullptr, std::shared_ptr<engine::EngineProfile> profileLease = {});
     ~TabModel() override;
 
     int rowCount(const QModelIndex &parent = {}) const override;
@@ -57,9 +55,11 @@ class TabModel final : public QAbstractListModel {
     Q_INVOKABLE void closeOthers(int index);
     Q_INVOKABLE void toggleMuted(int index);
     Q_INVOKABLE QObject *engineAt(int index) const;
+    bool transferTabTo(int index, TabModel *destination, int destinationIndex);
     int pinnedCount() const;
     bool canUndoClose() const;
     engine::EngineView *engineViewAt(int index) const;
+    engine::EngineProfile *profileAt(int index) const;
 
   signals:
     void countChanged();
@@ -68,12 +68,14 @@ class TabModel final : public QAbstractListModel {
     void operationOccurred();
     void tabAdded(int index, bool background);
     void tabMoved(int from, int to);
+    void tabTransferredOut(engine::EngineView *view);
     void tabCloseRequestedForWindow();
     void externalViewRequested(engine::EngineNewViewRequest *request);
 
   private:
     struct Tab {
         std::unique_ptr<engine::EngineView> view;
+        std::shared_ptr<engine::EngineProfile> profileLease;
         QUrl url;
         QString title;
         QString internalPage;
@@ -91,6 +93,7 @@ class TabModel final : public QAbstractListModel {
     void notifyViewChanged(engine::EngineView *view, const QList<int> &roles);
 
     ViewFactory m_factory;
+    std::shared_ptr<engine::EngineProfile> m_profileLease;
     bool m_privateMode = false;
     std::vector<std::unique_ptr<Tab>> m_tabs;
     std::unique_ptr<ClosedTab> m_closedTab;

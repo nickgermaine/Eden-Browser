@@ -40,7 +40,7 @@ Popup {
         Text {
             width: parent.width
             wrapMode: Text.Wrap
-            text: popover.engine ? popover.engine.url.toString() : ""
+            text: popover.controller.currentUrl.toString()
             color: Theme.surfaceVariantText
             font: Theme.bodyFont
         }

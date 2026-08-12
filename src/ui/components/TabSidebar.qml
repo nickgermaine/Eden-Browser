@@ -6,7 +6,12 @@ Rectangle {
     id: sidebar
 
     required property var controller
+    property bool verticalDropLayout: true
+    readonly property real dropNormalExtent: 42
+    readonly property real dropPinnedExtent: 42
+    readonly property real dropSpacing: 4
 
+    objectName: "tabDropArea"
     implicitWidth: controller.sidebarExpanded ? 240 : 48
     color: Theme.surfaceContainer
     radius: Theme.contentRadius
@@ -28,6 +33,7 @@ Rectangle {
     ListView {
         id: tabsView
 
+        objectName: "tabDropView"
         anchors.top: collapseButton.bottom
         anchors.left: parent.left
         anchors.right: parent.right
@@ -39,6 +45,36 @@ Rectangle {
         currentIndex: sidebar.controller.activeIndex
 
         displaced: Transition {
+            NumberAnimation {
+                properties: "x,y"
+                duration: Theme.shortDuration
+                easing.type: Easing.OutBack
+            }
+
+        }
+
+        add: Transition {
+            NumberAnimation {
+                properties: "opacity,scale"
+                from: 0
+                to: 1
+                duration: Theme.shortDuration
+                easing.type: Easing.OutCubic
+            }
+
+        }
+
+        remove: Transition {
+            NumberAnimation {
+                properties: "opacity,scale"
+                to: 0
+                duration: Theme.shortDuration
+                easing.type: Easing.OutCubic
+            }
+
+        }
+
+        move: Transition {
             NumberAnimation {
                 properties: "x,y"
                 duration: Theme.shortDuration
@@ -61,11 +97,13 @@ Rectangle {
             required property var engineView
             required property string internalPage
             readonly property bool activeTab: ListView.isCurrentItem
+            readonly property bool dragging: sidebar.controller.tabDragIndex === index
 
             width: tabsView.width
             height: 42
             radius: Theme.cardRadius
             color: "transparent"
+            z: dragging ? 3 : 1
 
             Rectangle {
                 anchors.fill: parent
@@ -159,13 +197,13 @@ Rectangle {
             DragHandler {
                 id: dragHandler
 
+                target: null
                 yAxis.enabled: true
-                xAxis.enabled: false
+                xAxis.enabled: true
                 onActiveChanged: {
-                    if (!active) {
-                        const targetIndex = Math.max(0, Math.min(tabsView.count - 1, Math.floor((tab.y + tab.height / 2) / (tab.height + tabsView.spacing))));
-                        sidebar.controller.tabs.moveTab(tab.index, targetIndex);
-                    }
+                    if (active)
+                        sidebar.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
+
                 }
             }
 
@@ -204,7 +242,7 @@ Rectangle {
                 }]
                 onTriggered: (actionId) => {
                     if (actionId === "new")
-                        sidebar.controller.newTab();
+                        sidebar.controller.newTabAndFocusOmnibox();
                     else if (actionId === "reload" && tab.engineView)
                         tab.engineView.reload();
                     else if (actionId === "duplicate")
@@ -220,6 +258,21 @@ Rectangle {
                 }
             }
 
+            transform: Translate {
+                y: sidebar.controller.tabDragRevision >= 0 ? sidebar.controller.tabDragTranslation(tab.index, tab.y) : 0
+
+                Behavior on y {
+                    enabled: !tab.dragging
+
+                    NumberAnimation {
+                        duration: Theme.shortDuration
+                        easing.type: Easing.OutCubic
+                    }
+
+                }
+
+            }
+
         }
 
     }
@@ -232,7 +285,24 @@ Rectangle {
         width: sidebar.controller.sidebarExpanded ? parent.width - 8 : 40
         iconName: "add"
         text: sidebar.controller.sidebarExpanded ? "New tab" : ""
-        onClicked: sidebar.controller.newTab()
+        onClicked: sidebar.controller.newTabAndFocusOmnibox()
+    }
+
+    DropArea {
+        anchors.fill: parent
+        keys: ["application/x-eden-tab"]
+        onEntered: (drag) => {
+            return sidebar.controller.tabDragEntered(sidebar, drag.x, drag.y);
+        }
+        onPositionChanged: (drag) => {
+            return sidebar.controller.tabDragMoved(sidebar, drag.x, drag.y);
+        }
+        onExited: sidebar.controller.tabDragLeft()
+        onDropped: (drop) => {
+            if (sidebar.controller.tabDragDropped(sidebar, drop.x, drop.y))
+                drop.acceptProposedAction();
+
+        }
     }
 
     Behavior on implicitWidth {

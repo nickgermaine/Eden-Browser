@@ -42,8 +42,8 @@ Rectangle {
         selectByMouse: true
         text: omnibox.controller.displayUrl
         onActiveFocusChanged: {
-            omnibox.controller.omnibox.query = "";
             if (activeFocus) {
+                omnibox.controller.omnibox.query = "";
                 text = omnibox.controller.currentUrl.toString();
                 selectAll();
             } else {
@@ -133,7 +133,7 @@ Rectangle {
         y: omnibox.height + 4
         width: omnibox.width
         height: Math.min(420, suggestions.contentHeight + 12)
-        visible: field.activeFocus && suggestions.count > 0
+        visible: suggestions.count > 0
         focus: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         padding: 6
@@ -212,9 +212,8 @@ Rectangle {
 
                 TapHandler {
                     onTapped: {
-                        omnibox.controller.activateSuggestion(suggestion.index);
                         field.focus = false;
-                        suggestionPopup.close();
+                        omnibox.controller.activateSuggestion(suggestion.index);
                     }
                 }
 

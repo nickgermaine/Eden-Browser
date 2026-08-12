@@ -1,6 +1,7 @@
 #include "engine/qtwebengine/qtwebengineview.h"
 #include "engine/engineprofile.h"
 
+#include <QMetaEnum>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -206,12 +207,19 @@ WebEngineView {
     function edenFind(text, flags) {
         findText(text, flags)
     }
+    function edenContextCommand(action) {
+        triggerWebAction(action)
+    }
     onNewWindowRequested: request => { if (edenBridge) edenBridge.handleNewWindow(request) }
     onFullScreenRequested: request => {
         request.accept()
         if (edenBridge) edenBridge.handleFullScreen(request.toggleOn)
     }
-    onContextMenuRequested: request => { if (edenBridge) edenBridge.handleContextMenu(request.position, request.linkUrl, request.selectedText, request.isContentEditable) }
+    onContextMenuRequested: request => {
+        request.accepted = true
+        if (edenBridge) edenBridge.handleContextMenu(request.position, request.linkUrl, request.selectedText, request.isContentEditable)
+    }
+    onJavaScriptConsoleMessage: (level, message, lineNumber, sourceId) => {}
     onCertificateError: error => { if (edenBridge) edenBridge.handleCertificateError() }
 }
 )QML",
@@ -263,6 +271,35 @@ void QtWebEngineView::setMuted(bool muted) {
     }
     m_muted = muted;
     emit mutedChanged();
+}
+
+void QtWebEngineView::executeContextMenuCommand(const QString &command) {
+    static const QHash<QString, QByteArray> actions = {
+        {"back", "Back"},
+        {"forward", "Forward"},
+        {"reload", "Reload"},
+        {"cut", "Cut"},
+        {"copy", "Copy"},
+        {"paste", "Paste"},
+        {"select_all", "SelectAll"},
+        {"open_link_new_tab", "OpenLinkInNewTab"},
+        {"copy_link", "CopyLinkToClipboard"},
+        {"download_link", "DownloadLinkToDisk"},
+        {"inspect", "InspectElement"},
+        {"view_source", "ViewSource"},
+    };
+    const auto found = actions.constFind(command);
+    if (!m_view || found == actions.cend()) {
+        return;
+    }
+    const int enumIndex = m_view->metaObject()->indexOfEnumerator("WebAction");
+    if (enumIndex < 0) {
+        return;
+    }
+    const int action = m_view->metaObject()->enumerator(enumIndex).keyToValue(found->constData());
+    if (action >= 0) {
+        QMetaObject::invokeMethod(m_view, "edenContextCommand", Q_ARG(QVariant, action));
+    }
 }
 
 void QtWebEngineView::syncState() {

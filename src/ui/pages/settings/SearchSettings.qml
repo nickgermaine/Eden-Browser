@@ -5,31 +5,6 @@ import QtQuick.Controls
 Item {
     id: page
 
-    readonly property var presets: [{
-        "name": "DuckDuckGo",
-        "url": "https://duckduckgo.com/?q=%1"
-    }, {
-        "name": "Google",
-        "url": "https://www.google.com/search?q=%1"
-    }, {
-        "name": "Bing",
-        "url": "https://www.bing.com/search?q=%1"
-    }, {
-        "name": "Brave Search",
-        "url": "https://search.brave.com/search?q=%1"
-    }, {
-        "name": "Startpage",
-        "url": "https://www.startpage.com/sp/search?query=%1"
-    }, {
-        "name": "Ecosia",
-        "url": "https://www.ecosia.org/search?q=%1"
-    }]
-    readonly property int presetIndex: presets.findIndex((preset) => {
-        return preset.url === Settings.searchUrl;
-    })
-    readonly property bool custom: customizing || presetIndex < 0
-    property bool customizing: false
-
     ScrollView {
         id: scroll
 
@@ -94,7 +69,7 @@ Item {
                             anchors.right: dropdownChevron.left
                             anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
-                            text: page.custom ? "Custom" : page.presets[page.presetIndex].name
+                            text: Settings.customSearchEngine ? "Custom" : Settings.searchEngine
                             color: Theme.surfaceText
                             font: Theme.bodyFont
                             elide: Text.ElideRight
@@ -125,30 +100,9 @@ Item {
                             y: parent.height + 4
                             preferredWidth: parent.width
                             maximumHeight: 380
-                            actions: page.presets.map((preset) => {
-                                return {
-                                    "id": preset.name,
-                                    "title": preset.name,
-                                    "subtitle": preset.url,
-                                    "icon": !page.custom && page.presets[page.presetIndex].name === preset.name ? "check" : ""
-                                };
-                            }).concat([{
-                                "id": "custom",
-                                "title": "Custom",
-                                "subtitle": "Provide your own name and search URL",
-                                "icon": page.custom ? "check" : ""
-                            }])
+                            actions: Settings.searchEngineActions
                             onTriggered: (actionId) => {
-                                if (actionId === "custom") {
-                                    page.customizing = true;
-                                    return ;
-                                }
-                                const preset = page.presets.find((candidate) => {
-                                    return candidate.name === actionId;
-                                });
-                                page.customizing = false;
-                                Settings.searchEngine = preset.name;
-                                Settings.searchUrl = preset.url;
+                                return Settings.selectSearchEngine(actionId);
                             }
                         }
 
@@ -162,28 +116,28 @@ Item {
                     }
 
                     Text {
-                        visible: page.custom
+                        visible: Settings.customSearchEngine
                         text: "Search engine name"
                         color: Theme.surfaceVariantText
                         font: Theme.labelFont
                     }
 
                     EdenTextField {
-                        visible: page.custom
+                        visible: Settings.customSearchEngine
                         width: parent.width
                         text: Settings.searchEngine
                         onEditingFinished: Settings.searchEngine = text
                     }
 
                     Text {
-                        visible: page.custom
+                        visible: Settings.customSearchEngine
                         text: "Search URL, use %1 for the query"
                         color: Theme.surfaceVariantText
                         font: Theme.labelFont
                     }
 
                     EdenTextField {
-                        visible: page.custom
+                        visible: Settings.customSearchEngine
                         width: parent.width
                         text: Settings.searchUrl
                         onEditingFinished: Settings.searchUrl = text

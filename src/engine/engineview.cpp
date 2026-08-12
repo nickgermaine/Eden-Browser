@@ -7,4 +7,6 @@ EngineView::EngineView(QObject *parent)
 
 EngineView::~EngineView() = default;
 
+void EngineView::executeContextMenuCommand(const QString &) {}
+
 }

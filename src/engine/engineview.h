@@ -70,6 +70,7 @@ class EngineView : public QObject {
     Q_INVOKABLE virtual void findInPage(const QString &text, FindFlags flags = {}) = 0;
     Q_INVOKABLE virtual void attach(QQuickItem *viewport) = 0;
     Q_INVOKABLE virtual void setMuted(bool muted) = 0;
+    Q_INVOKABLE virtual void executeContextMenuCommand(const QString &command);
 
   signals:
     void urlChanged();

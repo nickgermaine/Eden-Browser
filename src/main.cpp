@@ -3,6 +3,7 @@
 #include "core/window/tabstripnavigator.h"
 #include "core/window/windowcontroller.h"
 #include "core/window/windowframe.h"
+#include "engine/enginefactory.h"
 #include "engine/engineview.h"
 
 #include <QElapsedTimer>
@@ -12,14 +13,13 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
-#include <QtWebEngineQuick/qtwebenginequickglobal.h>
 
 #include <memory>
 
 int main(int argc, char *argv[]) {
     QElapsedTimer startupTimer;
     startupTimer.start();
-    QtWebEngineQuick::initialize();
+    eden::engine::EngineFactory::initialize();
     QGuiApplication application(argc, argv);
     QCoreApplication::setApplicationName("Eden");
     QCoreApplication::setApplicationVersion(EDEN_VERSION);

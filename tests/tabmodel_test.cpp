@@ -110,8 +110,15 @@ class TabModelTest final : public QObject {
     void addUsesSingleInsertRange();
     void closeUsesSingleRemoveRange();
     void moveUsesMoveSignal();
+    void transferPreservesEngineAndClosesEmptySource();
+    void transferWithinModelUsesInsertionBoundary();
+    void transferRejectsDifferentPrivacyModes();
     void undoRestoresClosedTab();
     void contextActionsWork();
+    void pinningMovesTabToPinnedRegion();
+    void duplicateInsertsNextToOriginal();
+    void closeOthersSparesPinnedTabs();
+    void undoCloseRestoresIntoMatchingRegion();
     void faviconChangesReachTheModel();
     void internalPageDoesNotCreateEngine();
     void urlCredentialsAreNotExposed();
@@ -165,6 +172,56 @@ void TabModelTest::moveUsesMoveSignal() {
     QCOMPARE(reset.size(), 0);
 }
 
+void TabModelTest::transferPreservesEngineAndClosesEmptySource() {
+    auto source = createModel();
+    auto destination = createModel();
+    source.addTab(QUrl("https://one.example"));
+    source.addTab(QUrl("https://two.example"));
+    destination.addTab(QUrl("https://destination.example"));
+    source.pinTab(0, true);
+    QObject *transferredEngine = source.engineAt(0);
+    QSignalSpy sourceRemoved(&source, &QAbstractItemModel::rowsRemoved);
+    QSignalSpy destinationInserted(&destination, &QAbstractItemModel::rowsInserted);
+    QSignalSpy closeRequested(&source, &eden::core::TabModel::tabCloseRequestedForWindow);
+
+    QVERIFY(source.transferTabTo(0, &destination, 1));
+    QCOMPARE(source.rowCount(), 1);
+    QCOMPARE(destination.rowCount(), 2);
+    QCOMPARE(destination.engineAt(0), transferredEngine);
+    QVERIFY(destination.data(destination.index(0), eden::core::TabModel::PinnedRole).toBool());
+    QCOMPARE(sourceRemoved.size(), 1);
+    QCOMPARE(destinationInserted.size(), 1);
+    QCOMPARE(closeRequested.size(), 0);
+
+    QVERIFY(source.transferTabTo(0, &destination, destination.rowCount()));
+    QCOMPARE(source.rowCount(), 0);
+    QCOMPARE(destination.rowCount(), 3);
+    QCOMPARE(closeRequested.size(), 1);
+}
+
+void TabModelTest::transferWithinModelUsesInsertionBoundary() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.addTab(QUrl("https://three.example"));
+
+    QVERIFY(model.transferTabTo(0, &model, 3));
+    QCOMPARE(model.data(model.index(2), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://one.example"));
+    QVERIFY(model.transferTabTo(2, &model, 0));
+    QCOMPARE(model.data(model.index(0), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://one.example"));
+}
+
+void TabModelTest::transferRejectsDifferentPrivacyModes() {
+    auto normal = createModel();
+    eden::core::TabModel privateModel([] { return std::make_unique<FakeEngineView>(); }, true);
+    normal.addTab(QUrl("https://normal.example"));
+    privateModel.addTab(QUrl("https://private.example"));
+
+    QVERIFY(!normal.transferTabTo(0, &privateModel, 1));
+    QCOMPARE(normal.rowCount(), 1);
+    QCOMPARE(privateModel.rowCount(), 1);
+}
+
 void TabModelTest::undoRestoresClosedTab() {
     auto model = createModel();
     model.addTab(QUrl("https://one.example"));
@@ -194,6 +251,58 @@ void TabModelTest::contextActionsWork() {
     QVERIFY(!model.data(model.index(0), eden::core::TabModel::PinnedRole).toBool());
     QCOMPARE(model.pinnedCount(), 0);
     QCOMPARE(pinnedCountChanged.size(), 2);
+}
+
+void TabModelTest::pinningMovesTabToPinnedRegion() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.addTab(QUrl("https://three.example"));
+    model.pinTab(2, true);
+    QCOMPARE(model.data(model.index(0), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://three.example"));
+    QVERIFY(model.data(model.index(0), eden::core::TabModel::PinnedRole).toBool());
+    model.pinTab(1, true);
+    QCOMPARE(model.data(model.index(1), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://one.example"));
+    QCOMPARE(model.pinnedCount(), 2);
+    model.pinTab(0, false);
+    QCOMPARE(model.data(model.index(1), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://three.example"));
+    QVERIFY(!model.data(model.index(1), eden::core::TabModel::PinnedRole).toBool());
+    QCOMPARE(model.pinnedCount(), 1);
+}
+
+void TabModelTest::duplicateInsertsNextToOriginal() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.addTab(QUrl("https://three.example"));
+    QCOMPARE(model.duplicateTab(0), 1);
+    QCOMPARE(model.rowCount(), 4);
+    QCOMPARE(model.data(model.index(1), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://one.example"));
+    QCOMPARE(model.data(model.index(2), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://two.example"));
+}
+
+void TabModelTest::closeOthersSparesPinnedTabs() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.addTab(QUrl("https://three.example"));
+    model.pinTab(0, true);
+    model.closeOthers(2);
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.data(model.index(0), eden::core::TabModel::PinnedRole).toBool());
+    QCOMPARE(model.data(model.index(1), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://three.example"));
+}
+
+void TabModelTest::undoCloseRestoresIntoMatchingRegion() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.pinTab(0, true);
+    QVERIFY(model.closeTab(1));
+    model.pinTab(0, false);
+    QVERIFY(model.undoClose());
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(!model.data(model.index(1), eden::core::TabModel::PinnedRole).toBool());
 }
 
 void TabModelTest::faviconChangesReachTheModel() {
@@ -268,6 +377,7 @@ void TabModelTest::qtWebEngineBridgeMethodsArePublic() {
 void TabModelTest::qmlCanInvokeQtWebEngineBridge() {
     eden::engine::QtWebEngineView view(nullptr);
     QSignalSpy fullscreenRequested(&view, &eden::engine::EngineView::fullscreenRequested);
+    QSignalSpy contextMenuRequested(&view, &eden::engine::EngineView::contextMenuRequested);
     QQmlEngine engine;
     QQmlComponent component(&engine);
     component.setData(R"QML(import QtQml
@@ -285,6 +395,9 @@ QtObject {
     QVERIFY2(object, qPrintable(component.errorString()));
     QCOMPARE(fullscreenRequested.size(), 1);
     QVERIFY(fullscreenRequested.first().at(0).toBool());
+    QCOMPARE(contextMenuRequested.size(), 1);
+    const eden::engine::ContextMenuInfo info = contextMenuRequested.first().at(0).value<eden::engine::ContextMenuInfo>();
+    QCOMPARE(info.position, QPoint(0, 0));
 }
 
 QTEST_GUILESS_MAIN(TabModelTest)
