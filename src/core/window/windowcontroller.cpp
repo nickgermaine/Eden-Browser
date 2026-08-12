@@ -556,10 +556,24 @@ void WindowController::beginTornDrag() {
     }
     const QPointF pointerInWindow = session.pointerInWindow;
     const bool waylandPlatform = QGuiApplication::platformName().startsWith("wayland");
+    QQuickItem *sourceArea = session.area;
+    QPointF anchored = pointerInWindow;
+    QPointF attachPoint = pointerInWindow;
+    if (sourceArea) {
+        anchored = sourceArea->mapFromScene(pointerInWindow);
+        if (session.vertical) {
+            anchored.setX(sourceArea->width() / 2);
+            anchored.setY(std::clamp(anchored.y(), 0.0, sourceArea->height()));
+        } else {
+            anchored.setY(sourceArea->height() / 2);
+            anchored.setX(std::clamp(anchored.x(), 0.0, sourceArea->width()));
+        }
+        attachPoint = sourceArea->mapToScene(anchored);
+    }
     WindowController *torn = source;
     if (source->m_tabs->rowCount() > 1) {
-        torn = createBrowserWindow(source->m_privateWindow, false, waylandPlatform ? QPoint() : sourceWindow->position(),
-                                   sourceWindow->size());
+        const QPoint tornPosition = sourceWindow->position() + (pointerInWindow - attachPoint).toPoint();
+        torn = createBrowserWindow(source->m_privateWindow, false, waylandPlatform ? QPoint() : tornPosition, sourceWindow->size());
         if (!torn || !torn->m_window) {
             return;
         }
@@ -576,9 +590,7 @@ void WindowController::beginTornDrag() {
     session.dnd = true;
     session.hovering = false;
     loadDropMetrics(session, torn->visibleDropArea());
-    if (session.area) {
-        session.cursorInArea = session.area->mapFromScene(pointerInWindow);
-    }
+    session.cursorInArea = anchored;
     QCoreApplication::instance()->removeEventFilter(this);
     m_tabDragGuard.stop();
     refreshTabDragVisuals();
@@ -591,7 +603,7 @@ void WindowController::beginTornDrag() {
     mimeData->setData("application/x-qt-mainwindowdrag-window", windowData);
     QByteArray offsetData;
     QDataStream offsetStream(&offsetData, QIODevice::WriteOnly);
-    offsetStream << pointerInWindow.toPoint();
+    offsetStream << attachPoint.toPoint();
     mimeData->setData("application/x-qt-mainwindowdrag-position", offsetData);
 
     QDrag *drag = new QDrag(this);
@@ -599,9 +611,25 @@ void WindowController::beginTornDrag() {
     QPixmap pixmap(1, 1);
     pixmap.fill(Qt::transparent);
     drag->setPixmap(pixmap);
+    const auto settleTornMetrics = [] {
+        TabDragSession &settled = tabDragSession();
+        if (settled.active && settled.torn && settled.area) {
+            loadDropMetrics(settled, settled.area);
+        }
+        refreshTabDragVisuals();
+    };
+    if (QQuickItem *tornArea = session.area) {
+        connect(tornArea, &QQuickItem::widthChanged, drag, settleTornMetrics);
+        connect(tornArea, &QQuickItem::heightChanged, drag, settleTornMetrics);
+    }
+    if (QQuickItem *tornView = session.view) {
+        connect(tornView, &QQuickItem::widthChanged, drag, settleTornMetrics);
+        connect(tornView, &QQuickItem::heightChanged, drag, settleTornMetrics);
+    }
+    QTimer::singleShot(0, drag, settleTornMetrics);
     if (!waylandPlatform) {
         QTimer *mover = new QTimer(drag);
-        const QPoint grabOffset = pointerInWindow.toPoint();
+        const QPoint grabOffset = attachPoint.toPoint();
         QPointer<WindowController> tornGuard(torn);
         connect(mover, &QTimer::timeout, drag, [tornGuard, grabOffset] {
             if (tornGuard && tornGuard->m_window && tornGuard->m_window->isVisible()) {
@@ -751,8 +779,15 @@ qreal WindowController::tabDragTranslation(int index, qreal itemPosition) const 
     const qreal extent = session.pinned ? session.pinnedExtent : session.normalExtent;
     qreal leading = dragLeadingPosition(session);
     if (session.torn) {
-        const qreal viewExtent = session.vertical ? session.view->height() : session.view->width();
-        leading = std::clamp(leading, 0.0, std::max(0.0, viewExtent - extent));
+        QQuickItem *area = session.area;
+        QQuickItem *view = session.view;
+        const qreal freshExtent = area->property(session.pinned ? "dropPinnedExtent" : "dropNormalExtent").toReal();
+        const QPointF areaOrigin = area->mapToItem(view, QPointF(0, 0));
+        const qreal contentOffset = session.vertical ? view->property("contentY").toReal() : view->property("contentX").toReal();
+        const qreal areaStart = (session.vertical ? areaOrigin.y() : areaOrigin.x()) + contentOffset;
+        const qreal areaExtent = session.vertical ? area->height() : area->width();
+        leading =
+            areaExtent > freshExtent ? std::clamp(leading, areaStart, areaStart + areaExtent - freshExtent) : std::max(leading, areaStart);
     } else {
         const int count = m_tabs->rowCount();
         const int pinnedCount = m_tabs->pinnedCount();
@@ -769,6 +804,11 @@ qreal WindowController::tabDragTranslation(int index, qreal itemPosition) const 
 int WindowController::tabDragIndex() const {
     const TabDragSession &session = tabDragSession();
     return session.active && session.current == this ? session.currentIndex : -1;
+}
+
+bool WindowController::tabDragTorn() const {
+    const TabDragSession &session = tabDragSession();
+    return session.active && session.torn && session.current == this;
 }
 
 void WindowController::back() {

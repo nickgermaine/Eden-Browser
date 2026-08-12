@@ -67,7 +67,8 @@ Item {
         anchors.rightMargin: strip.overflowing ? 4 : 0
         orientation: ListView.Horizontal
         spacing: 4
-        clip: true
+        clip: !strip.controller.tabDragTorn
+        z: strip.controller.tabDragTorn ? 5 : 0
         boundsBehavior: Flickable.StopAtBounds
         model: strip.tabModel
         currentIndex: strip.controller.activeIndex

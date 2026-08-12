@@ -40,7 +40,8 @@ Rectangle {
         anchors.bottom: newTabButton.top
         anchors.margins: 4
         spacing: 4
-        clip: true
+        clip: !sidebar.controller.tabDragTorn
+        z: sidebar.controller.tabDragTorn ? 5 : 0
         model: sidebar.controller.tabs
         currentIndex: sidebar.controller.activeIndex
 

@@ -52,6 +52,7 @@ class WindowController : public QObject {
     Q_PROPERTY(QPoint pageContextMenuPosition READ pageContextMenuPosition NOTIFY pageContextMenuChanged)
     Q_PROPERTY(int tabDragRevision READ tabDragRevision NOTIFY tabDragRevisionChanged)
     Q_PROPERTY(int tabDragIndex READ tabDragIndex NOTIFY tabDragRevisionChanged)
+    Q_PROPERTY(bool tabDragTorn READ tabDragTorn NOTIFY tabDragRevisionChanged)
 
   public:
     explicit WindowController(QObject *parent = nullptr);
@@ -77,6 +78,7 @@ class WindowController : public QObject {
     QPoint pageContextMenuPosition() const;
     int tabDragRevision() const;
     int tabDragIndex() const;
+    bool tabDragTorn() const;
 
     Q_INVOKABLE void initialize(bool privateWindow, const QString &engineName = "qtwebengine", bool restorePreviousSession = true,
                                 bool createInitialTab = true);
