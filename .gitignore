@@ -29,6 +29,7 @@ CMakeLists.txt.user
 CMakeLists.txt.user.*
 
 third_party/
+src/engine/servo/rust/target/
 
 .idea/
 .vs/

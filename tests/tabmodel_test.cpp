@@ -1,4 +1,7 @@
 #include "core/window/tabmodel.h"
+#include "engine/engineprofile.h"
+#include "engine/engineprofilemap.h"
+#include "engine/engineregistry.h"
 #include "engine/engineview.h"
 #include "engine/qtwebengine/qtwebengineview.h"
 
@@ -22,12 +25,14 @@ class FakeNewViewRequest final : public eden::engine::EngineNewViewRequest {
     }
 };
 
-class FakeEngineView final : public eden::engine::EngineView {
+class FakeEngineView : public eden::engine::EngineView {
     Q_OBJECT
 
   public:
-    FakeEngineView()
-        : EngineView() {}
+    explicit FakeEngineView(QString name = "Blink (Qt)", Capabilities capabilityFlags = {})
+        : EngineView(),
+          m_name(std::move(name)),
+          m_capabilities(capabilityFlags) {}
 
     QUrl url() const override {
         return m_url;
@@ -59,6 +64,12 @@ class FakeEngineView final : public eden::engine::EngineView {
     QString securityState() const override {
         return m_url.scheme() == "https" ? "secure" : "local";
     }
+    QString backendName() const override {
+        return m_name;
+    }
+    Capabilities capabilities() const override {
+        return m_capabilities;
+    }
 
     void load(const QUrl &url) override {
         m_url = url;
@@ -74,7 +85,9 @@ class FakeEngineView final : public eden::engine::EngineView {
     void goToHistoryOffset(int) override {}
     void reload() override {}
     void stop() override {}
-    void openDevTools() override {}
+    void openDevTools() override {
+        setDevToolsOpen(!devToolsOpen());
+    }
     void findInPage(const QString &, FindFlags) override {}
     void attach(QQuickItem *) override {}
     void setMuted(bool muted) override {
@@ -95,12 +108,47 @@ class FakeEngineView final : public eden::engine::EngineView {
         FakeNewViewRequest request(url, disposition);
         emit newViewRequested(&request);
     }
+    QVariantMap serializeState() const override {
+        QVariantMap state = EngineView::serializeState();
+        state.insert("scroll", m_scroll);
+        return state;
+    }
+    void restoreState(const QVariantMap &state) override {
+        m_scroll = state.value("scroll").toInt();
+        EngineView::restoreState(state);
+    }
+    void setScroll(int scroll) {
+        m_scroll = scroll;
+    }
+    int scroll() const {
+        return m_scroll;
+    }
 
   private:
     QUrl m_url;
     QString m_title;
     QUrl m_favicon;
     bool m_muted = false;
+    QString m_name;
+    Capabilities m_capabilities;
+    int m_scroll = 0;
+};
+
+class FakeEngineProfile final : public eden::engine::EngineProfile {
+  public:
+    FakeEngineProfile(bool privateProfile, eden::engine::Backend backend)
+        : EngineProfile(privateProfile),
+          m_backend(backend) {}
+
+    QObject *nativeProfile() const override {
+        return nullptr;
+    }
+    void clearData() override {
+        ++clearCount;
+    }
+
+    eden::engine::Backend m_backend;
+    int clearCount = 0;
 };
 
 class TabModelTest final : public QObject {
@@ -109,6 +157,7 @@ class TabModelTest final : public QObject {
   private slots:
     void addUsesSingleInsertRange();
     void closeUsesSingleRemoveRange();
+    void closeClosesPerTabDevTools();
     void moveUsesMoveSignal();
     void transferPreservesEngineAndClosesEmptySource();
     void transferWithinModelUsesInsertionBoundary();
@@ -125,6 +174,14 @@ class TabModelTest final : public QObject {
     void newViewRequestCrossesTheEngineSeam();
     void qtWebEngineBridgeMethodsArePublic();
     void qmlCanInvokeQtWebEngineBridge();
+    void registryExposesOnlyCompiledBackends();
+    void registryBuildsSelectionActions();
+    void backendOverrideCreatesMixedWindow();
+    void profilesAreSeparatedByBackendAndPrivacy();
+    void conversionRetagsAndPreservesState();
+    void globalConversionRehydratesOnlyActiveTab();
+    void discardedRoleTracksLazyConversion();
+    void restoreKeepsPinnedRegionAndBackend();
 };
 
 static eden::core::TabModel createModel() {
@@ -153,6 +210,22 @@ void TabModelTest::closeUsesSingleRemoveRange() {
     QCOMPARE(model.rowCount(), 1);
     QCOMPARE(removed.size(), 1);
     QCOMPARE(reset.size(), 0);
+}
+
+void TabModelTest::closeClosesPerTabDevTools() {
+    auto model = createModel();
+    model.addTab(QUrl("https://one.example"));
+    auto *view = qobject_cast<FakeEngineView *>(model.engineAt(0));
+    QVERIFY(view);
+    view->openDevTools();
+    QVERIFY(view->devToolsOpen());
+    QVERIFY(model.closeTab(0));
+    QVERIFY(model.undoClose());
+    QVERIFY(model.isDiscarded(0));
+    QVERIFY(model.ensureEngine(0));
+    view = qobject_cast<FakeEngineView *>(model.engineAt(0));
+    QVERIFY(view);
+    QVERIFY(!view->devToolsOpen());
 }
 
 void TabModelTest::moveUsesMoveSignal() {
@@ -365,8 +438,8 @@ void TabModelTest::newViewRequestCrossesTheEngineSeam() {
 
 void TabModelTest::qtWebEngineBridgeMethodsArePublic() {
     const QMetaObject &metaObject = eden::engine::QtWebEngineView::staticMetaObject;
-    const QList<QByteArray> methods = {"handleNewWindow(QObject*)", "handleFullScreen(bool)", "handleContextMenu(QPoint,QUrl,QString,bool)",
-                                       "handleCertificateError()"};
+    const QList<QByteArray> methods = {"handleNewWindow(QObject*)", "handleFullScreen(bool)",
+                                       "handleContextMenu(QPoint,QUrl,QUrl,QString,bool)", "handleCertificateError()"};
     for (const QByteArray &signature : methods) {
         const int index = metaObject.indexOfMethod(signature);
         QVERIFY2(index >= 0, signature.constData());
@@ -385,7 +458,7 @@ QtObject {
     required property var bridge
     Component.onCompleted: {
         bridge.handleNewWindow(null)
-        bridge.handleContextMenu(Qt.point(0, 0), "", "", false)
+        bridge.handleContextMenu(Qt.point(0, 0), "https://link.example", "https://image.example/picture.png", "", false)
         bridge.handleFullScreen(true)
     }
 }
@@ -398,6 +471,171 @@ QtObject {
     QCOMPARE(contextMenuRequested.size(), 1);
     const eden::engine::ContextMenuInfo info = contextMenuRequested.first().at(0).value<eden::engine::ContextMenuInfo>();
     QCOMPARE(info.position, QPoint(0, 0));
+    QCOMPARE(info.linkUrl, QUrl("https://link.example"));
+    QCOMPARE(info.mediaUrl, QUrl("https://image.example/picture.png"));
+}
+
+void TabModelTest::registryExposesOnlyCompiledBackends() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    QCOMPARE(registry.engines().size(), 2);
+    QCOMPARE(registry.displayName(eden::engine::Backend::QtWebEngine), QString("Blink (Qt)"));
+    QCOMPARE(registry.backendForId("SERVO"), std::optional(eden::engine::Backend::Servo));
+    QVERIFY(!registry.contains(eden::engine::Backend::Cef));
+}
+
+void TabModelTest::registryBuildsSelectionActions() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+    });
+    const QVariantList actions = registry.selectionActions("cef");
+    QCOMPARE(actions.size(), 2);
+    QCOMPARE(actions.at(0).toMap().value("title").toString(), QString("Blink"));
+    QCOMPARE(actions.at(0).toMap().value("icon").toString(), QString("check"));
+    QCOMPARE(actions.at(1).toMap().value("title").toString(), QString("Blink (Qt)"));
+    QVERIFY(actions.at(1).toMap().value("icon").toString().isEmpty());
+}
+
+void TabModelTest::backendOverrideCreatesMixedWindow() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    auto factory = [](eden::engine::Backend backend, eden::engine::EngineProfile *) -> std::unique_ptr<eden::engine::EngineView> {
+        if (backend == eden::engine::Backend::QtWebEngine) {
+            return std::make_unique<eden::engine::QtWebEngineView>(nullptr);
+        }
+        return std::make_unique<FakeEngineView>("Servo");
+    };
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    const int qt = model.addTab(QUrl("https://qt.example"));
+    const int servo = model.addTab(QUrl("https://servo.example"), true, "servo");
+    QCOMPARE(model.backendIdAt(qt), QString("qtwebengine"));
+    QCOMPARE(model.backendIdAt(servo), QString("servo"));
+    QCOMPARE(model.data(model.index(qt), eden::core::TabModel::EngineNameRole).toString(), QString("Blink (Qt)"));
+    QCOMPARE(model.data(model.index(servo), eden::core::TabModel::EngineNameRole).toString(), QString("Servo"));
+    auto *qtView = qobject_cast<eden::engine::QtWebEngineView *>(model.engineAt(qt));
+    QVERIFY(qtView);
+    QVERIFY(qtView->capabilities().testFlag(eden::engine::EngineView::ThumbnailCapture));
+    QVERIFY(qtView->capabilities().testFlag(eden::engine::EngineView::PerTabMute));
+    QCOMPARE(qobject_cast<FakeEngineView *>(model.engineAt(servo))->backendName(), QString("Servo"));
+}
+
+void TabModelTest::profilesAreSeparatedByBackendAndPrivacy() {
+    eden::engine::EngineProfileMap normal(false, [](eden::engine::Backend backend, bool privateProfile) {
+        return std::make_shared<FakeEngineProfile>(privateProfile, backend);
+    });
+    eden::engine::EngineProfileMap privateProfiles(true, [](eden::engine::Backend backend, bool privateProfile) {
+        return std::make_shared<FakeEngineProfile>(privateProfile, backend);
+    });
+    auto normalQt = normal.profile(eden::engine::Backend::QtWebEngine);
+    auto normalServo = normal.profile(eden::engine::Backend::Servo);
+    auto privateQt = privateProfiles.profile(eden::engine::Backend::QtWebEngine);
+    QCOMPARE(normal.profile(eden::engine::Backend::QtWebEngine), normalQt);
+    QVERIFY(normalQt != normalServo);
+    QVERIFY(normalQt != privateQt);
+    QVERIFY(!normalQt->isPrivate());
+    QVERIFY(privateQt->isPrivate());
+    normal.clearData();
+    QCOMPARE(static_cast<FakeEngineProfile *>(normalQt.get())->clearCount, 1);
+    QCOMPARE(static_cast<FakeEngineProfile *>(normalServo.get())->clearCount, 1);
+}
+
+void TabModelTest::conversionRetagsAndPreservesState() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    int created = 0;
+    auto factory = [&created](eden::engine::Backend backend, eden::engine::EngineProfile *) {
+        ++created;
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+    };
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    const QUrl url("https://conversion.example/path");
+    const int row = model.addTab(url);
+    qobject_cast<FakeEngineView *>(model.engineAt(row))->setScroll(840);
+    QCOMPARE(created, 1);
+    QVERIFY(model.convertTab(row, "servo"));
+    QCOMPARE(created, 2);
+    QCOMPARE(model.backendIdAt(row), QString("servo"));
+    QCOMPARE(model.data(model.index(row), eden::core::TabModel::UrlRole).toUrl(), url);
+    QCOMPARE(qobject_cast<FakeEngineView *>(model.engineAt(row))->backendName(), QString("Servo"));
+    QCOMPARE(qobject_cast<FakeEngineView *>(model.engineAt(row))->scroll(), 840);
+}
+
+void TabModelTest::globalConversionRehydratesOnlyActiveTab() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    int created = 0;
+    auto factory = [&created](eden::engine::Backend backend, eden::engine::EngineProfile *) {
+        ++created;
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+    };
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    model.addTab(QUrl("https://one.example"));
+    model.addTab(QUrl("https://two.example"));
+    model.addTab(QUrl("https://three.example"));
+    QCOMPARE(created, 3);
+    QVERIFY(model.convertAllTabs("servo", 1));
+    QCOMPARE(created, 4);
+    QVERIFY(model.engineAt(0) == nullptr);
+    QVERIFY(model.engineAt(1) != nullptr);
+    QVERIFY(model.engineAt(2) == nullptr);
+    QVERIFY(model.ensureEngine(2));
+    QCOMPARE(created, 5);
+    QCOMPARE(model.data(model.index(2), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://three.example"));
+}
+
+void TabModelTest::discardedRoleTracksLazyConversion() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    auto factory = [](eden::engine::Backend backend, eden::engine::EngineProfile *) {
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+    };
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    model.addTab(QUrl("https://active.example"));
+    model.addTab(QUrl("https://background.example"));
+    const quint64 backgroundId = model.tabIdAt(1);
+    QVERIFY(backgroundId > 0);
+    QVERIFY(model.convertAllTabs("servo", 0));
+    QVERIFY(!model.data(model.index(0), eden::core::TabModel::DiscardedRole).toBool());
+    QVERIFY(model.data(model.index(1), eden::core::TabModel::DiscardedRole).toBool());
+    QCOMPARE(model.tabIdAt(1), backgroundId);
+    QVERIFY(model.ensureEngine(1));
+    QVERIFY(!model.data(model.index(1), eden::core::TabModel::DiscardedRole).toBool());
+}
+
+void TabModelTest::restoreKeepsPinnedRegionAndBackend() {
+    eden::engine::EngineRegistry registry({
+        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Servo, "servo", "Servo", true},
+    });
+    int created = 0;
+    auto factory = [&created](eden::engine::Backend, eden::engine::EngineProfile *) {
+        ++created;
+        return std::make_unique<FakeEngineView>();
+    };
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    QJsonArray tabs;
+    tabs.append(QJsonObject{{"url", "https://normal.example"}, {"title", "Normal"}, {"pinned", false}, {"backend", "servo"}});
+    tabs.append(QJsonObject{{"url", "https://pinned.example"}, {"title", "Pinned"}, {"pinned", true}, {"backend", "qtwebengine"}});
+    model.restoreTabs(tabs);
+    QCOMPARE(created, 0);
+    QCOMPARE(model.pinnedCount(), 1);
+    QVERIFY(model.data(model.index(0), eden::core::TabModel::PinnedRole).toBool());
+    QCOMPARE(model.data(model.index(0), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://pinned.example"));
+    QCOMPARE(model.backendIdAt(1), QString("servo"));
+    QCOMPARE(model.sessionTabs().at(1).toObject().value("backend").toString(), QString("servo"));
+    QVERIFY(model.ensureEngine(1));
+    QCOMPARE(created, 1);
 }
 
 QTEST_GUILESS_MAIN(TabModelTest)

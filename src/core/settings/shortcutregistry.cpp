@@ -17,6 +17,7 @@ ShortcutRegistry::ShortcutRegistry(QObject *parent)
                   {"bookmark", "Bookmark this page", QKeySequence("Ctrl+D")},
                   {"find", "Find in page", QKeySequence("Ctrl+F")},
                   {"private_window", "New private window", QKeySequence("Ctrl+Shift+P")},
+                  {"fullscreen", "Toggle fullscreen", QKeySequence("F11")},
                   {"devtools", "Open developer tools", QKeySequence("F12")},
                   {"command_palette", "Open command palette", QKeySequence("Ctrl+K")},
                   {"settings", "Open settings", QKeySequence("Ctrl+,")},

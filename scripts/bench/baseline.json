@@ -1,0 +1,9 @@
+{
+  "startup.shell_first_frame_ms": 159.0,
+  "startup.web_first_paint_ms": 374.664609,
+  "tabswitch.input_to_frame_ms": 7.239749,
+  "input.key_to_frame_ms": 7.158057,
+  "frame.interval_ms": 8.334207,
+  "memory.shell_private_mb": 148.355,
+  "idle.shell_cpu_percent": 0.133323
+}

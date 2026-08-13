@@ -15,6 +15,7 @@ class QtWebEngineProfile final : public EngineProfile {
     ~QtWebEngineProfile() override;
 
     QObject *nativeProfile() const override;
+    void clearData() override;
 
   private:
     QObject *m_profilePrototype;

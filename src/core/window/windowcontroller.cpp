@@ -1,4 +1,7 @@
 #include "core/window/windowcontroller.h"
+#if EDEN_ENABLE_AUTOMATION
+#include "core/automation/performancemetrics.h"
+#endif
 #include "core/bookmarks/bookmarkstore.h"
 #include "core/downloads/downloadmanager.h"
 #include "core/history/historystore.h"
@@ -7,7 +10,10 @@
 #include "core/settings/shortcutregistry.h"
 #include "core/urlsanitizer.h"
 #include "core/window/tabmodel.h"
+#include "core/window/thumbnailcache.h"
 #include "engine/engineprofile.h"
+#include "engine/engineprofilemap.h"
+#include "engine/engineregistry.h"
 #include "engine/engineview.h"
 
 #include <QCoreApplication>
@@ -27,11 +33,18 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QQuickItemGrabResult>
 #include <QQuickWindow>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
+#include <QStringList>
 
 #include <algorithm>
+#include <chrono>
+#include <functional>
+
+#include <unistd.h>
 
 namespace eden::core {
 
@@ -75,6 +88,129 @@ static TabDragSession &tabDragSession() {
 }
 
 static constexpr qreal kTabTearOffMargin = 48;
+
+static qint64 residentMemoryKiB(qint64 processId) {
+    if (processId <= 0) {
+        return -1;
+    }
+    QFile status(QString("/proc/%1/status").arg(processId));
+    if (!status.open(QIODevice::ReadOnly)) {
+        return -1;
+    }
+    const QList<QByteArray> lines = status.readAll().split('\n');
+    for (const QByteArray &line : lines) {
+        if (!line.startsWith("VmRSS:")) {
+            continue;
+        }
+        const QList<QByteArray> fields = line.simplified().split(' ');
+        bool valid = false;
+        const qint64 value = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
+        return valid ? value : -1;
+    }
+    return -1;
+}
+
+static qint64 browserResidentMemoryKiB() {
+    const qint64 value = residentMemoryKiB(QCoreApplication::applicationPid());
+    if (value >= 0) {
+        return value;
+    }
+    QFile statm("/proc/self/statm");
+    if (!statm.open(QIODevice::ReadOnly)) {
+        return -1;
+    }
+    const QList<QByteArray> fields = statm.readAll().simplified().split(' ');
+    bool valid = false;
+    const qint64 pages = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
+    const long pageBytes = sysconf(_SC_PAGESIZE);
+    return valid && pages >= 0 && pageBytes > 0 ? pages * pageBytes / 1024 : -1;
+}
+
+static QString memoryLabel(qint64 kibibytes) {
+    if (kibibytes < 0) {
+        return "Unavailable";
+    }
+    return QString::number(static_cast<double>(kibibytes) / 1024.0, 'f', 1) + " MB";
+}
+
+static QList<qint64> processChildren(qint64 processId) {
+    QList<qint64> result;
+    const QStringList tasks = QDir(QString("/proc/%1/task").arg(processId)).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Unsorted);
+    for (const QString &task : tasks) {
+        QFile children(QString("/proc/%1/task/%2/children").arg(processId).arg(task));
+        if (!children.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QList<QByteArray> fields = children.readAll().simplified().split(' ');
+        for (const QByteArray &field : fields) {
+            bool valid = false;
+            const qint64 child = field.toLongLong(&valid);
+            if (valid && child > 0) {
+                result.append(child);
+                result.append(processChildren(child));
+            }
+        }
+    }
+    return result;
+}
+
+static QByteArray processCommandLine(qint64 processId) {
+    QFile commandLine(QString("/proc/%1/cmdline").arg(processId));
+    if (!commandLine.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    QByteArray value = commandLine.readAll();
+    value.replace('\0', ' ');
+    return value;
+}
+
+struct RendererProcessSample {
+    qint64 memoryKiB = 0;
+    int processCount = 0;
+};
+
+static RendererProcessSample rendererProcessesMemory() {
+    RendererProcessSample sample;
+    for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
+        if (!processCommandLine(processId).contains("--type=renderer")) {
+            continue;
+        }
+        const qint64 memory = residentMemoryKiB(processId);
+        if (memory < 0) {
+            continue;
+        }
+        sample.memoryKiB += memory;
+        ++sample.processCount;
+    }
+    return sample;
+}
+
+static QVariantMap sharedProcessMemory() {
+    qint64 gpuMemory = 0;
+    qint64 networkMemory = 0;
+    bool gpuAvailable = false;
+    bool networkAvailable = false;
+    for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
+        const QByteArray commandLine = processCommandLine(processId);
+        const qint64 memory = residentMemoryKiB(processId);
+        if (memory < 0) {
+            continue;
+        }
+        if (commandLine.contains("--type=gpu-process")) {
+            gpuMemory += memory;
+            gpuAvailable = true;
+        } else if (commandLine.contains("--type=utility") &&
+                   (commandLine.contains("network.mojom.NetworkService") || commandLine.contains("network-service"))) {
+            networkMemory += memory;
+            networkAvailable = true;
+        }
+    }
+    QVariantMap result;
+    result.insert("sharedBrowserMemory", memoryLabel(browserResidentMemoryKiB()));
+    result.insert("sharedGpuMemory", gpuAvailable ? memoryLabel(gpuMemory) : QString("Unavailable"));
+    result.insert("sharedNetworkMemory", networkAvailable ? memoryLabel(networkMemory) : QString("Unavailable"));
+    return result;
+}
 
 static void loadDropMetrics(TabDragSession &session, QQuickItem *area) {
     session.area = area;
@@ -129,8 +265,8 @@ WindowController::WindowController(QObject *parent)
       m_shortcuts(std::make_unique<ShortcutRegistry>()) {
     m_sessionTimer.setSingleShot(true);
     m_sessionTimer.setInterval(1000);
-    connect(&m_sessionTimer, &QTimer::timeout, this, &WindowController::saveSession);
-    connect(m_shortcuts.get(), &ShortcutRegistry::commandTriggered, this, &WindowController::executeCommand);
+    connect(&m_sessionTimer, &QTimer::timeout, this, [this] { saveSession(); });
+    connect(m_shortcuts.get(), &ShortcutRegistry::commandTriggered, this, [this](const QString &command) { executeCommand(command); });
     m_tabDragGuard.setInterval(200);
     connect(&m_tabDragGuard, &QTimer::timeout, this, [this] {
         const TabDragSession &session = tabDragSession();
@@ -141,6 +277,9 @@ WindowController::WindowController(QObject *parent)
 }
 
 WindowController::~WindowController() {
+    if (m_window) {
+        m_window->removeEventFilter(this);
+    }
     if (tabDragSession().active && tabDragSession().grabOwner == this) {
         tabDragSession() = {};
     }
@@ -233,6 +372,10 @@ bool WindowController::commandPaletteVisible() const {
     return m_commandPaletteVisible;
 }
 
+bool WindowController::contentFullscreen() const {
+    return m_contentFullscreen;
+}
+
 QVariantList WindowController::pageContextMenuActions() const {
     return m_pageContextMenuActions;
 }
@@ -241,8 +384,24 @@ QPoint WindowController::pageContextMenuPosition() const {
     return m_pageContextMenuPosition;
 }
 
+QVariantMap WindowController::javaScriptDialog() const {
+    return m_javaScriptDialog;
+}
+
+QVariantMap WindowController::permissionRequest() const {
+    return m_permissionRequest;
+}
+
+QVariantMap WindowController::fileDialog() const {
+    return m_fileDialog;
+}
+
 int WindowController::tabDragRevision() const {
     return m_tabDragRevision;
+}
+
+int WindowController::tabPreviewRevision() const {
+    return m_tabPreviewRevision;
 }
 
 void WindowController::initialize(bool privateWindow, const QString &engineName, bool restorePreviousSession, bool createInitialTab) {
@@ -251,11 +410,19 @@ void WindowController::initialize(bool privateWindow, const QString &engineName,
     }
     m_initialized = true;
     m_privateWindow = privateWindow;
-    m_engineName = engineName;
+    engine::EngineRegistry *registry = engine::EngineRegistry::instance();
+    const QString requestedEngineName = engineName.isEmpty() ? SettingsStore::instance()->defaultEngine() : engineName;
+    const std::optional<engine::Backend> requestedBackend = registry->backendForId(requestedEngineName);
+    m_defaultBackend = requestedBackend.value_or(registry->descriptors().isEmpty() ? engine::Backend::QtWebEngine
+                                                                                   : registry->descriptors().constFirst().backend);
+    m_engineName = registry->idForBackend(m_defaultBackend);
     QObject *windowCandidate = parent();
     while (windowCandidate && !m_window) {
         m_window = qobject_cast<QQuickWindow *>(windowCandidate);
         windowCandidate = windowCandidate->parent();
+    }
+    if (m_window) {
+        m_window->installEventFilter(this);
     }
     browserWindows().append(this);
     m_registeredAsWindow = true;
@@ -275,32 +442,49 @@ void WindowController::initialize(bool privateWindow, const QString &engineName,
     m_history = std::make_unique<HistoryStore>();
     m_bookmarks = std::make_unique<BookmarkStore>();
     m_downloads = std::make_unique<DownloadManager>();
-    connect(m_bookmarks.get(), &QAbstractItemModel::rowsInserted, this, &WindowController::currentBookmarkedChanged);
-    connect(m_bookmarks.get(), &QAbstractItemModel::rowsRemoved, this, &WindowController::currentBookmarkedChanged);
-    connect(m_bookmarks.get(), &QAbstractItemModel::modelReset, this, &WindowController::currentBookmarkedChanged);
-    if (engineName != "qtwebengine") {
-        qWarning("Only the qtwebengine backend is available in Phase 1");
+    connect(m_bookmarks.get(), &QAbstractItemModel::rowsInserted, this, [this] { emit currentBookmarkedChanged(); });
+    connect(m_bookmarks.get(), &QAbstractItemModel::rowsRemoved, this, [this] { emit currentBookmarkedChanged(); });
+    connect(m_bookmarks.get(), &QAbstractItemModel::modelReset, this, [this] { emit currentBookmarkedChanged(); });
+    if (!requestedBackend) {
+        qWarning().noquote() << "The requested engine is not available in this build, using" << m_engineName;
     }
     QQmlEngine *qml = qmlEngine(this);
-    if (privateWindow) {
-        m_privateProfile = engine::EngineProfile::createPrivateProfile(qml);
-        m_profile = m_privateProfile.get();
-    } else {
-        m_profile = engine::EngineProfile::defaultProfile(qml);
-    }
-    connectProfile(m_profile);
-    auto factory = [this] {
-        return engine::EngineFactory::create(m_backend, m_profile);
+    m_profiles = std::make_unique<engine::EngineProfileMap>(privateWindow, [qml](engine::Backend backend, bool privateProfile) {
+        return engine::EngineFactory::create(backend, privateProfile, qml);
+    });
+    auto profileResolver = [this](engine::Backend backend) {
+        std::shared_ptr<engine::EngineProfile> profile = m_profiles->profile(backend);
+        connectProfile(profile.get());
+        return profile;
     };
-    m_tabs = std::make_unique<TabModel>(std::move(factory), privateWindow, nullptr, m_privateProfile);
+    auto factory = [](engine::Backend backend, engine::EngineProfile *profile) {
+        return engine::EngineFactory::create(backend, profile);
+    };
+    m_tabs = std::make_unique<TabModel>(std::move(factory), std::move(profileResolver), registry, m_defaultBackend, privateWindow);
+    m_thumbnailCache = std::make_unique<ThumbnailCache>();
+    m_devToolsPaneWidth = SettingsStore::instance()->devToolsPaneWidth();
+    m_devToolsPaneHeight = SettingsStore::instance()->devToolsPaneHeight();
+    emit devToolsPaneSizeChanged();
+    connect(SettingsStore::instance(), &SettingsStore::defaultEngineChanged, this,
+            [this] { switchEngine(SettingsStore::instance()->defaultEngine()); });
+    connect(SettingsStore::instance(), &SettingsStore::devToolsPlacementChanged, this, [this] {
+        const engine::EngineView::DevToolsPlacement placement = SettingsStore::instance()->devToolsPlacement() == "bottom"
+                                                                    ? engine::EngineView::DevToolsBottom
+                                                                    : engine::EngineView::DevToolsRight;
+        for (int row = 0; row < m_tabs->rowCount(); ++row) {
+            engine::EngineView *view = m_tabs->engineViewAt(row);
+            if (view && !view->devToolsOpen()) {
+                view->setDevToolsPlacement(placement);
+            }
+        }
+    });
     m_omnibox = std::make_unique<OmniboxController>(m_tabs.get(), m_history.get(), m_bookmarks.get());
     connect(m_tabs.get(), &TabModel::tabAdded, this, [this](int index, bool background) {
-        connectProfile(m_tabs->profileAt(index));
-        connectEngine(m_tabs->engineViewAt(index));
         if (!background) {
             setActiveIndex(index);
         }
     });
+    connect(m_tabs.get(), &TabModel::tabEngineCreated, this, [this](int, engine::EngineView *view) { connectEngine(view); });
     connect(m_tabs.get(), &TabModel::tabTransferredOut, this, [this](engine::EngineView *view) {
         if (view) {
             disconnect(view, nullptr, this, nullptr);
@@ -308,8 +492,17 @@ void WindowController::initialize(bool privateWindow, const QString &engineName,
         if (m_pageContextMenuEngine == view) {
             dismissPageContextMenu();
         }
+        if (m_javaScriptDialogEngine == view) {
+            resolveJavaScriptDialog(false);
+        }
+        if (m_permissionRequestEngine == view) {
+            resolvePermissionRequest(false);
+        }
+        if (m_fileDialogEngine == view) {
+            resolveFileDialog(false);
+        }
     });
-    connect(m_tabs.get(), &TabModel::operationOccurred, this, &WindowController::scheduleSessionSave);
+    connect(m_tabs.get(), &TabModel::operationOccurred, this, [this] { scheduleSessionSave(); });
     connect(m_tabs.get(), &TabModel::tabMoved, this, [this](int from, int to) {
         int nextActiveIndex = m_activeIndex;
         if (m_activeIndex == from) {
@@ -321,28 +514,34 @@ void WindowController::initialize(bool privateWindow, const QString &engineName,
         }
         setActiveIndex(nextActiveIndex);
     });
-    connect(m_tabs.get(), &TabModel::externalViewRequested, this, [this](engine::EngineNewViewRequest *request) {
-        if (!request) {
-            return;
-        }
-        engine::EngineView *target = nullptr;
-        if (request->disposition() == engine::EngineView::Disposition::CurrentTab) {
-            target = m_tabs->engineViewAt(m_activeIndex);
-        } else if (request->disposition() == engine::EngineView::Disposition::NewWindow) {
-            WindowController *destination = createBrowserWindow(m_privateWindow);
-            target = destination ? qobject_cast<engine::EngineView *>(destination->currentEngine()) : nullptr;
-        } else {
-            const bool background = request->disposition() == engine::EngineView::Disposition::NewBackgroundTab;
-            const int row = newTab(QUrl("about:blank"), background);
-            target = m_tabs->engineViewAt(row);
-        }
-        if (!target) {
-            return;
-        }
-        if (!request->openIn(target) && !request->requestedUrl().isEmpty()) {
-            target->load(request->requestedUrl());
-        }
-    });
+    connect(m_tabs.get(), &TabModel::externalViewRequested, this,
+            [this](engine::EngineNewViewRequest *request, int sourceIndex, const QString &backendId) {
+                if (!request) {
+                    return;
+                }
+                engine::EngineView *target = nullptr;
+                if (request->disposition() == engine::EngineView::Disposition::CurrentTab) {
+                    target = m_tabs->engineViewAt(sourceIndex);
+                } else if (request->disposition() == engine::EngineView::Disposition::NewWindow) {
+                    WindowController *destination = createBrowserWindow(m_privateWindow);
+                    if (destination) {
+                        destination->switchEngine(backendId);
+                    }
+                    target = destination ? qobject_cast<engine::EngineView *>(destination->currentEngine()) : nullptr;
+                } else {
+                    const bool background = request->disposition() == engine::EngineView::Disposition::NewBackgroundTab;
+                    const int row = newTab(QUrl("about:blank"), background, backendId);
+                    target = m_tabs->engineViewAt(row);
+                }
+                if (!target) {
+                    return;
+                }
+                if (!request->openIn(target)) {
+                    target->load(request->requestedUrl().isEmpty() ? QUrl("about:blank") : request->requestedUrl());
+                } else if (request->requestedUrl().isEmpty()) {
+                    target->load(QUrl("about:blank"));
+                }
+            });
     connect(m_tabs.get(), &TabModel::tabCloseRequestedForWindow, this, [this] {
         const TabDragSession &session = tabDragSession();
         if (session.active && m_window && (session.grabOwner == this || session.tornWindow == this)) {
@@ -375,6 +574,16 @@ void WindowController::initialize(bool privateWindow, const QString &engineName,
         }
         setActiveIndex(nextActiveIndex);
     });
+    connect(m_tabs.get(), &QAbstractItemModel::rowsAboutToBeRemoved, this, [this](const QModelIndex &, int first, int last) {
+        if (!m_thumbnailCache) {
+            return;
+        }
+        for (int row = first; row <= last; ++row) {
+            m_thumbnailCache->remove(m_tabs->tabIdAt(row));
+        }
+        ++m_tabPreviewRevision;
+        emit tabPreviewRevisionChanged();
+    });
     emit tabsChanged();
     emit modeChanged();
     if (!privateWindow && restorePreviousSession) {
@@ -394,16 +603,268 @@ void WindowController::setActiveIndex(int index) {
     if (m_activeIndex == index) {
         return;
     }
+    if (m_activeIndex >= 0) {
+        captureTabPreview(m_activeIndex);
+    }
+    if (index >= 0) {
+        m_tabs->ensureEngine(index);
+    }
     dismissPageContextMenu();
+    resolveJavaScriptDialog(false);
+    resolvePermissionRequest(false);
+    resolveFileDialog(false);
+    if (qEnvironmentVariableIsSet("EDEN_PERF") && m_window) {
+        const auto started = std::chrono::steady_clock::now();
+        auto connection = std::make_shared<QMetaObject::Connection>();
+        *connection = connect(m_window, &QQuickWindow::frameSwapped, m_window, [connection, started] {
+            disconnect(*connection);
+            const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+#if EDEN_ENABLE_AUTOMATION
+            PerformanceMetrics::record("tabswitch.input_to_frame_ms", milliseconds);
+#endif
+            qInfo("EDEN_PERF tabswitch.input_to_frame_ms=%.3f", milliseconds);
+        });
+    }
     m_activeIndex = index;
     emit activeIndexChanged();
     emit currentEngineChanged();
     emit currentBookmarkedChanged();
     scheduleSessionSave();
+    if (index >= 0 && !m_tabs->data(m_tabs->index(index), TabModel::InternalPageRole).toString().isEmpty()) {
+        QPointer<WindowController> guard(this);
+        QTimer::singleShot(350, this, [guard, index] {
+            if (guard && guard->m_activeIndex == index) {
+                guard->captureTabPreview(index);
+            }
+        });
+    }
 }
 
-int WindowController::newTab(const QUrl &url, bool background) {
-    return m_tabs ? m_tabs->addTab(url, background) : -1;
+int WindowController::newTab(const QUrl &url, bool background, const QString &backendId) {
+    return m_tabs ? m_tabs->addTab(url, background, backendId) : -1;
+}
+
+bool WindowController::switchEngine(const QString &backendId) {
+    if (!m_tabs || !m_tabs->setDefaultBackend(backendId)) {
+        return false;
+    }
+    if (m_activeIndex >= 0) {
+        captureTabPreview(m_activeIndex);
+    }
+    if (!m_tabs->convertAllTabs(backendId, m_activeIndex)) {
+        return false;
+    }
+    m_engineName = backendId;
+    m_defaultBackend = engine::EngineRegistry::instance()->backendForId(backendId).value_or(m_defaultBackend);
+    emit currentEngineChanged();
+    scheduleSessionSave();
+    return true;
+}
+
+QVariantList WindowController::tabContextMenuActions(int index) const {
+    if (!m_tabs || index < 0 || index >= m_tabs->rowCount()) {
+        return {};
+    }
+    const auto action = [](const QString &id, const QString &title, const QString &icon = {}, const QVariantList &children = {}) {
+        QVariantMap value;
+        value.insert("id", id);
+        value.insert("title", title);
+        value.insert("icon", icon);
+        if (!children.isEmpty()) {
+            value.insert("children", children);
+        }
+        return value;
+    };
+    QVariantList openIn;
+    const QString currentBackend = m_tabs->backendIdAt(index);
+    for (const engine::EngineDescriptor &descriptor : engine::EngineRegistry::instance()->descriptors()) {
+        if (descriptor.id != currentBackend) {
+            openIn.append(action("open_in:" + descriptor.id, descriptor.displayName));
+        }
+    }
+    QVariantList actions = {
+        action("new", "New tab", "add"),
+        action("reload", "Reload", "refresh"),
+        action("duplicate", "Duplicate", "copy"),
+        action("pin", m_tabs->data(m_tabs->index(index), TabModel::PinnedRole).toBool() ? "Unpin" : "Pin", "pin"),
+        action("mute", m_tabs->data(m_tabs->index(index), TabModel::MutedRole).toBool() ? "Unmute" : "Mute", "muted"),
+    };
+    if (!openIn.isEmpty()) {
+        actions.append(action("open_in", "Open in", "globe", openIn));
+    }
+    actions.append(action("close", "Close", "close"));
+    actions.append(action("close_others", "Close others", "close"));
+    return actions;
+}
+
+void WindowController::executeTabContextMenuCommand(int index, const QString &command) {
+    if (!m_tabs || index < 0 || index >= m_tabs->rowCount()) {
+        return;
+    }
+    if (command.startsWith("open_in:")) {
+        const QString backendId = command.sliced(8);
+        captureTabPreview(index);
+        m_tabs->convertTab(index, backendId, index == m_activeIndex);
+        emit currentEngineChanged();
+        scheduleSessionSave();
+    } else if (command == "new") {
+        newTabAndFocusOmnibox();
+    } else if (command == "reload") {
+        if (engine::EngineView *view = m_tabs->engineViewAt(index)) {
+            view->reload();
+        }
+    } else if (command == "duplicate") {
+        m_tabs->duplicateTab(index);
+    } else if (command == "pin") {
+        m_tabs->pinTab(index, !m_tabs->data(m_tabs->index(index), TabModel::PinnedRole).toBool());
+    } else if (command == "mute") {
+        m_tabs->toggleMuted(index);
+    } else if (command == "close") {
+        closeTab(index);
+    } else if (command == "close_others") {
+        m_tabs->closeOthers(index);
+    }
+}
+
+QVariantMap WindowController::tabPreview(int index) {
+    if (!m_tabs || index < 0 || index >= m_tabs->rowCount()) {
+        return {};
+    }
+    QVariantMap preview = tabPreviewMetadata(index, true);
+    if (m_thumbnailCache) {
+        const QVariant thumbnail = m_thumbnailCache->value(m_tabs->tabIdAt(index)).value("thumbnail");
+        if (thumbnail.isValid()) {
+            preview.insert("thumbnail", thumbnail);
+        }
+    }
+    return preview;
+}
+
+QVariantMap WindowController::tabPreviewMetadata(int index, bool sampleMemory) const {
+    if (!m_tabs || index < 0 || index >= m_tabs->rowCount()) {
+        return {};
+    }
+    const QModelIndex modelIndex = m_tabs->index(index);
+    QVariantMap preview;
+    preview.insert("title", m_tabs->data(modelIndex, TabModel::TitleRole));
+    preview.insert("url", m_tabs->data(modelIndex, TabModel::UrlRole).toUrl().toDisplayString(QUrl::RemovePassword));
+    preview.insert("favicon", m_tabs->data(modelIndex, TabModel::FaviconRole));
+    preview.insert("engine", m_tabs->data(modelIndex, TabModel::EngineNameRole));
+    const bool discarded = m_tabs->isDiscarded(index);
+    const bool internal = !m_tabs->data(modelIndex, TabModel::InternalPageRole).toString().isEmpty();
+    if (discarded) {
+        preview.insert("rendererMemory", "0.0 MB");
+        preview.insert("rendererAttribution", "Discarded");
+    } else if (internal) {
+        preview.insert("rendererMemory", "0.0 MB");
+        preview.insert("rendererAttribution", "Shell page");
+    } else if (sampleMemory) {
+        const qint64 processId = m_tabs->rendererProcessIdAt(index);
+        const qint64 memory = residentMemoryKiB(processId);
+        preview.insert("rendererPid", processId);
+        if (processId > 0 && memory >= 0) {
+            preview.insert("rendererMemory", memoryLabel(memory));
+            preview.insert("rendererAttribution",
+                           m_tabs->rendererProcessUseCount(processId) > 1 ? "Shared renderer" : "Dedicated renderer");
+        } else {
+            const RendererProcessSample sample = rendererProcessesMemory();
+            if (sample.processCount == 1) {
+                preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
+                preview.insert("rendererAttribution", "Dedicated renderer");
+            } else if (sample.processCount > 1) {
+                preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
+                preview.insert("rendererAttribution", QString("All renderers (%1 processes)").arg(sample.processCount));
+            } else {
+                preview.insert("rendererMemory", "Unavailable");
+                preview.insert("rendererAttribution", "Renderer mapping unavailable");
+            }
+        }
+    } else {
+        preview.insert("rendererMemory", "Unavailable");
+        preview.insert("rendererAttribution", "Not sampled yet");
+    }
+    const QVariantMap shared = sampleMemory ? sharedProcessMemory()
+                                            : QVariantMap{{"sharedBrowserMemory", "Unavailable"},
+                                                          {"sharedGpuMemory", "Unavailable"},
+                                                          {"sharedNetworkMemory", "Unavailable"}};
+    for (auto iterator = shared.cbegin(); iterator != shared.cend(); ++iterator) {
+        preview.insert(iterator.key(), iterator.value());
+    }
+    return preview;
+}
+
+void WindowController::captureTabPreview(int index) {
+    if (!m_tabs || !m_thumbnailCache || index < 0 || index >= m_tabs->rowCount()) {
+        return;
+    }
+    const quint64 tabId = m_tabs->tabIdAt(index);
+    m_thumbnailCache->putMetadata(tabId, tabPreviewMetadata(index, true));
+    ++m_tabPreviewRevision;
+    emit tabPreviewRevisionChanged();
+    engine::EngineView *view = m_tabs->engineViewAt(index);
+    if (!view || !(view->capabilities() & engine::EngineView::ThumbnailCapture)) {
+        captureInternalPagePreview(index);
+        return;
+    }
+    QPointer<WindowController> guard(this);
+    const auto started = std::chrono::steady_clock::now();
+    view->requestThumbnail(QSize(420, 236), [guard, tabId, started](const QImage &image) {
+        if (!guard || !guard->m_tabs || !guard->m_thumbnailCache || guard->m_tabs->indexForTabId(tabId) < 0) {
+            return;
+        }
+        const int index = guard->m_tabs->indexForTabId(tabId);
+        guard->m_thumbnailCache->putMetadata(tabId, guard->tabPreviewMetadata(index, true));
+        guard->m_thumbnailCache->putImage(tabId, image);
+        ++guard->m_tabPreviewRevision;
+        emit guard->tabPreviewRevisionChanged();
+        if (qEnvironmentVariableIsSet("EDEN_PERF")) {
+            const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            qInfo("EDEN_PERF preview.capture_ms=%.3f", milliseconds);
+        }
+    });
+}
+
+void WindowController::captureInternalPagePreview(int index) {
+    if (!m_window || !m_tabs || !m_thumbnailCache || index < 0 || index >= m_tabs->rowCount()) {
+        return;
+    }
+    if (m_tabs->data(m_tabs->index(index), TabModel::InternalPageRole).toString().isEmpty()) {
+        return;
+    }
+    const quint64 tabId = m_tabs->tabIdAt(index);
+    QList<QQuickItem *> delegates;
+    std::function<void(QQuickItem *)> collect = [&collect, &delegates](QQuickItem *item) {
+        if (!item) {
+            return;
+        }
+        if (item->objectName() == "tabViewport") {
+            delegates.append(item);
+        }
+        const QList<QQuickItem *> children = item->childItems();
+        for (QQuickItem *child : children) {
+            collect(child);
+        }
+    };
+    collect(m_window->contentItem());
+    for (QQuickItem *delegate : delegates) {
+        if (delegate->property("index").toInt() != index || !delegate->isVisible() || delegate->width() <= 0 || delegate->height() <= 0) {
+            continue;
+        }
+        QSharedPointer<QQuickItemGrabResult> grab = delegate->grabToImage(QSize(420, 236));
+        if (!grab) {
+            return;
+        }
+        QPointer<WindowController> guard(this);
+        connect(grab.get(), &QQuickItemGrabResult::ready, this, [guard, grab, tabId]() mutable {
+            if (guard && guard->m_thumbnailCache && guard->m_tabs && !grab->image().isNull() && guard->m_tabs->indexForTabId(tabId) >= 0) {
+                guard->m_thumbnailCache->putImage(tabId, grab->image());
+                ++guard->m_tabPreviewRevision;
+                emit guard->tabPreviewRevisionChanged();
+            }
+            grab.clear();
+        });
+        return;
+    }
 }
 
 int WindowController::newTabAndFocusOmnibox() {
@@ -421,11 +882,36 @@ void WindowController::closeTab(int index) {
 }
 
 void WindowController::navigate(const QUrl &url) {
-    if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
-        view->load(url);
-    } else if (m_tabs && m_activeIndex >= 0) {
+    if (!m_tabs) {
+        return;
+    }
+    QUrl destination = url;
+    if (destination.scheme() == "eden") {
+        if (!TabModel::internalPageForUrl(destination).isEmpty()) {
+            if (m_activeIndex >= 0 && m_tabs->setInternalPage(m_activeIndex, destination)) {
+                if (!m_privateWindow && m_history) {
+                    m_history->recordVisit(destination, m_tabs->data(m_tabs->index(m_activeIndex), TabModel::TitleRole).toString());
+                }
+                emit currentEngineChanged();
+                emit currentBookmarkedChanged();
+                scheduleSessionSave();
+            } else {
+                newTab(destination);
+            }
+            return;
+        }
+        if (engine::EngineView *view = m_tabs->engineViewAt(m_activeIndex)) {
+            const QUrl mapped = view->internalUrlFor(destination);
+            if (!mapped.isEmpty()) {
+                destination = mapped;
+            }
+        }
+    }
+    if (engine::EngineView *view = m_tabs->engineViewAt(m_activeIndex)) {
+        view->load(destination);
+    } else if (m_activeIndex >= 0) {
         const int internalIndex = m_activeIndex;
-        newTab(url);
+        newTab(destination);
         m_tabs->closeTab(internalIndex);
     }
 }
@@ -476,6 +962,13 @@ void WindowController::beginTabDrag(int index, QQuickItem *visual, qreal pressX,
 }
 
 bool WindowController::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_window && event->type() == QEvent::MouseButtonPress) {
+        engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr;
+        const QPointF position = static_cast<QMouseEvent *>(event)->position();
+        if (view && !view->containsPageScenePoint(position)) {
+            view->releaseFocus();
+        }
+    }
     TabDragSession &session = tabDragSession();
     if (!session.active || session.dnd || session.grabOwner != this) {
         return QObject::eventFilter(watched, event);
@@ -881,8 +1374,23 @@ void WindowController::openNewWindow(bool privateWindow) {
     }
 }
 
+void WindowController::updateInternalPageUrl(const QUrl &url) {
+    if (!m_tabs || m_activeIndex < 0 || !m_tabs->setInternalPageUrl(m_activeIndex, url)) {
+        return;
+    }
+    if (!m_privateWindow && m_history) {
+        m_history->recordVisit(url, m_tabs->data(m_tabs->index(m_activeIndex), TabModel::TitleRole).toString());
+    }
+    emit currentEngineChanged();
+    scheduleSessionSave();
+}
+
 void WindowController::openSettingsTab() {
     openInternalTab(QUrl("eden://settings"));
+}
+
+void WindowController::openAboutTab() {
+    openInternalTab(QUrl("eden://settings/about"));
 }
 
 void WindowController::openThemeEditorTab() {
@@ -893,9 +1401,15 @@ void WindowController::openInternalTab(const QUrl &url) {
     if (!m_tabs) {
         return;
     }
+    const QString page = TabModel::internalPageForUrl(url);
     for (int row = 0; row < m_tabs->rowCount(); ++row) {
-        if (m_tabs->data(m_tabs->index(row), TabModel::UrlRole).toUrl() == url) {
+        const QUrl rowUrl = m_tabs->data(m_tabs->index(row), TabModel::UrlRole).toUrl();
+        if (rowUrl == url || (!page.isEmpty() && TabModel::internalPageForUrl(rowUrl) == page)) {
             setActiveIndex(row);
+            if (rowUrl != url && m_tabs->setInternalPageUrl(row, url)) {
+                emit currentEngineChanged();
+                scheduleSessionSave();
+            }
             return;
         }
     }
@@ -913,7 +1427,7 @@ void WindowController::saveSession() {
         }
     }
     QJsonObject session;
-    session.insert("version", 2);
+    session.insert("version", 3);
     session.insert("windows", windows);
     QSaveFile file(sessionPath());
     if (!file.open(QIODevice::WriteOnly)) {
@@ -942,6 +1456,16 @@ void WindowController::prepareToClose() {
 }
 
 void WindowController::executePageContextMenuCommand(const QString &command) {
+    if (command.startsWith("open_with:")) {
+        newTab(m_pageContextMenuTarget, false, command.sliced(10));
+        dismissPageContextMenu();
+        return;
+    }
+    if (command == "open_media_new_tab") {
+        newTab(m_pageContextMenuTarget, false, m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString());
+        dismissPageContextMenu();
+        return;
+    }
     if (m_pageContextMenuEngine) {
         m_pageContextMenuEngine->executeContextMenuCommand(command);
     }
@@ -952,9 +1476,55 @@ void WindowController::dismissPageContextMenu() {
     if (m_pageContextMenuActions.isEmpty() && !m_pageContextMenuEngine) {
         return;
     }
+    if (m_pageContextMenuEngine) {
+        m_pageContextMenuEngine->dismissContextMenu();
+    }
     m_pageContextMenuActions.clear();
     m_pageContextMenuEngine.clear();
+    m_pageContextMenuTarget = QUrl();
     emit pageContextMenuChanged();
+}
+
+void WindowController::resolveJavaScriptDialog(bool accepted, const QString &text) {
+    if (m_javaScriptDialog.isEmpty() && !m_javaScriptDialogEngine) {
+        return;
+    }
+    QPointer<engine::EngineView> engine = m_javaScriptDialogEngine;
+    const quint64 id = m_javaScriptDialog.value("id").toULongLong();
+    m_javaScriptDialog.clear();
+    m_javaScriptDialogEngine.clear();
+    emit javaScriptDialogChanged();
+    if (engine) {
+        engine->resolveJavaScriptDialog(id, accepted, text);
+    }
+}
+
+void WindowController::resolveFileDialog(bool accepted, const QList<QUrl> &files) {
+    if (m_fileDialog.isEmpty() && !m_fileDialogEngine) {
+        return;
+    }
+    QPointer<engine::EngineView> engine = m_fileDialogEngine;
+    const quint64 id = m_fileDialog.value("id").toULongLong();
+    m_fileDialog.clear();
+    m_fileDialogEngine.clear();
+    emit fileDialogChanged();
+    if (engine) {
+        engine->resolveFileDialog(id, accepted, files);
+    }
+}
+
+void WindowController::resolvePermissionRequest(bool allowed) {
+    if (m_permissionRequest.isEmpty() && !m_permissionRequestEngine) {
+        return;
+    }
+    QPointer<engine::EngineView> engine = m_permissionRequestEngine;
+    const quint64 id = m_permissionRequest.value("id").toULongLong();
+    m_permissionRequest.clear();
+    m_permissionRequestEngine.clear();
+    emit permissionRequestChanged();
+    if (engine) {
+        engine->resolvePermissionRequest(id, allowed);
+    }
 }
 
 void WindowController::setOpenPane(const QString &pane) {
@@ -979,6 +1549,40 @@ void WindowController::resizePane(qreal horizontalDelta) {
     }
     m_paneWidth = nextWidth;
     emit paneWidthChanged();
+}
+
+int WindowController::devToolsPaneWidth() const {
+    return m_devToolsPaneWidth;
+}
+
+int WindowController::devToolsPaneHeight() const {
+    return m_devToolsPaneHeight;
+}
+
+void WindowController::beginDevToolsPaneResize() {
+    m_devToolsResizeStartWidth = m_devToolsPaneWidth;
+    m_devToolsResizeStartHeight = m_devToolsPaneHeight;
+}
+
+void WindowController::resizeDevToolsPane(qreal delta, bool horizontal) {
+    if (horizontal) {
+        const int nextWidth = std::clamp(m_devToolsResizeStartWidth - qRound(delta), 280, 1600);
+        if (m_devToolsPaneWidth == nextWidth) {
+            return;
+        }
+        m_devToolsPaneWidth = nextWidth;
+    } else {
+        const int nextHeight = std::clamp(m_devToolsResizeStartHeight - qRound(delta), 180, 1200);
+        if (m_devToolsPaneHeight == nextHeight) {
+            return;
+        }
+        m_devToolsPaneHeight = nextHeight;
+    }
+    emit devToolsPaneSizeChanged();
+}
+
+void WindowController::commitDevToolsPaneSize() {
+    SettingsStore::instance()->setDevToolsPaneSize(m_devToolsPaneWidth, m_devToolsPaneHeight);
 }
 
 void WindowController::setSidebarExpanded(bool expanded) {
@@ -1017,9 +1621,25 @@ void WindowController::connectEngine(engine::EngineView *view) {
     if (!view) {
         return;
     }
+    view->setDevToolsPlacement(SettingsStore::instance()->devToolsPlacement() == "bottom" ? engine::EngineView::DevToolsBottom
+                                                                                          : engine::EngineView::DevToolsRight);
+    connect(view, &engine::EngineView::devToolsPlacementChanged, this, [view] {
+        if (view->devToolsPlacement() == engine::EngineView::DevToolsRight) {
+            SettingsStore::instance()->setDevToolsPlacement("right");
+        } else if (view->devToolsPlacement() == engine::EngineView::DevToolsBottom) {
+            SettingsStore::instance()->setDevToolsPlacement("bottom");
+        }
+    });
     connect(view, &engine::EngineView::loadingChanged, this, [this, view] {
         if (!m_privateWindow && !view->isLoading()) {
             m_history->recordVisit(view->url(), view->title());
+        }
+        if (!view->isLoading() && view == qobject_cast<engine::EngineView *>(currentEngine())) {
+            QTimer::singleShot(0, this, [this, view] {
+                if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
+                    captureTabPreview(m_activeIndex);
+                }
+            });
         }
     });
     connect(view, &engine::EngineView::urlChanged, this, [this, view] {
@@ -1033,23 +1653,45 @@ void WindowController::connectEngine(engine::EngineView *view) {
             emit currentEngineChanged();
         }
     });
+    connect(view, &engine::EngineView::shortcutRequested, this, [this](const QString &command) { m_shortcuts->execute(command); });
+    connect(view, &engine::EngineView::fullscreenRequested, this, [this, view](bool fullscreen) {
+        if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
+            setContentFullscreen(fullscreen);
+        }
+    });
     connect(view, &engine::EngineView::contextMenuRequested, this, [this, view](const engine::ContextMenuInfo &info) {
         if (view != qobject_cast<engine::EngineView *>(currentEngine())) {
+            view->dismissContextMenu();
             return;
         }
         QVariantList actions;
-        const auto append = [&actions](const QString &id, const QString &title, const QString &icon = {}, bool enabled = true) {
+        const auto append = [&actions](const QString &id, const QString &title, const QString &icon = {}, bool enabled = true,
+                                       const QVariantList &children = QVariantList()) {
             QVariantMap action;
             action.insert("id", id);
             action.insert("title", title);
             action.insert("icon", icon);
             action.insert("enabled", enabled);
+            if (!children.isEmpty()) {
+                action.insert("children", children);
+            }
             actions.append(action);
         };
         if (!info.linkUrl.isEmpty()) {
             append("open_link_new_tab", "Open link in new tab", "new-window");
             append("copy_link", "Copy link address", "copy");
             append("download_link", "Save link as", "download");
+        }
+        if (!info.mediaUrl.isEmpty() && info.linkUrl.isEmpty()) {
+            append("open_media_new_tab", "Open image in new tab", "new-window");
+        }
+        const QUrl contextTarget = !info.linkUrl.isEmpty() ? info.linkUrl : info.mediaUrl;
+        if (!contextTarget.isEmpty()) {
+            QVariantList engines;
+            for (const engine::EngineDescriptor &descriptor : engine::EngineRegistry::instance()->descriptors()) {
+                engines.append(QVariantMap{{"id", "open_with:" + descriptor.id}, {"title", descriptor.displayName}});
+            }
+            append("open_with", "Open with", "globe", true, engines);
         }
         if (info.editable) {
             append("cut", "Cut");
@@ -1063,12 +1705,98 @@ void WindowController::connectEngine(engine::EngineView *view) {
         append("forward", "Forward", "arrow-right", view->canGoForward());
         append("reload", "Reload", "refresh");
         append("view_source", "View page source", "code");
-        append("inspect", "Inspect", "code");
+        if (view->capabilities() & engine::EngineView::DockedDevtools) {
+            append("inspect", "Inspect", "code");
+        }
         m_pageContextMenuActions = std::move(actions);
         m_pageContextMenuPosition = info.position;
         m_pageContextMenuEngine = view;
+        m_pageContextMenuTarget = contextTarget;
         emit pageContextMenuChanged();
         emit pageContextMenuRequested();
+    });
+    connect(view, &engine::EngineView::javaScriptDialogRequested, this, [this, view](const engine::JavaScriptDialogInfo &info) {
+        if (view != qobject_cast<engine::EngineView *>(currentEngine())) {
+            view->resolveJavaScriptDialog(info.id, false, {});
+            return;
+        }
+        resolveJavaScriptDialog(false);
+        m_javaScriptDialog = {{"id", QVariant::fromValue(info.id)},
+                              {"origin", info.origin},
+                              {"originLabel", info.origin.host()},
+                              {"kind", info.kind},
+                              {"message", info.message},
+                              {"defaultText", info.defaultText}};
+        m_javaScriptDialogEngine = view;
+        emit javaScriptDialogChanged();
+        emit javaScriptDialogRequested();
+    });
+    connect(view, &engine::EngineView::javaScriptDialogClosed, this, [this, view](quint64 id) {
+        if (m_javaScriptDialogEngine != view || m_javaScriptDialog.value("id").toULongLong() != id) {
+            return;
+        }
+        m_javaScriptDialog.clear();
+        m_javaScriptDialogEngine.clear();
+        emit javaScriptDialogChanged();
+    });
+    connect(view, &engine::EngineView::permissionRequested, this, [this, view](const engine::PermissionRequestInfo &info) {
+        if (view != qobject_cast<engine::EngineView *>(currentEngine())) {
+            view->resolvePermissionRequest(info.id, false);
+            return;
+        }
+        resolvePermissionRequest(false);
+        m_permissionRequest = {{"id", QVariant::fromValue(info.id)},
+                               {"origin", info.origin},
+                               {"originLabel", info.origin.host()},
+                               {"permissions", info.permissions}};
+        m_permissionRequestEngine = view;
+        emit permissionRequestChanged();
+        emit permissionRequestRequested();
+    });
+    connect(view, &engine::EngineView::permissionRequestClosed, this, [this, view](quint64 id) {
+        if (m_permissionRequestEngine != view || m_permissionRequest.value("id").toULongLong() != id) {
+            return;
+        }
+        m_permissionRequest.clear();
+        m_permissionRequestEngine.clear();
+        emit permissionRequestChanged();
+    });
+    connect(view, &engine::EngineView::fileDialogRequested, this, [this, view](const engine::FileDialogInfo &info) {
+        if (view != qobject_cast<engine::EngineView *>(currentEngine())) {
+            view->resolveFileDialog(info.id, false, {});
+            return;
+        }
+        resolveFileDialog(false);
+        m_fileDialog = {{"id", QVariant::fromValue(info.id)},
+                        {"title", info.title},
+                        {"mode", info.mode},
+                        {"defaultPath", info.defaultPath},
+                        {"nameFilters", info.nameFilters}};
+        m_fileDialogEngine = view;
+        emit fileDialogChanged();
+        emit fileDialogRequested();
+    });
+    connect(view, &engine::EngineView::fileDialogClosed, this, [this, view](quint64 id) {
+        if (m_fileDialogEngine != view || m_fileDialog.value("id").toULongLong() != id) {
+            return;
+        }
+        m_fileDialog.clear();
+        m_fileDialogEngine.clear();
+        emit fileDialogChanged();
+    });
+    connect(view, &QObject::destroyed, this, [this] {
+        if (!m_pageContextMenuEngine && !m_pageContextMenuActions.isEmpty()) {
+            m_pageContextMenuActions.clear();
+            emit pageContextMenuChanged();
+        }
+        if (!m_javaScriptDialogEngine && !m_javaScriptDialog.isEmpty()) {
+            m_javaScriptDialog.clear();
+            emit javaScriptDialogChanged();
+        }
+        if (!m_permissionRequestEngine && !m_permissionRequest.isEmpty()) {
+            m_permissionRequest.clear();
+            emit permissionRequestChanged();
+        }
     });
 }
 
@@ -1128,30 +1856,15 @@ void WindowController::refreshTabDragVisuals() {
 }
 
 QJsonObject WindowController::sessionWindow() const {
-    QJsonArray tabsArray;
-    if (m_tabs) {
-        for (int row = 0; row < m_tabs->rowCount(); ++row) {
-            QJsonObject tab;
-            tab.insert("url", urlWithoutCredentials(m_tabs->data(m_tabs->index(row), TabModel::UrlRole).toUrl()).toString());
-            tab.insert("title", m_tabs->data(m_tabs->index(row), TabModel::TitleRole).toString());
-            tab.insert("pinned", m_tabs->data(m_tabs->index(row), TabModel::PinnedRole).toBool());
-            tabsArray.append(tab);
-        }
-    }
     QJsonObject window;
     window.insert("activeIndex", m_activeIndex);
     window.insert("layout", SettingsStore::instance()->tabLayout());
-    window.insert("tabs", tabsArray);
+    window.insert("tabs", m_tabs ? m_tabs->sessionTabs() : QJsonArray());
     return window;
 }
 
 void WindowController::restoreWindow(const QJsonObject &window) {
-    const QJsonArray tabsArray = window.value("tabs").toArray();
-    for (const QJsonValue &value : tabsArray) {
-        const QJsonObject tab = value.toObject();
-        const int row = newTab(urlWithoutCredentials(QUrl(tab.value("url").toString())), true);
-        m_tabs->pinTab(row, tab.value("pinned").toBool());
-    }
+    m_tabs->restoreTabs(window.value("tabs").toArray());
     if (m_tabs->rowCount() > 0) {
         setActiveIndex(std::clamp(window.value("activeIndex").toInt(0), 0, m_tabs->rowCount() - 1));
     }
@@ -1173,6 +1886,23 @@ void WindowController::restoreSession() {
     }
     if (windows.isEmpty()) {
         return;
+    }
+    QSet<engine::Backend> requiredBackends;
+    engine::EngineRegistry *registry = engine::EngineRegistry::instance();
+    for (const QJsonValue &windowValue : std::as_const(windows)) {
+        for (const QJsonValue &tabValue : windowValue.toObject().value("tabs").toArray()) {
+            const QJsonObject tab = tabValue.toObject();
+            if (QUrl(tab.value("url").toString()).scheme() == "eden") {
+                continue;
+            }
+            const std::optional<engine::Backend> backend = registry->backendForId(tab.value("backend").toString());
+            requiredBackends.insert(backend.value_or(m_defaultBackend));
+        }
+    }
+    for (engine::Backend backend : std::as_const(requiredBackends)) {
+        if (!engine::EngineFactory::initialize(backend)) {
+            qCritical().noquote() << "A restored tab engine could not be initialized:" << registry->idForBackend(backend);
+        }
     }
     restoreWindow(windows.at(0).toObject());
     for (qsizetype index = 1; index < windows.size(); ++index) {
@@ -1214,6 +1944,8 @@ void WindowController::executeCommand(const QString &id) {
         setFindVisible(true);
     } else if (id == "private_window") {
         openNewWindow(true);
+    } else if (id == "fullscreen") {
+        toggleWindowFullscreen();
     } else if (id == "devtools") {
         if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
             view->openDevTools();
@@ -1229,6 +1961,38 @@ void WindowController::executeCommand(const QString &id) {
     } else if (id == "quit") {
         QCoreApplication::quit();
     }
+}
+
+void WindowController::setContentFullscreen(bool fullscreen) {
+    if (m_contentFullscreen == fullscreen || !m_window) {
+        return;
+    }
+    m_contentFullscreen = fullscreen;
+    if (fullscreen) {
+        m_visibilityBeforeContentFullscreen = static_cast<int>(m_window->visibility());
+        m_window->showFullScreen();
+    } else if (m_visibilityBeforeContentFullscreen == static_cast<int>(QWindow::Maximized)) {
+        m_window->showMaximized();
+    } else {
+        m_window->showNormal();
+    }
+    emit contentFullscreenChanged();
+}
+
+void WindowController::toggleWindowFullscreen() {
+    if (!m_window || m_contentFullscreen) {
+        return;
+    }
+    if (m_window->visibility() == QWindow::FullScreen) {
+        if (m_visibilityBeforeWindowFullscreen == static_cast<int>(QWindow::Maximized)) {
+            m_window->showMaximized();
+        } else {
+            m_window->showNormal();
+        }
+        return;
+    }
+    m_visibilityBeforeWindowFullscreen = static_cast<int>(m_window->visibility());
+    m_window->showFullScreen();
 }
 
 QString WindowController::sessionPath() const {

@@ -30,10 +30,19 @@ void WindowFrame::setWindow(QQuickWindow *window) {
 }
 
 bool WindowFrame::eventFilter(QObject *watched, QEvent *event) {
-    if (watched != m_window) {
+    QQuickWindow *window = m_window;
+    if (!window || watched != window) {
         return QObject::eventFilter(watched, event);
     }
-    QQuickItem *focusItem = m_window->activeFocusItem();
+    if (event->type() == QEvent::ParentAboutToChange || event->type() == QEvent::Destroy) {
+        window->removeEventFilter(this);
+        m_window.clear();
+        return QObject::eventFilter(watched, event);
+    }
+    if (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::WindowDeactivate) {
+        return QObject::eventFilter(watched, event);
+    }
+    QQuickItem *focusItem = window->activeFocusItem();
     if (!focusItem) {
         return QObject::eventFilter(watched, event);
     }
@@ -43,9 +52,9 @@ bool WindowFrame::eventFilter(QObject *watched, QEvent *event) {
         const QPointF localPosition = focusItem->mapFromScene(mouseEvent->position());
         clearFocus = !focusItem->contains(localPosition);
     }
-    if (clearFocus && m_window->contentItem()) {
+    if (clearFocus && window->contentItem()) {
         focusItem->setFocus(false, Qt::MouseFocusReason);
-        m_window->contentItem()->forceActiveFocus(Qt::MouseFocusReason);
+        window->contentItem()->forceActiveFocus(Qt::MouseFocusReason);
     }
     return QObject::eventFilter(watched, event);
 }

@@ -97,6 +97,9 @@ Rectangle {
             required property bool isMuted
             required property var engineView
             required property string internalPage
+            required property string engineName
+            required property var tabId
+            required property bool discarded
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: sidebar.controller.tabDragIndex === index
 
@@ -212,51 +215,18 @@ Rectangle {
                 id: tabMenu
 
                 x: tab.width
-                actions: [{
-                    "id": "new",
-                    "title": "New tab",
-                    "icon": "add"
-                }, {
-                    "id": "reload",
-                    "title": "Reload",
-                    "icon": "refresh"
-                }, {
-                    "id": "duplicate",
-                    "title": "Duplicate",
-                    "icon": "copy"
-                }, {
-                    "id": "pin",
-                    "title": tab.isPinned ? "Unpin" : "Pin",
-                    "icon": "pin"
-                }, {
-                    "id": "mute",
-                    "title": tab.isMuted ? "Unmute" : "Mute",
-                    "icon": "muted"
-                }, {
-                    "id": "close",
-                    "title": "Close",
-                    "icon": "close"
-                }, {
-                    "id": "close_others",
-                    "title": "Close others",
-                    "icon": "close"
-                }]
+                onAboutToShow: actions = sidebar.controller.tabContextMenuActions(tab.index)
                 onTriggered: (actionId) => {
-                    if (actionId === "new")
-                        sidebar.controller.newTabAndFocusOmnibox();
-                    else if (actionId === "reload" && tab.engineView)
-                        tab.engineView.reload();
-                    else if (actionId === "duplicate")
-                        sidebar.controller.tabs.duplicateTab(tab.index);
-                    else if (actionId === "pin")
-                        sidebar.controller.tabs.pinTab(tab.index, !tab.isPinned);
-                    else if (actionId === "mute")
-                        sidebar.controller.tabs.toggleMuted(tab.index);
-                    else if (actionId === "close")
-                        sidebar.controller.closeTab(tab.index);
-                    else if (actionId === "close_others")
-                        sidebar.controller.tabs.closeOthers(tab.index);
+                    return sidebar.controller.executeTabContextMenuCommand(tab.index, actionId);
                 }
+            }
+
+            TabPreview {
+                controller: sidebar.controller
+                tabIndex: tab.index
+                anchorItem: tab
+                anchorHovered: hover.hovered && !tabMenu.opened && !tab.dragging
+                vertical: true
             }
 
             transform: Translate {

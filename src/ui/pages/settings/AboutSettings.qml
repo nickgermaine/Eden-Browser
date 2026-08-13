@@ -10,17 +10,38 @@ Item {
     property string view: "about"
     property var currentLicense: null
     property string licenseText: ""
-    readonly property var licenses: [{
-        "name": "Qt 6",
-        "license": "GNU Lesser General Public License v3.0",
-        "detail": "Application framework, QML runtime, and web engine",
-        "file": "qt-lgpl-3.0.txt"
-    }, {
-        "name": "Solar Icon Set",
-        "license": "Creative Commons Attribution 4.0",
-        "detail": "Interface icons by 480 Design",
-        "file": "solar-cc-by-4.0.txt"
-    }]
+    readonly property var licenses: [
+        {
+            "name": "Eden Browser",
+            "license": "GNU General Public License v3.0",
+            "detail": "This application and its source code",
+            "file": "eden-gpl-3.0.txt"
+        },
+        {
+            "name": "Qt 6",
+            "license": "GNU Lesser General Public License v3.0",
+            "detail": "Application framework, QML runtime, and web engine",
+            "file": "qt-lgpl-3.0.txt"
+        },
+        {
+            "name": "Chromium",
+            "license": "BSD 3-Clause License",
+            "detail": "The Blink rendering engine and browser platform by the Chromium Authors",
+            "file": "chromium-bsd-3-clause.txt"
+        },
+        {
+            "name": "Chromium Embedded Framework",
+            "license": "BSD 3-Clause License",
+            "detail": "Embedding framework for the Blink engine by Marshall A. Greenblatt",
+            "file": "cef-bsd-3-clause.txt"
+        },
+        {
+            "name": "Solar Icon Set",
+            "license": "Creative Commons Attribution 4.0",
+            "detail": "Interface icons by 480 Design",
+            "file": "solar-cc-by-4.0.txt"
+        }
+    ]
 
     function openLicense(entry) {
         page.currentLicense = entry;
@@ -85,16 +106,14 @@ Item {
                             color: Theme.primaryContainerText
                             font: Theme.labelFont
                         }
-
                     }
 
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: "A speed-first web browser."
+                        text: "A performance-obsessed web browser."
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
                     }
-
                 }
 
                 Rectangle {
@@ -116,24 +135,22 @@ Item {
                             value: Qt.application.version.length > 0 ? Qt.application.version : "dev"
                         }
 
-                        RowDivider {
-                        }
+                        RowDivider {}
 
                         AboutRow {
-                            label: "Web engine"
-                            value: "Qt WebEngine"
+                            label: "Web engines"
+                            value: Engines.engines.map(engine => {
+                                return engine.name;
+                            }).join(", ")
                         }
 
-                        RowDivider {
-                        }
+                        RowDivider {}
 
                         AboutRow {
                             label: "Copyright"
                             value: "© 2026 Nick Germaine"
                         }
-
                     }
-
                 }
 
                 Rectangle {
@@ -157,11 +174,8 @@ Item {
                             interactive: true
                             onActivated: page.view = "licenses"
                         }
-
                     }
-
                 }
-
             }
 
             Column {
@@ -228,15 +242,10 @@ Item {
                                     interactive: true
                                     onActivated: page.openLicense(licenseEntry.modelData)
                                 }
-
                             }
-
                         }
-
                     }
-
                 }
-
             }
 
             Column {
@@ -269,7 +278,6 @@ Item {
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
 
                 Rectangle {
@@ -295,13 +303,9 @@ Item {
                         font.family: Themes.fontFamily
                         font.pixelSize: 12
                     }
-
                 }
-
             }
-
         }
-
     }
 
     component AboutRow: Item {
@@ -313,7 +317,7 @@ Item {
         property string trailingIcon: ""
         property bool interactive: false
 
-        signal activated()
+        signal activated
 
         width: parent ? parent.width : 0
         implicitHeight: detail.length > 0 ? 58 : 44
@@ -329,9 +333,7 @@ Item {
                     duration: Theme.shortDuration
                     easing.type: Easing.OutCubic
                 }
-
             }
-
         }
 
         Row {
@@ -364,7 +366,6 @@ Item {
                     font.pixelSize: 11
                     elide: Text.ElideRight
                 }
-
             }
 
             Text {
@@ -384,7 +385,6 @@ Item {
                 visible: aboutRow.trailingIcon.length > 0
                 name: aboutRow.trailingIcon
             }
-
         }
 
         HoverHandler {
@@ -400,7 +400,6 @@ Item {
             enabled: aboutRow.interactive
             onTapped: aboutRow.activated()
         }
-
     }
 
     component RowDivider: Rectangle {
@@ -409,5 +408,4 @@ Item {
         height: 1
         color: Qt.alpha(Theme.outline, 0.25)
     }
-
 }

@@ -32,6 +32,7 @@ Rectangle {
     EdenTextField {
         id: field
 
+        objectName: "omniboxField"
         anchors.left: securityButton.right
         anchors.right: bookmarkButton.left
         anchors.top: parent.top
@@ -41,6 +42,11 @@ Rectangle {
         placeholderText: "Search or enter address"
         selectByMouse: true
         text: omnibox.controller.displayUrl
+        onPressed: {
+            if (omnibox.engine)
+                omnibox.engine.releaseFocus();
+
+        }
         onActiveFocusChanged: {
             if (activeFocus) {
                 omnibox.controller.omnibox.query = "";
@@ -102,7 +108,7 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: 36
         height: 36
-        iconName: "star"
+        iconName: "bookmark-circle"
         filledIcon: omnibox.controller.currentBookmarked
         enabled: !!omnibox.engine
         onClicked: omnibox.controller.toggleBookmark()
@@ -117,6 +123,9 @@ Rectangle {
         }
 
         function onFocusOmniboxRequested() {
+            if (omnibox.engine)
+                omnibox.engine.releaseFocus();
+
             field.forceActiveFocus();
             field.selectAll();
         }
@@ -173,7 +182,7 @@ Rectangle {
                         id: suggestionIcon
 
                         anchors.verticalCenter: parent.verticalCenter
-                        name: suggestion.kind === "tab" ? "window" : suggestion.kind === "bookmark" ? "star" : suggestion.kind === "history" ? "history" : "search"
+                        name: suggestion.kind === "tab" ? "window" : suggestion.kind === "bookmark" ? "bookmark-circle" : suggestion.kind === "history" ? "history" : "search"
                     }
 
                     Column {

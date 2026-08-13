@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(eden-browser VERSION 0.1.0 LANGUAGES CXX)
+project(eden-browser VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,7 +8,27 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 QuickEffects QuickShapes Sql Test WebEngineCore WebEngineQuick)
+option(EDEN_ENGINE_CEF "Acquire and build the CEF engine dependency" ON)
+option(EDEN_ENGINE_QTWEBENGINE "Build the QtWebEngine backend module" ON)
+option(EDEN_ENABLE_AUTOMATION "Build the local benchmark automation hook" OFF)
+option(EDEN_SOLAR_ICONS "Acquire the Solar icon source set for design work" ON)
+set(EDEN_CEF_LOCAL_ARCHIVE "" CACHE FILEPATH "Use a local CEF archive instead of the pinned download")
+
+if(EDEN_ENGINE_CEF)
+    include(cmake/CefVersion.cmake)
+    include(cmake/EdenCef.cmake)
+endif()
+
+if(EDEN_SOLAR_ICONS)
+    include(cmake/SolarIconsVersion.cmake)
+    include(cmake/EdenSolarIcons.cmake)
+endif()
+
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 QuickEffects QuickShapes Sql Test)
+
+if(EDEN_ENGINE_QTWEBENGINE)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS WebEngineCore WebEngineQuick)
+endif()
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -32,6 +52,8 @@ set(EDEN_CORE_SOURCES
     src/core/urlsanitizer.h
     src/core/window/tabmodel.cpp
     src/core/window/tabmodel.h
+    src/core/window/thumbnailcache.cpp
+    src/core/window/thumbnailcache.h
     src/core/window/tabstripnavigator.cpp
     src/core/window/tabstripnavigator.h
     src/core/window/windowcontroller.cpp
@@ -40,19 +62,35 @@ set(EDEN_CORE_SOURCES
     src/core/window/windowframe.h
     src/engine/enginefactory.cpp
     src/engine/enginefactory.h
+    src/engine/enginebackend.h
+    src/engine/engineplugin.h
     src/engine/enginenewviewrequest.cpp
     src/engine/enginenewviewrequest.h
     src/engine/engineprofile.cpp
     src/engine/engineprofile.h
+    src/engine/engineprofilemap.cpp
+    src/engine/engineprofilemap.h
+    src/engine/engineregistry.cpp
+    src/engine/engineregistry.h
     src/engine/engineview.cpp
     src/engine/engineview.h
-    src/engine/qtwebengine/qtwebengineprofile.cpp
-    src/engine/qtwebengine/qtwebengineprofile.h
-    src/engine/qtwebengine/qtwebengineview.cpp
-    src/engine/qtwebengine/qtwebengineview.h
 )
 
-qt_add_library(eden-core STATIC ${EDEN_CORE_SOURCES})
+if(EDEN_ENABLE_AUTOMATION)
+    list(APPEND EDEN_CORE_SOURCES
+        src/core/automation/automationserver.cpp
+        src/core/automation/automationserver.h
+        src/core/automation/performancemetrics.cpp
+        src/core/automation/performancemetrics.h
+    )
+endif()
+
+qt_add_library(eden-core SHARED ${EDEN_CORE_SOURCES})
+target_compile_definitions(eden-core PUBLIC
+    EDEN_ENABLE_AUTOMATION=$<BOOL:${EDEN_ENABLE_AUTOMATION}>
+    EDEN_ENGINE_CEF=$<BOOL:${EDEN_ENGINE_CEF}>
+    EDEN_ENGINE_QTWEBENGINE=$<BOOL:${EDEN_ENGINE_QTWEBENGINE}>
+)
 target_include_directories(eden-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(eden-core PUBLIC
     Qt6::Core
@@ -61,9 +99,55 @@ target_link_libraries(eden-core PUBLIC
     Qt6::Qml
     Qt6::Quick
     Qt6::Sql
-    Qt6::WebEngineCore
-    Qt6::WebEngineQuick
 )
+
+if(EDEN_ENGINE_QTWEBENGINE)
+    add_library(eden-engine-qtwebengine SHARED
+        src/engine/qtwebengine/qtwebengineplugin.cpp
+        src/engine/qtwebengine/qtwebengineprofile.cpp
+        src/engine/qtwebengine/qtwebengineprofile.h
+        src/engine/qtwebengine/qtwebengineview.cpp
+        src/engine/qtwebengine/qtwebengineview.h
+    )
+    set_target_properties(eden-engine-qtwebengine PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-qtwebengine")
+    target_include_directories(eden-engine-qtwebengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(eden-engine-qtwebengine PRIVATE eden-core Qt6::WebEngineCore Qt6::WebEngineQuick)
+endif()
+
+if(EDEN_ENGINE_CEF)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS WebSockets)
+    find_package(X11 REQUIRED)
+    add_library(eden-cef-process STATIC
+        src/engine/cef/cefprocesssettings.cpp
+        src/engine/cef/cefprocesssettings.h
+    )
+    target_include_directories(eden-cef-process PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CEF_INCLUDE_PATH}
+    )
+    target_link_libraries(eden-cef-process PUBLIC libcef_dll_wrapper "${CEF_LIB_RELEASE}" ${CEF_STANDARD_LIBS})
+
+    add_library(eden-engine-cef SHARED
+        src/engine/cef/cefplugin.cpp
+        src/engine/cef/cefapplication.cpp
+        src/engine/cef/cefapplication.h
+        src/engine/cef/cefbrowsersettings.cpp
+        src/engine/cef/cefbrowsersettings.h
+        src/engine/cef/cefengineview.cpp
+        src/engine/cef/cefengineview.h
+        src/engine/cef/cefprofile.cpp
+        src/engine/cef/cefprofile.h
+        src/engine/cef/cefruntime.cpp
+        src/engine/cef/cefruntime.h
+        src/engine/cef/cefuibridge.cpp
+        src/engine/cef/cefuibridge.h
+        src/engine/cef/devtoolssocketserver.cpp
+        src/engine/cef/devtoolssocketserver.h
+    )
+    set_target_properties(eden-engine-cef PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-cef" BUILD_RPATH "$ORIGIN")
+    target_include_directories(eden-engine-cef PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CEF_INCLUDE_PATH})
+    target_link_libraries(eden-engine-cef PRIVATE eden-core eden-cef-process Qt6::WebSockets X11::X11)
+endif()
 
 set_source_files_properties(src/ui/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
@@ -86,11 +170,13 @@ qt_add_qml_module(eden-ui
         src/ui/components/OverlaySurface.qml
         src/ui/components/SecurityPopover.qml
         src/ui/components/TabIcon.qml
+        src/ui/components/TabPreview.qml
         src/ui/components/TabSidebar.qml
         src/ui/components/TabStrip.qml
         src/ui/components/ThemePreviewCard.qml
         src/ui/panes/BookmarksPane.qml
         src/ui/panes/DownloadsPane.qml
+        src/ui/panes/DevToolsPane.qml
         src/ui/panes/HistoryPane.qml
         src/ui/pages/SettingsPage.qml
         src/ui/pages/ThemeEditorPage.qml
@@ -98,13 +184,21 @@ qt_add_qml_module(eden-ui
         src/ui/pages/settings/AppearanceSettings.qml
         src/ui/pages/settings/PlaceholderSettings.qml
         src/ui/pages/settings/SearchSettings.qml
+        src/ui/pages/settings/EngineSettings.qml
+        src/ui/windows/DevToolsWindow.qml
         src/ui/windows/BrowserWindow.qml
+        src/ui/windows/FilePickerDialog.qml
+        src/ui/windows/JavaScriptDialog.qml
+        src/ui/windows/PermissionPrompt.qml
     RESOURCES
         resources/fonts/RobotoFlex.ttf
         resources/icons/edenlogo.png
         resources/eden-logo.png
+        resources/licenses/eden-gpl-3.0.txt
         resources/licenses/qt-lgpl-3.0.txt
         resources/licenses/solar-cc-by-4.0.txt
+        resources/licenses/chromium-bsd-3-clause.txt
+        resources/licenses/cef-bsd-3-clause.txt
         resources/icons/material/close.svg
         resources/icons/material/maximize.svg
         resources/icons/material/minimize.svg
@@ -301,6 +395,60 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/window-line-duotone.svg
         resources/icons/solar/window-linear.svg
         resources/icons/solar/window-outline.svg
+        resources/icons/solar/bookmark-circle-bold-duotone.svg
+        resources/icons/solar/bookmark-circle-bold.svg
+        resources/icons/solar/bookmark-circle-broken.svg
+        resources/icons/solar/bookmark-circle-line-duotone.svg
+        resources/icons/solar/bookmark-circle-linear.svg
+        resources/icons/solar/bookmark-circle-outline.svg
+        resources/icons/solar/cpu-bolt-bold-duotone.svg
+        resources/icons/solar/cpu-bolt-bold.svg
+        resources/icons/solar/cpu-bolt-broken.svg
+        resources/icons/solar/cpu-bolt-line-duotone.svg
+        resources/icons/solar/cpu-bolt-linear.svg
+        resources/icons/solar/cpu-bolt-outline.svg
+        resources/icons/solar/info-circle-bold-duotone.svg
+        resources/icons/solar/info-circle-bold.svg
+        resources/icons/solar/info-circle-broken.svg
+        resources/icons/solar/info-circle-line-duotone.svg
+        resources/icons/solar/info-circle-linear.svg
+        resources/icons/solar/info-circle-outline.svg
+        resources/icons/solar/password-bold-duotone.svg
+        resources/icons/solar/password-bold.svg
+        resources/icons/solar/password-broken.svg
+        resources/icons/solar/password-line-duotone.svg
+        resources/icons/solar/password-linear.svg
+        resources/icons/solar/password-outline.svg
+        resources/icons/solar/power-bold-duotone.svg
+        resources/icons/solar/power-bold.svg
+        resources/icons/solar/power-broken.svg
+        resources/icons/solar/power-line-duotone.svg
+        resources/icons/solar/power-linear.svg
+        resources/icons/solar/power-outline.svg
+        resources/icons/solar/programming-bold-duotone.svg
+        resources/icons/solar/programming-bold.svg
+        resources/icons/solar/programming-broken.svg
+        resources/icons/solar/programming-line-duotone.svg
+        resources/icons/solar/programming-linear.svg
+        resources/icons/solar/programming-outline.svg
+        resources/icons/solar/round-transfer-vertical-bold-duotone.svg
+        resources/icons/solar/round-transfer-vertical-bold.svg
+        resources/icons/solar/round-transfer-vertical-broken.svg
+        resources/icons/solar/round-transfer-vertical-line-duotone.svg
+        resources/icons/solar/round-transfer-vertical-linear.svg
+        resources/icons/solar/round-transfer-vertical-outline.svg
+        resources/icons/solar/soundwave-bold-duotone.svg
+        resources/icons/solar/soundwave-bold.svg
+        resources/icons/solar/soundwave-broken.svg
+        resources/icons/solar/soundwave-line-duotone.svg
+        resources/icons/solar/soundwave-linear.svg
+        resources/icons/solar/soundwave-outline.svg
+        resources/icons/solar/square-top-down-bold-duotone.svg
+        resources/icons/solar/square-top-down-bold.svg
+        resources/icons/solar/square-top-down-broken.svg
+        resources/icons/solar/square-top-down-line-duotone.svg
+        resources/icons/solar/square-top-down-linear.svg
+        resources/icons/solar/square-top-down-outline.svg
         resources/themes/eden-default.json
 )
 target_link_libraries(eden-ui PUBLIC eden-core Qt6::Quick Qt6::QuickControls2 Qt6::QuickEffects Qt6::QuickShapes)
@@ -308,13 +456,40 @@ target_link_libraries(eden-ui PUBLIC eden-core Qt6::Quick Qt6::QuickControls2 Qt
 qt_add_executable(eden-browser src/main.cpp)
 target_compile_definitions(eden-browser PRIVATE EDEN_VERSION="${PROJECT_VERSION}")
 target_link_libraries(eden-browser PRIVATE eden-core eden-ui Qt6::QuickControls2)
+if(EDEN_ENGINE_CEF)
+    add_executable(eden-helper src/engine/cef/helpermain.cpp src/engine/cef/cefrendererapp.cpp src/engine/cef/cefrendererapp.h)
+    target_include_directories(eden-helper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CEF_INCLUDE_PATH})
+    target_link_libraries(eden-helper PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}" ${CEF_STANDARD_LIBS})
+    SET_EXECUTABLE_TARGET_PROPERTIES(eden-helper)
+    set_target_properties(eden-helper PROPERTIES BUILD_RPATH "$ORIGIN")
+
+    add_dependencies(eden-browser libcef_dll_wrapper)
+    add_dependencies(eden-browser eden-helper)
+    add_dependencies(eden-browser eden-engine-cef)
+    SET_EXECUTABLE_TARGET_PROPERTIES(eden-browser)
+    set_target_properties(eden-browser PROPERTIES BUILD_RPATH "$ORIGIN")
+    eden_stage_cef_runtime(eden-browser)
+endif()
+if(EDEN_ENGINE_QTWEBENGINE)
+    add_dependencies(eden-browser eden-engine-qtwebengine)
+endif()
 
 enable_testing()
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME eden-bench-tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench/bench_test.py)
+
 qt_add_executable(eden-tests tests/tabmodel_test.cpp)
 target_link_libraries(eden-tests PRIVATE eden-core Qt6::Test)
+if(EDEN_ENGINE_QTWEBENGINE)
+    target_link_libraries(eden-tests PRIVATE eden-engine-qtwebengine)
+endif()
 add_test(NAME eden-tests COMMAND eden-tests)
 set_tests_properties(eden-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
+
+qt_add_executable(eden-thumbnail-cache-tests tests/thumbnailcache_test.cpp)
+target_link_libraries(eden-thumbnail-cache-tests PRIVATE eden-core Qt6::Test)
+add_test(NAME eden-thumbnail-cache-tests COMMAND eden-thumbnail-cache-tests)
 
 qt_add_executable(eden-theme-tests tests/thememanager_test.cpp)
 target_link_libraries(eden-theme-tests PRIVATE eden-core eden-ui Qt6::Test)
@@ -330,3 +505,61 @@ qt_add_executable(eden-omnibox-tests tests/omniboxcontroller_test.cpp)
 target_link_libraries(eden-omnibox-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-omnibox-tests COMMAND eden-omnibox-tests)
 set_tests_properties(eden-omnibox-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/omnibox-test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/omnibox-test-config")
+
+if(EDEN_ENABLE_AUTOMATION)
+    qt_add_executable(eden-automation-tests tests/automationserver_test.cpp)
+    target_link_libraries(eden-automation-tests PRIVATE eden-core Qt6::Test)
+    if(EDEN_ENGINE_QTWEBENGINE)
+        add_dependencies(eden-automation-tests eden-engine-qtwebengine)
+    endif()
+    add_test(NAME eden-automation-tests COMMAND eden-automation-tests)
+    set_tests_properties(eden-automation-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
+endif()
+
+if(EDEN_ENGINE_CEF)
+    qt_add_executable(eden-cef-process-tests tests/cefprocesssettings_test.cpp)
+    target_link_libraries(eden-cef-process-tests PRIVATE eden-cef-process Qt6::Test)
+    add_test(NAME eden-cef-process-tests COMMAND eden-cef-process-tests)
+    set_tests_properties(eden-cef-process-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    qt_add_executable(eden-cef-bootstrap-tests tests/cefbootstrap_test.cpp)
+    target_include_directories(eden-cef-bootstrap-tests PRIVATE ${CEF_INCLUDE_PATH})
+    target_link_libraries(eden-cef-bootstrap-tests PRIVATE eden-core eden-engine-cef eden-cef-process Qt6::Test)
+    SET_EXECUTABLE_TARGET_PROPERTIES(eden-cef-bootstrap-tests)
+    set_target_properties(eden-cef-bootstrap-tests PROPERTIES BUILD_RPATH "$ORIGIN")
+    add_dependencies(eden-cef-bootstrap-tests eden-helper)
+    eden_stage_cef_runtime(eden-cef-bootstrap-tests)
+    add_test(NAME eden-cef-bootstrap-tests COMMAND eden-cef-bootstrap-tests)
+    set_tests_properties(eden-cef-bootstrap-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    qt_add_executable(eden-cef-handlers-tests tests/cefhandlers_test.cpp)
+    target_include_directories(eden-cef-handlers-tests PRIVATE ${CEF_INCLUDE_PATH})
+    target_link_libraries(eden-cef-handlers-tests PRIVATE eden-core eden-ui eden-engine-cef eden-cef-process Qt6::Test)
+    SET_EXECUTABLE_TARGET_PROPERTIES(eden-cef-handlers-tests)
+    set_target_properties(eden-cef-handlers-tests PROPERTIES BUILD_RPATH "$ORIGIN")
+    add_dependencies(eden-cef-handlers-tests eden-helper)
+    eden_stage_cef_runtime(eden-cef-handlers-tests)
+    find_program(EDEN_XVFB_RUN xvfb-run REQUIRED)
+    add_test(NAME eden-cef-handlers-tests COMMAND ${EDEN_XVFB_RUN} -a -s "-screen 0 1600x1000x24" $<TARGET_FILE:eden-cef-handlers-tests> --no-sandbox --engine-compositing=osr --ozone-platform=x11)
+    set_tests_properties(eden-cef-handlers-tests PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=xcb")
+
+    qt_add_executable(eden-devtools-socket-tests tests/devtoolssocketserver_test.cpp)
+    target_link_libraries(eden-devtools-socket-tests PRIVATE eden-core eden-engine-cef Qt6::Test Qt6::WebSockets)
+    add_test(NAME eden-devtools-socket-tests COMMAND eden-devtools-socket-tests)
+    set_tests_properties(eden-devtools-socket-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+option(EDEN_ENGINE_SERVO "Build the Servo engine FFI scaffold" OFF)
+if(EDEN_ENGINE_SERVO)
+    find_program(EDEN_CARGO cargo REQUIRED)
+    set(EDEN_SERVO_CRATE_DIR ${CMAKE_SOURCE_DIR}/src/engine/servo/rust)
+    set(EDEN_SERVO_STATIC_LIB ${EDEN_SERVO_CRATE_DIR}/target/release/libeden_servo.a)
+    add_custom_target(eden-servo-cargo COMMAND ${EDEN_CARGO} build --release WORKING_DIRECTORY ${EDEN_SERVO_CRATE_DIR} BYPRODUCTS ${EDEN_SERVO_STATIC_LIB})
+    add_library(eden-servo-ffi STATIC IMPORTED)
+    set_target_properties(eden-servo-ffi PROPERTIES IMPORTED_LOCATION ${EDEN_SERVO_STATIC_LIB} INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src INTERFACE_LINK_LIBRARIES "pthread;dl;m")
+    qt_add_executable(eden-servo-ffi-tests tests/servoffi_test.cpp)
+    target_link_libraries(eden-servo-ffi-tests PRIVATE eden-servo-ffi Qt6::Test)
+    add_dependencies(eden-servo-ffi-tests eden-servo-cargo)
+    add_test(NAME eden-servo-ffi-tests COMMAND eden-servo-ffi-tests)
+    set_tests_properties(eden-servo-ffi-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

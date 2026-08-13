@@ -40,6 +40,12 @@ class OmniboxEngineView final : public eden::engine::EngineView {
     QString securityState() const override {
         return "secure";
     }
+    QString backendName() const override {
+        return "Fake";
+    }
+    Capabilities capabilities() const override {
+        return {};
+    }
     void load(const QUrl &url) override {
         m_url = url;
         emit urlChanged();

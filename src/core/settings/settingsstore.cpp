@@ -1,4 +1,5 @@
 #include "core/settings/settingsstore.h"
+#include "engine/engineregistry.h"
 
 #include <QDir>
 #include <QFile>
@@ -50,6 +51,7 @@ SettingsStore::SettingsStore(QObject *parent)
     connect(this, &SettingsStore::searchEngineChanged, this, &SettingsStore::searchEngineActionsChanged);
     connect(this, &SettingsStore::searchUrlChanged, this, &SettingsStore::searchEngineActionsChanged);
     connect(this, &SettingsStore::searchUrlChanged, this, &SettingsStore::customSearchEngineChanged);
+    connect(this, &SettingsStore::defaultEngineChanged, this, &SettingsStore::engineActionsChanged);
 }
 
 SettingsStore::~SettingsStore() = default;
@@ -75,6 +77,10 @@ void SettingsStore::initialize() {
     const QString nextSearchEngine = m_settings->value("search/name", m_searchEngine).toString();
     const QString nextSearchUrl = m_settings->value("search/url", m_searchUrl).toString();
     const bool nextSearchSuggestions = m_settings->value("search/suggestions", m_searchSuggestions).toBool();
+    const QString storedEngine = m_settings->value("engine/default", m_defaultEngine).toString();
+    const engine::EngineRegistry *registry = engine::EngineRegistry::instance();
+    const QString nextEngine =
+        registry->contains(storedEngine) || registry->descriptors().isEmpty() ? storedEngine : registry->descriptors().constFirst().id;
 
     const auto updateString = [this](QString &current, const QString &next, void (SettingsStore::*signal)()) {
         if (current != next) {
@@ -87,10 +93,16 @@ void SettingsStore::initialize() {
     updateString(m_tabLayout, nextLayout, &SettingsStore::tabLayoutChanged);
     updateString(m_searchEngine, nextSearchEngine, &SettingsStore::searchEngineChanged);
     updateString(m_searchUrl, nextSearchUrl, &SettingsStore::searchUrlChanged);
+    updateString(m_defaultEngine, nextEngine, &SettingsStore::defaultEngineChanged);
     if (m_searchSuggestions != nextSearchSuggestions) {
         m_searchSuggestions = nextSearchSuggestions;
         emit searchSuggestionsChanged();
     }
+    const QString storedPlacement = m_settings->value("devtools/placement", m_devToolsPlacement).toString();
+    updateString(m_devToolsPlacement, storedPlacement == "bottom" ? QString("bottom") : QString("right"),
+                 &SettingsStore::devToolsPlacementChanged);
+    m_devToolsPaneWidth = std::clamp(m_settings->value("devtools/paneWidth", m_devToolsPaneWidth).toInt(), 280, 1600);
+    m_devToolsPaneHeight = std::clamp(m_settings->value("devtools/paneHeight", m_devToolsPaneHeight).toInt(), 180, 1200);
 }
 
 QString SettingsStore::theme() const {
@@ -117,6 +129,15 @@ bool SettingsStore::searchSuggestions() const {
     return m_searchSuggestions;
 }
 
+QString SettingsStore::defaultEngine() const {
+    return m_defaultEngine;
+}
+
+QString SettingsStore::defaultEngineName() const {
+    const std::optional<engine::Backend> backend = engine::EngineRegistry::instance()->backendForId(m_defaultEngine);
+    return backend ? engine::EngineRegistry::instance()->displayName(*backend) : QString("Unavailable");
+}
+
 QVariantList SettingsStore::searchEngineActions() const {
     QVariantList actions;
     const bool custom = customSearchEngine();
@@ -135,6 +156,10 @@ QVariantList SettingsStore::searchEngineActions() const {
     customAction.insert("icon", custom ? "check" : "");
     actions.append(customAction);
     return actions;
+}
+
+QVariantList SettingsStore::engineActions() const {
+    return engine::EngineRegistry::instance()->selectionActions(m_defaultEngine);
 }
 
 bool SettingsStore::customSearchEngine() const {
@@ -183,6 +208,10 @@ void SettingsStore::selectSearchEngine(const QString &id) {
     }
 }
 
+void SettingsStore::selectDefaultEngine(const QString &id) {
+    setDefaultEngine(id);
+}
+
 void SettingsStore::setTheme(const QString &theme) {
     if (theme != "system" && theme != "light" && theme != "dark") {
         return;
@@ -216,6 +245,44 @@ void SettingsStore::setSearchSuggestions(bool enabled) {
     m_searchSuggestions = enabled;
     persist("search/suggestions", enabled);
     emit searchSuggestionsChanged();
+}
+
+void SettingsStore::setDefaultEngine(const QString &backendId) {
+    if (!engine::EngineRegistry::instance()->contains(backendId)) {
+        return;
+    }
+    setString("engine/default", backendId, m_defaultEngine, &SettingsStore::defaultEngineChanged);
+}
+
+QString SettingsStore::devToolsPlacement() const {
+    return m_devToolsPlacement;
+}
+
+int SettingsStore::devToolsPaneWidth() const {
+    return m_devToolsPaneWidth;
+}
+
+int SettingsStore::devToolsPaneHeight() const {
+    return m_devToolsPaneHeight;
+}
+
+void SettingsStore::setDevToolsPlacement(const QString &placement) {
+    if (placement != "right" && placement != "bottom") {
+        return;
+    }
+    setString("devtools/placement", placement, m_devToolsPlacement, &SettingsStore::devToolsPlacementChanged);
+}
+
+void SettingsStore::setDevToolsPaneSize(int width, int height) {
+    const int nextWidth = std::clamp(width, 280, 1600);
+    const int nextHeight = std::clamp(height, 180, 1200);
+    if (nextWidth == m_devToolsPaneWidth && nextHeight == m_devToolsPaneHeight) {
+        return;
+    }
+    m_devToolsPaneWidth = nextWidth;
+    m_devToolsPaneHeight = nextHeight;
+    persist("devtools/paneWidth", nextWidth);
+    persist("devtools/paneHeight", nextHeight);
 }
 
 void SettingsStore::persist(const QString &key, const QVariant &value) {

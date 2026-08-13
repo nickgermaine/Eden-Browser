@@ -430,8 +430,12 @@ QVariantMap ThemeManager::themePreview(const QString &id, bool dark) const {
         }
         return fallback.value(scope).toObject().value(group).toObject().value(key);
     };
-    const auto schemeColor = [&](const QString &key) { return colorValue(token(scheme, "colors", key)); };
-    const auto baseColor = [&](const QString &key) { return colorValue(token("base", "colors", key)); };
+    const auto schemeColor = [&](const QString &key) {
+        return colorValue(token(scheme, "colors", key));
+    };
+    const auto baseColor = [&](const QString &key) {
+        return colorValue(token("base", "colors", key));
+    };
     const auto metric = [&](const QString &key, int minimum, int maximum) {
         return std::clamp(token("base", "metrics", key).toInt(), minimum, maximum);
     };
@@ -763,20 +767,38 @@ bool ThemeManager::saveEditing() {
         emit editorChanged();
         return saveEditingAs();
     }
-    if (editorId().trimmed() != m_editorSourceId) {
-        setLastError("Use Save as new when changing a theme ID");
-        return false;
-    }
     const auto source =
         std::find_if(m_themes.cbegin(), m_themes.cend(), [this](const ThemeDefinition &theme) { return theme.id == m_editorSourceId; });
     if (source == m_themes.cend() || source->path.isEmpty()) {
         setLastError("The edited theme file is unavailable");
         return false;
     }
-    if (!writeEditorTheme(source->path)) {
+    const QString id = editorId().trimmed();
+    if (id == m_editorSourceId) {
+        if (!writeEditorTheme(source->path)) {
+            return false;
+        }
+        return finishEditorSave(m_editorSourceId);
+    }
+    if (id == defaultTheme().id ||
+        std::any_of(m_themes.cbegin(), m_themes.cend(), [&id](const ThemeDefinition &theme) { return theme.id == id; })) {
+        setLastError("That theme ID is already installed");
         return false;
     }
-    return finishEditorSave(m_editorSourceId);
+    QDir directory(themeDirectory());
+    if (!directory.exists() && !directory.mkpath(".")) {
+        setLastError("Could not create the theme directory");
+        return false;
+    }
+    const QString previousPath = source->path;
+    const QString nextPath = directory.filePath(id + ".json");
+    if (!writeEditorTheme(nextPath)) {
+        return false;
+    }
+    if (previousPath != nextPath) {
+        QFile::remove(previousPath);
+    }
+    return finishEditorSave(id);
 }
 
 bool ThemeManager::saveEditingAs() {

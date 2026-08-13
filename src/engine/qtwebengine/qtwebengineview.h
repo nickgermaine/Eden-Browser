@@ -30,7 +30,12 @@ class QtWebEngineView final : public EngineView {
     bool isAudible() const override;
     bool isMuted() const override;
     QString securityState() const override;
+    QString backendName() const override;
+    Capabilities capabilities() const override;
+    qint64 rendererProcessId() const override;
+    bool containsPageScenePoint(const QPointF &windowScenePoint) const override;
 
+    QUrl internalUrlFor(const QUrl &url) const override;
     void load(const QUrl &url) override;
     void back() override;
     void forward() override;
@@ -39,14 +44,20 @@ class QtWebEngineView final : public EngineView {
     void reload() override;
     void stop() override;
     void openDevTools() override;
+    void closeDevTools() override;
+    void attachDevTools(QQuickItem *viewport) override;
+    void detachDevTools(QQuickItem *viewport) override;
     void findInPage(const QString &text, FindFlags flags) override;
     void attach(QQuickItem *viewport) override;
+    void releaseFocus() override;
     void setMuted(bool muted) override;
     void executeContextMenuCommand(const QString &command) override;
+    void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
 
     Q_INVOKABLE void handleNewWindow(QObject *requestObject);
     Q_INVOKABLE void handleFullScreen(bool fullscreen);
-    Q_INVOKABLE void handleContextMenu(const QPoint &position, const QUrl &linkUrl, const QString &selectedText, bool editable);
+    Q_INVOKABLE void handleContextMenu(const QPoint &position, const QUrl &linkUrl, const QUrl &mediaUrl, const QString &selectedText,
+                                       bool editable);
     Q_INVOKABLE void handleCertificateError();
 
   private slots:
@@ -57,11 +68,15 @@ class QtWebEngineView final : public EngineView {
 
     bool ensureView(QQmlEngine *engine);
     bool acceptNewWindowRequest(QWebEngineNewWindowRequest *request, QQmlEngine *engine);
+    void triggerWebAction(const QByteArray &actionName);
     QVariant value(const char *name) const;
     void invoke(const char *method);
 
     EngineProfile *m_profile;
     QPointer<QObject> m_view;
+    QPointer<QObject> m_devToolsView;
+    QPointer<QQuickItem> m_devToolsHost;
+    bool m_pendingInspect = false;
     QUrl m_pendingUrl;
     QUrl m_url;
     QString m_title;

@@ -59,7 +59,7 @@ Rectangle {
             width: ListView.view.width
             height: 44
             text: title.length > 0 ? title : url.toString()
-            iconName: "star"
+            iconName: "bookmark-circle"
             onClicked: {
                 pane.controller.navigate(url);
                 pane.controller.openPane = "";

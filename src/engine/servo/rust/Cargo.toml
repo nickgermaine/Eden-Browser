@@ -1,0 +1,14 @@
+[package]
+name = "eden-servo"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "eden_servo"
+crate-type = ["staticlib"]
+
+[features]
+servo = []
+
+[profile.release]
+lto = true

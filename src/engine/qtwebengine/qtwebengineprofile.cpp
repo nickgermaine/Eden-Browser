@@ -7,6 +7,7 @@
 #include <QQuickWebEngineDownloadRequest>
 #include <QQuickWebEngineProfile>
 #include <QStandardPaths>
+#include <QWebEngineCookieStore>
 
 namespace eden::engine {
 
@@ -76,6 +77,14 @@ QtWebEngineProfile::~QtWebEngineProfile() = default;
 
 QObject *QtWebEngineProfile::nativeProfile() const {
     return m_profile;
+}
+
+void QtWebEngineProfile::clearData() {
+    if (!m_profile) {
+        return;
+    }
+    m_profile->cookieStore()->deleteAllCookies();
+    m_profile->clearHttpCache();
 }
 
 }

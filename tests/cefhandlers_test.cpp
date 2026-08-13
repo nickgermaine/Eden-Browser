@@ -1,0 +1,617 @@
+#include "core/settings/settingsstore.h"
+#include "core/settings/shortcutregistry.h"
+#include "core/settings/theme/thememanager.h"
+#include "core/window/tabstripnavigator.h"
+#include "core/window/windowcontroller.h"
+#include "core/window/windowframe.h"
+#include "engine/cef/cefengineview.h"
+#include "engine/cef/cefprofile.h"
+#include "engine/cef/cefruntime.h"
+#include "engine/cef/devtoolssocketserver.h"
+#include "engine/engineregistry.h"
+
+#include <QBuffer>
+#include <QClipboard>
+#include <QColor>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QHash>
+#include <QImage>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickItem>
+#include <QQuickStyle>
+#include <QQuickWindow>
+#include <QSet>
+#include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
+#include <QTimer>
+#include <QtGui/qguiapplication_platform.h>
+#include <QtTest>
+
+#include <X11/Xlib.h>
+
+#undef KeyPress
+#undef KeyRelease
+
+#include <memory>
+#include <vector>
+
+class LocalPageServer final : public QTcpServer {
+    Q_OBJECT
+
+  public:
+    explicit LocalPageServer(QObject *parent = nullptr)
+        : QTcpServer(parent) {
+        connect(this, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket *socket = nextPendingConnection()) {
+                if (!socket->peerAddress().isLoopback()) {
+                    socket->abort();
+                    socket->deleteLater();
+                    continue;
+                }
+                connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    QByteArray &request = m_requests[socket];
+                    request.append(socket->readAll());
+                    const qsizetype headerEnd = request.indexOf("\r\n\r\n");
+                    if (headerEnd < 0) {
+                        return;
+                    }
+                    const QByteArray header = request.first(headerEnd);
+                    const QList<QByteArray> lines = header.split('\n');
+                    qsizetype contentLength = 0;
+                    for (const QByteArray &line : lines) {
+                        if (line.toLower().startsWith("content-length:")) {
+                            contentLength = line.mid(line.indexOf(':') + 1).trimmed().toLongLong();
+                        }
+                    }
+                    if (request.size() < headerEnd + 4 + contentLength) {
+                        return;
+                    }
+                    const QList<QByteArray> requestLine = lines.constFirst().trimmed().split(' ');
+                    const QByteArray path = requestLine.value(1);
+                    const QByteArray body = request.mid(headerEnd + 4, contentLength);
+                    m_requests.remove(socket);
+                    if (path == "/") {
+                        ++m_rootRequests;
+                    }
+                    QByteArray contentType = "text/html; charset=utf-8";
+                    QByteArray responseBody;
+                    if (path == "/favicon.png") {
+                        QImage icon(16, 16, QImage::Format_ARGB32);
+                        icon.fill(QColor("#315d32"));
+                        QBuffer buffer(&responseBody);
+                        buffer.open(QIODevice::WriteOnly);
+                        icon.save(&buffer, "PNG");
+                        contentType = "image/png";
+                    } else if (path == "/download.txt") {
+                        responseBody = "download-ok";
+                        contentType = "text/plain";
+                    } else if (path == "/popup") {
+                        const QString postValue = QString::fromUtf8(body).contains("value=posted") ? "posted" : "missing";
+                        responseBody =
+                            QString("<!doctype html><title>Popup pending</title><body>popup<script>document.title='Popup "
+                                    "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')+' post=%1'</script></body>")
+                                .arg(postValue)
+                                .toUtf8();
+                    } else if (path == "/delayed") {
+                        responseBody = "<!doctype html><title>Delayed pending</title><body>delayed<script>document.title='Delayed "
+                                       "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')</script></body>";
+                    } else {
+                        responseBody = R"HTML(<!doctype html>
+<html><head><title>E35 Main</title><link rel="icon" href="/favicon.png"></head>
+<body style="margin:0;background:#d8ead3;color:#142211;font:20px sans-serif">
+<form action="/popup" method="post" target="popupTarget"><input name="value" value="posted"><button id="post" style="position:absolute;left:20px;top:20px;width:180px;height:48px">POST popup</button></form>
+<button id="delayed" style="position:absolute;left:20px;top:90px;width:180px;height:48px">Delayed popup</button>
+<button id="dialog" style="position:absolute;left:20px;top:160px;width:180px;height:48px">Dialog</button>
+<button id="permission" style="position:absolute;left:20px;top:230px;width:180px;height:48px">Permission</button>
+<a id="download" download="eden-handler.txt" href="/download.txt" style="position:absolute;left:20px;top:300px">Download</a>
+<a id="cursor-link" href="#cursor" style="position:absolute;left:20px;top:360px">Cursor link</a>
+<input id="editor" style="position:absolute;left:20px;top:410px;width:400px;height:42px;font-size:20px">
+<div style="position:absolute;left:280px;top:40px;width:500px;height:380px;border-radius:32px;background:#315d32;color:white;display:grid;place-items:center;font-size:36px">E3.5 OSR</div>
+<script>
+window.name='source'
+document.getElementById('delayed').onclick=()=>setTimeout(()=>window.open('/delayed'),120)
+document.getElementById('dialog').onclick=()=>prompt('Handler prompt','seed')
+document.getElementById('permission').onclick=()=>navigator.geolocation.getCurrentPosition(()=>{},()=>{})
+document.getElementById('editor').oninput=event=>document.title='Input '+event.target.value
+</script></body></html>)HTML";
+                    }
+                    QByteArray headers = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: " + contentType +
+                                         "\r\nContent-Length: " + QByteArray::number(responseBody.size()) + "\r\n";
+                    if (path == "/download.txt") {
+                        headers += "Content-Disposition: attachment; filename=eden-handler.txt\r\n";
+                    }
+                    socket->write(headers + "\r\n" + responseBody);
+                    socket->disconnectFromHost();
+                });
+                connect(socket, &QTcpSocket::disconnected, this, [this, socket] { m_requests.remove(socket); });
+                connect(socket, &QTcpSocket::destroyed, this, [this, socket] { m_requests.remove(socket); });
+            }
+        });
+    }
+
+    int rootRequests() const {
+        return m_rootRequests;
+    }
+
+  private:
+    int m_rootRequests = 0;
+    QHash<QTcpSocket *, QByteArray> m_requests;
+};
+
+class CefHandlersTest final : public QObject {
+    Q_OBJECT
+
+  private slots:
+    void initTestCase();
+    void handlerSuite();
+    void devToolsSuite();
+    void shellDevToolsSuite();
+    void cleanupTestCase();
+
+  private:
+    QTemporaryDir m_dataDirectory;
+    QTemporaryDir m_environmentDirectory;
+    LocalPageServer m_server;
+};
+
+static bool hasColorVariation(const QImage &image, const QRect &region, int minimumColors) {
+    QSet<QRgb> colors;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+        for (int x = region.left(); x <= region.right(); ++x) {
+            colors.insert(image.pixel(x, y));
+            if (colors.size() >= minimumColors) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static int differingPixels(const QImage &first, const QImage &second, const QRect &region) {
+    if (first.size() != second.size() || first.isNull() || second.isNull()) {
+        return 0;
+    }
+    int count = 0;
+    for (int y = region.top(); y <= region.bottom(); y += 2) {
+        for (int x = region.left(); x <= region.right(); x += 2) {
+            if (first.pixel(x, y) != second.pixel(x, y)) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+void CefHandlersTest::initTestCase() {
+    Q_INIT_RESOURCE(eden_ui_raw_res_0);
+    QVERIFY(m_dataDirectory.isValid());
+    QVERIFY(m_environmentDirectory.isValid());
+    const QString configDirectory = QDir(m_environmentDirectory.path()).filePath("config");
+    const QString downloadDirectory = QDir(m_environmentDirectory.path()).filePath("Downloads");
+    QVERIFY(QDir().mkpath(configDirectory));
+    QVERIFY(QDir().mkpath(downloadDirectory));
+    QFile userDirectories(QDir(configDirectory).filePath("user-dirs.dirs"));
+    QVERIFY(userDirectories.open(QIODevice::WriteOnly));
+    userDirectories.write(QString("XDG_DOWNLOAD_DIR=\"%1\"\n").arg(downloadDirectory).toUtf8());
+    userDirectories.close();
+    qputenv("HOME", m_environmentDirectory.path().toUtf8());
+    qputenv("XDG_CONFIG_HOME", configDirectory.toUtf8());
+    QQuickStyle::setStyle("Basic");
+    qmlRegisterType<eden::core::WindowController>("Eden.Ui", 1, 0, "WindowController");
+    qmlRegisterType<eden::core::WindowFrame>("Eden.Ui", 1, 0, "WindowFrame");
+    qmlRegisterType<eden::core::TabStripNavigator>("Eden.Ui", 1, 0, "TabStripNavigator");
+    qmlRegisterUncreatableType<eden::engine::EngineView>("Eden.Ui", 1, 0, "EngineView", "Engine views are created by WindowController");
+    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Engines", eden::engine::EngineRegistry::instance());
+    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
+    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
+    eden::core::SettingsStore::instance()->initialize();
+    eden::core::ThemeManager::instance()->refresh();
+    QVERIFY(m_server.listen(QHostAddress::AnyIPv4));
+    QList<QByteArray> encodedArguments;
+    for (const QString &argument : QCoreApplication::arguments()) {
+        encodedArguments.append(argument.toLocal8Bit());
+    }
+    std::vector<char *> arguments;
+    for (QByteArray &argument : encodedArguments) {
+        arguments.push_back(argument.data());
+    }
+    QVERIFY(eden::engine::cef::CefRuntime::instance().initialize(static_cast<int>(arguments.size()), arguments.data(),
+                                                                 m_dataDirectory.path().toStdString()));
+}
+
+void CefHandlersTest::handlerSuite() {
+    const QString downloadDirectory = QDir(m_environmentDirectory.path()).filePath("Downloads");
+    const QString existingDownloadPath = QDir(downloadDirectory).filePath("eden-handler.txt");
+    QFile existingDownload(existingDownloadPath);
+    QVERIFY(existingDownload.open(QIODevice::WriteOnly));
+    QCOMPARE(existingDownload.write("preserve"), qint64(8));
+    existingDownload.close();
+    eden::engine::cef::CefProfile profile(true);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11Application = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11Application);
+    Display *display = x11Application->display();
+    QVERIFY(display);
+    const Window nativeWindow = static_cast<Window>(window.winId());
+    XWindowAttributes attributes;
+    QVERIFY(XGetWindowAttributes(display, nativeWindow, &attributes));
+    XSetInputFocus(display, nativeWindow, RevertToParent, CurrentTime);
+    XSync(display, False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView source(&profile);
+    source.attach(&viewport);
+    const QUrl mainUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort()));
+    source.load(mainUrl);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!source.faviconUrl().isEmpty(), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 15000);
+
+    std::vector<std::unique_ptr<QQuickWindow>> popupWindows;
+    std::vector<std::unique_ptr<QQuickItem>> popupViewports;
+    std::vector<std::unique_ptr<eden::engine::cef::CefEngineView>> popupViews;
+    QStringList popupTitles;
+    int popupRequests = 0;
+    bool rejectPopup = false;
+    connect(&source, &eden::engine::EngineView::newViewRequested, &source, [&](eden::engine::EngineNewViewRequest *request) {
+        ++popupRequests;
+        if (rejectPopup) {
+            rejectPopup = false;
+            return;
+        }
+        auto popupWindow = std::make_unique<QQuickWindow>();
+        popupWindow->resize(760, 520);
+        popupWindow->show();
+        auto popupViewport = std::make_unique<QQuickItem>(popupWindow->contentItem());
+        popupViewport->setSize(popupWindow->size());
+        auto popupView = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
+        popupView->attach(popupViewport.get());
+        connect(popupView.get(), &eden::engine::EngineView::titleChanged, popupView.get(),
+                [&popupTitles, view = popupView.get()] { popupTitles.append(view->title()); });
+        QVERIFY(request->openIn(popupView.get()));
+        popupWindows.push_back(std::move(popupWindow));
+        popupViewports.push_back(std::move(popupViewport));
+        popupViews.push_back(std::move(popupView));
+    });
+
+    QQuickItem *osrItem = viewport.childItems().isEmpty() ? nullptr : viewport.childItems().constFirst();
+    QVERIFY(osrItem);
+    QTest::mouseMove(&window, QPoint(75, 370));
+    QTRY_COMPARE_WITH_TIMEOUT(osrItem->cursor().shape(), Qt::PointingHandCursor, 5000);
+    QTest::mouseMove(&window, QPoint(200, 430));
+    QTRY_COMPARE_WITH_TIMEOUT(osrItem->cursor().shape(), Qt::IBeamCursor, 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(200, 430));
+    osrItem->forceActiveFocus(Qt::MouseFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(osrItem->hasActiveFocus(), 5000);
+    QTest::keyClick(&window, Qt::Key_A);
+    QTest::keyClick(&window, Qt::Key_Period);
+    QTest::keyClick(&window, Qt::Key_B);
+    QTest::keyClick(&window, Qt::Key_At);
+    QTest::keyClick(&window, Qt::Key_E);
+    QTest::keyClick(&window, Qt::Key_X);
+    QTest::keyClick(&window, Qt::Key_A);
+    QTest::keyClick(&window, Qt::Key_M);
+    QTest::keyClick(&window, Qt::Key_P);
+    QTest::keyClick(&window, Qt::Key_L);
+    QTest::keyClick(&window, Qt::Key_E);
+    QTest::keyClick(&window, Qt::Key_Period);
+    QTest::keyClick(&window, Qt::Key_C);
+    QTest::keyClick(&window, Qt::Key_O);
+    QTest::keyClick(&window, Qt::Key_M);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Input a.b@example.com"), 10000);
+    QGuiApplication::clipboard()->setText(" pasted.value");
+    QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Input a.b@example.com pasted.value"), 10000);
+
+    source.load(mainUrl);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 15000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 45));
+    QTRY_COMPARE_WITH_TIMEOUT(popupRequests, 1, 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(popupTitles.contains("Popup opener=yes post=posted"), 15000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 115));
+    QTRY_VERIFY_WITH_TIMEOUT(popupTitles.contains("Delayed opener=yes"), 15000);
+
+    popupViews.clear();
+    popupViewports.clear();
+    popupWindows.clear();
+
+    QSignalSpy contextMenu(&source, &eden::engine::EngineView::contextMenuRequested);
+    QTest::mouseClick(&window, Qt::RightButton, {}, QPoint(430, 220));
+    QTRY_COMPARE_WITH_TIMEOUT(contextMenu.size(), 1, 10000);
+    const int requestsBeforeReload = m_server.rootRequests();
+    source.executeContextMenuCommand("reload");
+    QTRY_VERIFY_WITH_TIMEOUT(m_server.rootRequests() > requestsBeforeReload, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 10000);
+    QTest::mouseClick(&window, Qt::RightButton, {}, QPoint(430, 220));
+    QTRY_COMPARE_WITH_TIMEOUT(contextMenu.size(), 2, 10000);
+    source.dismissContextMenu();
+    QTest::qWait(100);
+
+    const QUrl historyOne(QString("http://127.0.0.1:%1/history-one").arg(m_server.serverPort()));
+    const QUrl historyTwo(QString("http://127.0.0.1:%1/history-two").arg(m_server.serverPort()));
+    source.load(historyOne);
+    QTRY_COMPARE_WITH_TIMEOUT(source.url(), historyOne, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 10000);
+    source.load(historyTwo);
+    QTRY_COMPARE_WITH_TIMEOUT(source.url(), historyTwo, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 10000);
+    QTest::mouseClick(&window, Qt::RightButton, {}, QPoint(430, 220));
+    QTRY_COMPARE_WITH_TIMEOUT(contextMenu.size(), 3, 10000);
+    source.executeContextMenuCommand("back");
+    QTRY_COMPARE_WITH_TIMEOUT(source.url(), historyOne, 10000);
+    QTest::mouseClick(&window, Qt::RightButton, {}, QPoint(430, 220));
+    QTRY_COMPARE_WITH_TIMEOUT(contextMenu.size(), 4, 10000);
+    source.executeContextMenuCommand("forward");
+    QTRY_COMPARE_WITH_TIMEOUT(source.url(), historyTwo, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 10000);
+    source.load(mainUrl);
+    QTRY_COMPARE_WITH_TIMEOUT(source.url(), mainUrl, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 10000);
+    QTest::qWait(100);
+
+    QSignalSpy dialog(&source, &eden::engine::EngineView::javaScriptDialogRequested);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 185));
+    QTRY_COMPARE_WITH_TIMEOUT(dialog.size(), 1, 10000);
+    const eden::engine::JavaScriptDialogInfo dialogInfo = dialog.constFirst().constFirst().value<eden::engine::JavaScriptDialogInfo>();
+    QCOMPARE(dialogInfo.kind, QString("prompt"));
+    QCOMPARE(dialogInfo.defaultText, QString("seed"));
+    source.resolveJavaScriptDialog(dialogInfo.id, true, "accepted");
+
+    QSignalSpy permission(&source, &eden::engine::EngineView::permissionRequested);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 255));
+    QTRY_COMPARE_WITH_TIMEOUT(permission.size(), 1, 10000);
+    const eden::engine::PermissionRequestInfo permissionInfo =
+        permission.constFirst().constFirst().value<eden::engine::PermissionRequestInfo>();
+    QVERIFY(permissionInfo.permissions.contains("location"));
+    source.resolvePermissionRequest(permissionInfo.id, false);
+
+    QSignalSpy downloadStarted(&profile, &eden::engine::EngineProfile::downloadStarted);
+    QSignalSpy downloadUpdated(&profile, &eden::engine::EngineProfile::downloadUpdated);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 315));
+    QTRY_COMPARE_WITH_TIMEOUT(downloadStarted.size(), 1, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!downloadUpdated.isEmpty(), 10000);
+    const QString targetPath = downloadStarted.constFirst().at(3).toString();
+    QCOMPARE(QFileInfo(targetPath).absolutePath(), QFileInfo(downloadDirectory).absoluteFilePath());
+    QCOMPARE(QFileInfo(targetPath).fileName(), QString("eden-handler (1).txt"));
+    QFile preservedDownload(existingDownloadPath);
+    QVERIFY(preservedDownload.open(QIODevice::ReadOnly));
+    QCOMPARE(preservedDownload.readAll(), QByteArray("preserve"));
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(targetPath), 10000);
+
+    const QImage screenshot = window.grabWindow();
+    QVERIFY(!screenshot.isNull());
+    QVERIFY(screenshot.pixelColor(430, 220) != screenshot.pixelColor(10, 10));
+    const QString screenshotPath = qEnvironmentVariable("EDEN_E35_SCREENSHOT");
+    if (!screenshotPath.isEmpty()) {
+        QVERIFY(screenshot.save(screenshotPath));
+    }
+
+    const QUrl failedUrl("http://127.0.0.1:1/unavailable");
+    source.load(failedUrl);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Page unavailable"), 15000);
+    QCOMPARE(source.url(), failedUrl);
+
+    source.load(mainUrl);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 15000);
+    rejectPopup = true;
+    const int requestsBeforeReject = popupRequests;
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 115));
+    QTRY_COMPARE_WITH_TIMEOUT(popupRequests, requestsBeforeReject + 1, 10000);
+    QTest::qWait(100);
+
+    const auto createPendingView = [&](const QUrl &url) {
+        auto pendingView = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
+        pendingView->attach(&viewport);
+        pendingView->load(url);
+        return pendingView;
+    };
+    source.attach(nullptr);
+    {
+        auto pendingDialogView = createPendingView(QUrl(QString("http://localhost:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingDialogView->title(), QString("E35 Main"), 15000);
+        QSignalSpy pendingDialog(pendingDialogView.get(), &eden::engine::EngineView::javaScriptDialogRequested);
+        QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 185));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingDialog.size(), 1, 10000);
+        pendingDialogView.reset();
+        QTest::qWait(100);
+    }
+    {
+        auto pendingPermissionView = createPendingView(QUrl(QString("http://127.0.0.2:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingPermissionView->title(), QString("E35 Main"), 15000);
+        QSignalSpy pendingPermission(pendingPermissionView.get(), &eden::engine::EngineView::permissionRequested);
+        QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 255));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingPermission.size(), 1, 10000);
+        pendingPermissionView.reset();
+        QTest::qWait(100);
+    }
+    {
+        auto pendingContextView = createPendingView(QUrl(QString("http://127.0.0.3:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingContextView->title(), QString("E35 Main"), 15000);
+        QSignalSpy pendingContext(pendingContextView.get(), &eden::engine::EngineView::contextMenuRequested);
+        QTest::mouseClick(&window, Qt::RightButton, {}, QPoint(430, 220));
+        QTRY_COMPARE_WITH_TIMEOUT(pendingContext.size(), 1, 10000);
+        pendingContextView.reset();
+        QTest::qWait(100);
+    }
+}
+
+void CefHandlersTest::devToolsSuite() {
+    eden::engine::cef::CefProfile profile(true);
+    QQuickWindow window;
+    window.resize(1200, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem pageViewport(window.contentItem());
+    pageViewport.setSize(QSizeF(700, 700));
+    QQuickItem devToolsViewport(window.contentItem());
+    devToolsViewport.setX(700);
+    devToolsViewport.setSize(QSizeF(500, 700));
+    eden::engine::cef::CefEngineView source(&profile);
+    source.attach(&pageViewport);
+    source.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 15000);
+    QVERIFY(source.capabilities() & eden::engine::EngineView::DockedDevtools);
+    source.openDevTools();
+    source.attachDevTools(&devToolsViewport);
+    QVERIFY(source.devToolsOpen());
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!devToolsViewport.childItems().isEmpty(), 10000);
+
+    QImage dockedImage;
+    const QString devToolsScreenshotPath = qEnvironmentVariable("EDEN_E36_SCREENSHOT");
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 dockedImage = window.grabWindow();
+                                 return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
+                             })(),
+                             15000);
+    if (!devToolsScreenshotPath.isEmpty()) {
+        QVERIFY(dockedImage.save(devToolsScreenshotPath));
+    }
+
+    QQuickWindow separateWindow;
+    separateWindow.resize(700, 600);
+    separateWindow.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&separateWindow));
+    QQuickItem separateViewport(separateWindow.contentItem());
+    separateViewport.setSize(separateWindow.size());
+    source.attachDevTools(&separateViewport);
+    QTRY_VERIFY_WITH_TIMEOUT(!separateViewport.childItems().isEmpty(), 10000);
+    QImage separateImage;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 separateImage = separateWindow.grabWindow();
+                                 return !separateImage.isNull() && hasColorVariation(separateImage, QRect(200, 40, 500, 350), 300);
+                             })(),
+                             15000);
+
+    source.attachDevTools(&devToolsViewport);
+    QTRY_VERIFY_WITH_TIMEOUT(!devToolsViewport.childItems().isEmpty(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 dockedImage = window.grabWindow();
+                                 return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
+                             })(),
+                             15000);
+
+    source.closeDevTools();
+    QVERIFY(!source.devToolsOpen());
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
+    QVERIFY(!eden::engine::cef::sharedDevToolsSocketServer()->isListening());
+}
+
+void CefHandlersTest::shellDevToolsSuite() {
+    QQmlApplicationEngine qmlEngine;
+    qmlEngine.rootContext()->setContextProperty("startupPrivateWindow", true);
+    qmlEngine.rootContext()->setContextProperty("startupEngineName", QString("cef"));
+    qmlEngine.loadFromModule("Eden.Ui", "BrowserWindow");
+    QTRY_COMPARE_WITH_TIMEOUT(qmlEngine.rootObjects().size(), 1, 10000);
+    auto *window = qobject_cast<QQuickWindow *>(qmlEngine.rootObjects().constFirst());
+    QVERIFY(window);
+    QTRY_VERIFY_WITH_TIMEOUT(window->isVisible(), 10000);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto *controller = window->findChild<eden::core::WindowController *>("windowController");
+    QVERIFY(controller);
+    controller->initialize(true, "cef", false, true);
+    eden::engine::EngineView *view = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+                                 return view;
+                             })(),
+                             10000);
+    view->load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("E35 Main"), 15000);
+
+    bool devToolsShortcutFound = false;
+    bool commandPaletteShortcutFound = false;
+    for (int row = 0; row < controller->shortcuts()->rowCount(); ++row) {
+        const QModelIndex shortcutIndex = controller->shortcuts()->index(row);
+        const QString shortcutId = controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::IdRole).toString();
+        if (shortcutId == "devtools") {
+            QCOMPARE(controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(), QString("F12"));
+            devToolsShortcutFound = true;
+        } else if (shortcutId == "command_palette") {
+            QCOMPARE(controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
+                     QString("Ctrl+K"));
+            commandPaletteShortcutFound = true;
+        }
+    }
+    QVERIFY(devToolsShortcutFound);
+    QVERIFY(commandPaletteShortcutFound);
+    controller->shortcuts()->execute("devtools");
+    QTRY_VERIFY_WITH_TIMEOUT(view->devToolsOpen(), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+    QImage dockedRight;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 dockedRight = window->grabWindow();
+                                 return hasColorVariation(dockedRight, QRect(900, 140, 400, 500), 300);
+                             })(),
+                             15000);
+
+    view->toggleDevToolsOrientation();
+    QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsBottom);
+    QImage dockedBottom;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 dockedBottom = window->grabWindow();
+                                 return hasColorVariation(dockedBottom, QRect(400, 560, 700, 250), 300);
+                             })(),
+                             15000);
+
+    const auto visibleWindowCount = [] {
+        const QWindowList windows = QGuiApplication::topLevelWindows();
+        return std::count_if(windows.cbegin(), windows.cend(), [](QWindow *candidate) { return candidate->isVisible(); });
+    };
+    const int originalWindowCount = visibleWindowCount();
+    view->toggleDevToolsSeparate();
+    QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsSeparate);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleWindowCount() > originalWindowCount, 10000);
+    view->toggleDevToolsSeparate();
+    QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsRight);
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 10000);
+
+    const QImage beforeOverlay = window->grabWindow();
+    controller->shortcuts()->execute("command_palette");
+    QTRY_VERIFY_WITH_TIMEOUT(controller->commandPaletteVisible(), 10000);
+    QImage withOverlay;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                                 withOverlay = window->grabWindow();
+                                 return differingPixels(beforeOverlay, withOverlay, QRect(700, 220, 250, 400)) > 1000;
+                             })(),
+                             10000);
+    const QString shellScreenshotPath = qEnvironmentVariable("EDEN_E36_SHELL_SCREENSHOT");
+    if (!shellScreenshotPath.isEmpty()) {
+        QVERIFY(withOverlay.save(shellScreenshotPath));
+    }
+
+    const int activeIndex = controller->activeIndex();
+    controller->newTab(QUrl("about:blank"), true, "cef");
+    controller->closeTab(activeIndex);
+    QVERIFY(!view->devToolsOpen());
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
+    QVERIFY(!eden::engine::cef::sharedDevToolsSocketServer()->isListening());
+    window->close();
+}
+
+void CefHandlersTest::cleanupTestCase() {
+    eden::engine::cef::CefRuntime::instance().shutdown();
+}
+
+int main(int argc, char *argv[]) {
+    eden::engine::cef::CefRuntime &runtime = eden::engine::cef::CefRuntime::instance();
+    const int processExitCode = runtime.executeProcess(argc, argv);
+    if (processExitCode >= 0) {
+        return processExitCode;
+    }
+    QGuiApplication application(argc, argv);
+    CefHandlersTest test;
+    return QTest::qExec(&test);
+}
+
+#include "cefhandlers_test.moc"

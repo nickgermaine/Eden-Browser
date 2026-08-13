@@ -30,439 +30,441 @@ Rectangle {
         onAccepted: Themes.exportEditing(selectedFile)
     }
 
-    Row {
-        anchors.fill: parent
+    Rectangle {
+        id: sidebar
 
-        Rectangle {
-            id: sidebar
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.margins: 10
+        width: 232
+        radius: Theme.contentRadius
+        color: Theme.surfaceContainerLow
 
-            width: 232
-            height: parent.height
-            color: Theme.surfaceContainerLow
+        Column {
+            id: sidebarHeader
 
-            Column {
-                id: sidebarHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 18
+            spacing: 8
 
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 18
-                spacing: 8
+            Text {
+                text: "Theme Designer"
+                color: Theme.surfaceText
+                font.family: Themes.fontFamily
+                font.pixelSize: 22
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                width: parent.width
+                text: "Shared values and both appearance modes live together. Every valid edit previews immediately."
+                color: Theme.surfaceVariantText
+                font: Theme.bodyFont
+                wrapMode: Text.Wrap
+            }
+
+        }
+
+        ListView {
+            id: navigationList
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: sidebarHeader.bottom
+            anchors.bottom: sidebarFooter.top
+            anchors.topMargin: 14
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 3
+            clip: true
+            model: Themes.editorTokens.navigationSections
+
+            delegate: Rectangle {
+                id: navigationItem
+
+                required property var modelData
+
+                width: navigationList.width
+                height: 40
+                radius: Theme.cardRadius
+                color: tokenList.visibleSection === modelData.title ? Theme.surfaceContainerHighest : navigationHover.hovered ? Theme.surfaceContainerHigh : "transparent"
 
                 Text {
-                    text: "Theme Designer"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.leftMargin: 14
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: navigationItem.modelData.title
                     color: Theme.surfaceText
-                    font.family: Themes.fontFamily
-                    font.pixelSize: 22
-                    font.weight: Font.DemiBold
-                }
-
-                Text {
-                    width: parent.width
-                    text: "Shared values and both appearance modes live together. Every valid edit previews immediately."
-                    color: Theme.surfaceVariantText
-                    font: Theme.bodyFont
-                    wrapMode: Text.Wrap
-                }
-
-            }
-
-            ListView {
-                id: navigationList
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: sidebarHeader.bottom
-                anchors.bottom: sidebarFooter.top
-                anchors.topMargin: 14
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                spacing: 3
-                clip: true
-                model: Themes.editorTokens.navigationSections
-
-                delegate: Rectangle {
-                    id: navigationItem
-
-                    required property var modelData
-
-                    width: navigationList.width
-                    height: 40
-                    radius: Theme.cardRadius
-                    color: tokenList.visibleSection === modelData.title ? Theme.surfaceContainerHighest : navigationHover.hovered ? Theme.surfaceContainerHigh : "transparent"
-
-                    Text {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.leftMargin: 14
-                        anchors.rightMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: navigationItem.modelData.title
-                        color: Theme.surfaceText
-                        font: Theme.labelFont
-                        elide: Text.ElideRight
-                    }
-
-                    HoverHandler {
-                        id: navigationHover
-                    }
-
-                    TapHandler {
-                        onTapped: {
-                            Themes.editorTokens.selectedSection = navigationItem.modelData.title;
-                            const targetIndex = Themes.editorTokens.firstIndexForSection(navigationItem.modelData.title);
-                            if (targetIndex < 0)
-                                tokenList.positionViewAtBeginning();
-                            else
-                                tokenList.positionViewAtIndex(targetIndex, ListView.Beginning);
-                        }
-                    }
-
-                }
-
-            }
-
-            Column {
-                id: sidebarFooter
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 18
-                spacing: 5
-
-                Text {
-                    text: Themes.editorDirty ? "Unsaved changes" : "All changes saved"
-                    color: Themes.editorDirty ? Theme.primary : Theme.surfaceVariantText
                     font: Theme.labelFont
+                    elide: Text.ElideRight
                 }
 
-                Text {
-                    width: parent.width
-                    text: "Alpha is supported by every color picker."
-                    color: Theme.surfaceVariantText
-                    font.pixelSize: 12
-                    font.family: Themes.fontFamily
-                    wrapMode: Text.Wrap
+                HoverHandler {
+                    id: navigationHover
+                }
+
+                TapHandler {
+                    onTapped: {
+                        Themes.editorTokens.selectedSection = navigationItem.modelData.title;
+                        const targetIndex = Themes.editorTokens.firstIndexForSection(navigationItem.modelData.title);
+                        if (targetIndex < 0)
+                            tokenList.positionViewAtBeginning();
+                        else
+                            tokenList.positionViewAtIndex(targetIndex, ListView.Beginning);
+                    }
                 }
 
             }
 
         }
 
-        Item {
-            width: parent.width - sidebar.width
-            height: parent.height
+        Column {
+            id: sidebarFooter
 
-            Rectangle {
-                id: actionBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 18
+            spacing: 5
 
+            Text {
+                text: Themes.editorDirty ? "Unsaved changes" : "All changes saved"
+                color: Themes.editorDirty ? Theme.primary : Theme.surfaceVariantText
+                font: Theme.labelFont
+            }
+
+            Text {
+                width: parent.width
+                text: "Alpha is supported by every color picker."
+                color: Theme.surfaceVariantText
+                font.pixelSize: 12
+                font.family: Themes.fontFamily
+                wrapMode: Text.Wrap
+            }
+
+        }
+
+    }
+
+    Item {
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: 10
+
+        Rectangle {
+            id: actionBar
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 80
+            color: "transparent"
+
+            Column {
                 anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(160, parent.width - actionButtons.width - 72)
+                spacing: 2
+
+                Text {
+                    text: tokenList.visibleSection
+                    color: Theme.surfaceText
+                    font.family: Themes.fontFamily
+                    font.pixelSize: 25
+                    font.weight: Font.DemiBold
+                }
+
+                Text {
+                    width: parent.width
+                    text: Themes.editorName.length > 0 ? Themes.editorName : "Untitled theme"
+                    color: Theme.surfaceVariantText
+                    font: Theme.bodyFont
+                    elide: Text.ElideRight
+                }
+
+            }
+
+            Row {
+                id: actionButtons
+
                 anchors.right: parent.right
-                anchors.top: parent.top
-                height: 80
-                color: Theme.surfaceContainerLow
+                anchors.rightMargin: 20
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 4
+
+                EdenButton {
+                    text: "Revert"
+                    enabled: Themes.editorDirty
+                    onClicked: Themes.revertEditing()
+                }
+
+                EdenButton {
+                    text: "Save"
+                    enabled: Themes.editorDirty
+                    onClicked: Themes.saveEditing()
+                }
+
+                EdenButton {
+                    text: "Save as new"
+                    onClicked: Themes.saveEditingAs()
+                }
+
+                EdenButton {
+                    text: "Export"
+                    onClicked: exportDialog.open()
+                }
+
+            }
+
+        }
+
+        ListView {
+            id: tokenList
+
+            readonly property string visibleSection: !headerItem || contentY < headerItem.height || currentSection.length === 0 ? "Overview" : currentSection
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: actionBar.bottom
+            anchors.bottom: parent.bottom
+            clip: true
+            model: Themes.editorTokens
+            section.property: "tokenSection"
+            section.criteria: ViewSection.FullString
+            section.labelPositioning: ViewSection.InlineLabels
+
+            header: Item {
+                width: tokenList.width
+                height: overviewContent.implicitHeight + 48
 
                 Column {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 24
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(160, parent.width - actionButtons.width - 72)
-                    spacing: 2
+                    id: overviewContent
+
+                    x: 24
+                    y: 24
+                    width: parent.width - 48
+                    spacing: 14
 
                     Text {
-                        text: tokenList.visibleSection
+                        text: "Overview"
                         color: Theme.surfaceText
                         font.family: Themes.fontFamily
-                        font.pixelSize: 25
+                        font.pixelSize: 24
                         font.weight: Font.DemiBold
                     }
 
                     Text {
                         width: parent.width
-                        text: Themes.editorName.length > 0 ? Themes.editorName : "Untitled theme"
+                        text: Themes.editorTokens.sectionDescription("Overview")
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
-                        elide: Text.ElideRight
+                        wrapMode: Text.Wrap
                     }
 
-                }
+                    Rectangle {
+                        width: parent.width
+                        height: identityRow.implicitHeight + 28
+                        radius: Theme.cardRadius
+                        color: Theme.surfaceContainer
 
-                Row {
-                    id: actionButtons
+                        Row {
+                            id: identityRow
 
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
+                            anchors.fill: parent
+                            anchors.margins: 14
+                            spacing: 12
 
-                    EdenButton {
-                        text: "Revert"
-                        enabled: Themes.editorDirty
-                        onClicked: Themes.revertEditing()
+                            IdentityField {
+                                width: (parent.width - 24) / 3
+                                label: "Theme ID"
+                                detail: "Lowercase sharing identifier."
+                                value: Themes.editorId
+                                onEdited: (value) => {
+                                    return Themes.editorId = value;
+                                }
+                            }
+
+                            IdentityField {
+                                width: (parent.width - 24) / 3
+                                label: "Display name"
+                                detail: "Name shown in Settings."
+                                value: Themes.editorName
+                                onEdited: (value) => {
+                                    return Themes.editorName = value;
+                                }
+                            }
+
+                            IdentityField {
+                                width: (parent.width - 24) / 3
+                                label: "Author"
+                                detail: "Creator included in exports."
+                                value: Themes.editorAuthor
+                                onEdited: (value) => {
+                                    return Themes.editorAuthor = value;
+                                }
+                            }
+
+                        }
+
                     }
 
-                    EdenButton {
-                        text: "Save"
-                        enabled: Themes.editorDirty
-                        onClicked: Themes.saveEditing()
-                    }
-
-                    EdenButton {
-                        text: "Save as new"
-                        onClicked: Themes.saveEditingAs()
-                    }
-
-                    EdenButton {
-                        text: "Export"
-                        onClicked: exportDialog.open()
+                    Text {
+                        width: parent.width
+                        visible: Themes.lastError.length > 0
+                        text: Themes.lastError
+                        color: Theme.error
+                        font: Theme.bodyFont
+                        wrapMode: Text.Wrap
                     }
 
                 }
 
             }
 
-            ListView {
-                id: tokenList
+            section.delegate: Item {
+                required property string section
 
-                readonly property string visibleSection: !headerItem || contentY < headerItem.height || currentSection.length === 0 ? "Overview" : currentSection
+                width: tokenList.width
+                height: sectionHeading.implicitHeight + 34
 
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: actionBar.bottom
-                anchors.bottom: parent.bottom
-                clip: true
-                model: Themes.editorTokens
-                section.property: "tokenSection"
-                section.criteria: ViewSection.FullString
-                section.labelPositioning: ViewSection.InlineLabels
+                Column {
+                    id: sectionHeading
 
-                header: Item {
-                    width: tokenList.width
-                    height: overviewContent.implicitHeight + 48
+                    x: 24
+                    y: 20
+                    width: parent.width - 48
+                    spacing: 4
 
-                    Column {
-                        id: overviewContent
+                    Text {
+                        text: sectionHeading.parent.section
+                        color: Theme.surfaceText
+                        font.family: Themes.fontFamily
+                        font.pixelSize: 23
+                        font.weight: Font.DemiBold
+                    }
 
-                        x: 24
-                        y: 24
-                        width: parent.width - 48
-                        spacing: 14
+                    Text {
+                        width: parent.width
+                        text: Themes.editorTokens.sectionDescription(sectionHeading.parent.section)
+                        color: Theme.surfaceVariantText
+                        font: Theme.bodyFont
+                        wrapMode: Text.Wrap
+                    }
 
-                        Text {
-                            text: "Overview"
-                            color: Theme.surfaceText
-                            font.family: Themes.fontFamily
-                            font.pixelSize: 24
-                            font.weight: Font.DemiBold
-                        }
+                }
 
-                        Text {
-                            width: parent.width
-                            text: Themes.editorTokens.sectionDescription("Overview")
-                            color: Theme.surfaceVariantText
-                            font: Theme.bodyFont
-                            wrapMode: Text.Wrap
-                        }
+            }
 
-                        Rectangle {
-                            width: parent.width
-                            height: identityRow.implicitHeight + 28
-                            radius: Theme.cardRadius
-                            color: Theme.surfaceContainer
+            delegate: Item {
+                id: tokenEditor
 
-                            Row {
-                                id: identityRow
+                required property string tokenPath
+                required property string tokenLabel
+                required property string tokenDescription
+                required property string tokenSection
+                required property string tokenKind
+                required property var tokenValue
+                required property real tokenMinimum
+                required property real tokenMaximum
+                required property string tokenUnit
+                required property var tokenOptions
+                required property bool tokenPaired
+                required property string tokenLightPath
+                required property string tokenDarkPath
+                required property var tokenLightValue
+                required property var tokenDarkValue
 
-                                anchors.fill: parent
-                                anchors.margins: 14
-                                spacing: 12
+                width: tokenList.width
+                height: tokenCard.implicitHeight + 10
 
-                                IdentityField {
-                                    width: (parent.width - 24) / 3
-                                    label: "Theme ID"
-                                    detail: "Lowercase sharing identifier."
-                                    value: Themes.editorId
-                                    onEdited: (value) => {
-                                        return Themes.editorId = value;
-                                    }
-                                }
+                Rectangle {
+                    id: tokenCard
 
-                                IdentityField {
-                                    width: (parent.width - 24) / 3
-                                    label: "Display name"
-                                    detail: "Name shown in Settings."
-                                    value: Themes.editorName
-                                    onEdited: (value) => {
-                                        return Themes.editorName = value;
-                                    }
-                                }
+                    x: 24
+                    width: parent.width - 48
+                    implicitHeight: Math.max(86, tokenRow.implicitHeight + 26)
+                    height: implicitHeight
+                    radius: Theme.cardRadius
+                    color: Theme.surfaceContainer
 
-                                IdentityField {
-                                    width: (parent.width - 24) / 3
-                                    label: "Author"
-                                    detail: "Creator included in exports."
-                                    value: Themes.editorAuthor
-                                    onEdited: (value) => {
-                                        return Themes.editorAuthor = value;
-                                    }
-                                }
+                    Row {
+                        id: tokenRow
 
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: 13
+                        spacing: 18
+
+                        Column {
+                            width: Math.max(180, parent.width * 0.32)
+                            spacing: 4
+
+                            Text {
+                                text: tokenEditor.tokenLabel
+                                color: Theme.surfaceText
+                                font: Theme.labelFont
+                            }
+
+                            Text {
+                                width: parent.width
+                                text: tokenEditor.tokenDescription
+                                color: Theme.surfaceVariantText
+                                font: Theme.bodyFont
+                                wrapMode: Text.Wrap
                             }
 
                         }
-
-                        Text {
-                            width: parent.width
-                            visible: Themes.lastError.length > 0
-                            text: Themes.lastError
-                            color: Theme.error
-                            font: Theme.bodyFont
-                            wrapMode: Text.Wrap
-                        }
-
-                    }
-
-                }
-
-                section.delegate: Item {
-                    required property string section
-
-                    width: tokenList.width
-                    height: sectionHeading.implicitHeight + 34
-
-                    Column {
-                        id: sectionHeading
-
-                        x: 24
-                        y: 20
-                        width: parent.width - 48
-                        spacing: 4
-
-                        Text {
-                            text: sectionHeading.parent.section
-                            color: Theme.surfaceText
-                            font.family: Themes.fontFamily
-                            font.pixelSize: 23
-                            font.weight: Font.DemiBold
-                        }
-
-                        Text {
-                            width: parent.width
-                            text: Themes.editorTokens.sectionDescription(sectionHeading.parent.section)
-                            color: Theme.surfaceVariantText
-                            font: Theme.bodyFont
-                            wrapMode: Text.Wrap
-                        }
-
-                    }
-
-                }
-
-                delegate: Item {
-                    id: tokenEditor
-
-                    required property string tokenPath
-                    required property string tokenLabel
-                    required property string tokenDescription
-                    required property string tokenSection
-                    required property string tokenKind
-                    required property var tokenValue
-                    required property real tokenMinimum
-                    required property real tokenMaximum
-                    required property string tokenUnit
-                    required property var tokenOptions
-                    required property bool tokenPaired
-                    required property string tokenLightPath
-                    required property string tokenDarkPath
-                    required property var tokenLightValue
-                    required property var tokenDarkValue
-
-                    width: tokenList.width
-                    height: tokenCard.implicitHeight + 10
-
-                    Rectangle {
-                        id: tokenCard
-
-                        x: 24
-                        width: parent.width - 48
-                        implicitHeight: Math.max(86, tokenRow.implicitHeight + 26)
-                        height: implicitHeight
-                        radius: Theme.cardRadius
-                        color: Theme.surfaceContainer
 
                         Row {
-                            id: tokenRow
+                            width: parent.width - parent.children[0].width - parent.spacing
+                            spacing: 12
 
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.margins: 13
-                            spacing: 18
-
-                            Column {
-                                width: Math.max(180, parent.width * 0.32)
-                                spacing: 4
-
-                                Text {
-                                    text: tokenEditor.tokenLabel
-                                    color: Theme.surfaceText
-                                    font: Theme.labelFont
-                                }
-
-                                Text {
-                                    width: parent.width
-                                    text: tokenEditor.tokenDescription
-                                    color: Theme.surfaceVariantText
-                                    font: Theme.bodyFont
-                                    wrapMode: Text.Wrap
-                                }
-
+                            TokenControl {
+                                visible: !tokenEditor.tokenPaired
+                                width: visible ? Math.min(460, parent.width) : 0
+                                path: tokenEditor.tokenPath
+                                appearanceLabel: "SHARED"
+                                kind: tokenEditor.tokenKind
+                                value: tokenEditor.tokenPaired ? (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "") : tokenEditor.tokenValue
+                                minimum: tokenEditor.tokenMinimum
+                                maximum: tokenEditor.tokenMaximum
+                                unit: tokenEditor.tokenUnit
+                                options: tokenEditor.tokenOptions
                             }
 
-                            Row {
-                                width: parent.width - parent.children[0].width - parent.spacing
-                                spacing: 12
+                            TokenControl {
+                                visible: tokenEditor.tokenPaired
+                                width: visible ? (parent.width - parent.spacing) / 2 : 0
+                                path: tokenEditor.tokenLightPath
+                                appearanceLabel: "LIGHT"
+                                kind: tokenEditor.tokenKind
+                                value: tokenEditor.tokenPaired ? tokenEditor.tokenLightValue : (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "")
+                                minimum: tokenEditor.tokenMinimum
+                                maximum: tokenEditor.tokenMaximum
+                                unit: tokenEditor.tokenUnit
+                                options: tokenEditor.tokenOptions
+                            }
 
-                                TokenControl {
-                                    visible: !tokenEditor.tokenPaired
-                                    width: visible ? Math.min(460, parent.width) : 0
-                                    path: tokenEditor.tokenPath
-                                    appearanceLabel: "SHARED"
-                                    kind: tokenEditor.tokenKind
-                                    value: tokenEditor.tokenPaired ? (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "") : tokenEditor.tokenValue
-                                    minimum: tokenEditor.tokenMinimum
-                                    maximum: tokenEditor.tokenMaximum
-                                    unit: tokenEditor.tokenUnit
-                                    options: tokenEditor.tokenOptions
-                                }
-
-                                TokenControl {
-                                    visible: tokenEditor.tokenPaired
-                                    width: visible ? (parent.width - parent.spacing) / 2 : 0
-                                    path: tokenEditor.tokenLightPath
-                                    appearanceLabel: "LIGHT"
-                                    kind: tokenEditor.tokenKind
-                                    value: tokenEditor.tokenPaired ? tokenEditor.tokenLightValue : (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "")
-                                    minimum: tokenEditor.tokenMinimum
-                                    maximum: tokenEditor.tokenMaximum
-                                    unit: tokenEditor.tokenUnit
-                                    options: tokenEditor.tokenOptions
-                                }
-
-                                TokenControl {
-                                    visible: tokenEditor.tokenPaired
-                                    width: visible ? (parent.width - parent.spacing) / 2 : 0
-                                    path: tokenEditor.tokenDarkPath
-                                    appearanceLabel: "DARK"
-                                    kind: tokenEditor.tokenKind
-                                    value: tokenEditor.tokenPaired ? tokenEditor.tokenDarkValue : (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "")
-                                    minimum: tokenEditor.tokenMinimum
-                                    maximum: tokenEditor.tokenMaximum
-                                    unit: tokenEditor.tokenUnit
-                                    options: tokenEditor.tokenOptions
-                                }
-
+                            TokenControl {
+                                visible: tokenEditor.tokenPaired
+                                width: visible ? (parent.width - parent.spacing) / 2 : 0
+                                path: tokenEditor.tokenDarkPath
+                                appearanceLabel: "DARK"
+                                kind: tokenEditor.tokenKind
+                                value: tokenEditor.tokenPaired ? tokenEditor.tokenDarkValue : (tokenEditor.tokenKind === "gradient" ? editorPage.emptyGradient : "")
+                                minimum: tokenEditor.tokenMinimum
+                                maximum: tokenEditor.tokenMaximum
+                                unit: tokenEditor.tokenUnit
+                                options: tokenEditor.tokenOptions
                             }
 
                         }

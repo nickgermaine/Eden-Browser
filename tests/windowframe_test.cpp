@@ -36,6 +36,7 @@ class WindowFrameTest final : public QObject {
 
   private slots:
     void outsideClickClearsFocus();
+    void childRemovalDuringTeardownIsIgnored();
     void tabNavigatorScrollsAndSnaps();
 };
 
@@ -60,6 +61,15 @@ void WindowFrameTest::outsideClickClearsFocus() {
                              Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &outsidePress);
     QVERIFY(window.activeFocusItem() != &field);
+}
+
+void WindowFrameTest::childRemovalDuringTeardownIsIgnored() {
+    QQuickWindow window;
+    eden::core::WindowFrame frame;
+    frame.setWindow(&window);
+    QEvent childRemoval(QEvent::ChildRemoved);
+    QCoreApplication::sendEvent(&window, &childRemoval);
+    QCOMPARE(frame.window(), &window);
 }
 
 void WindowFrameTest::tabNavigatorScrollsAndSnaps() {

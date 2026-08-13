@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>video:loading</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; background: #10255a; color: white; }
+body { display: grid; place-items: center; }
+video { width: 80%; max-height: 80%; border: 8px solid white; }
+</style>
+</head>
+<body>
+<video autoplay muted loop playsinline src="video.webm"></video>
+<script>
+const video = document.querySelector("video")
+let frames = 0
+const frame = () => {
+    frames += 1
+    document.title = "video:frames:" + frames
+    video.requestVideoFrameCallback(frame)
+}
+video.addEventListener("playing", () => video.requestVideoFrameCallback(frame), { once: true })
+video.addEventListener("error", () => document.title = "video:error:" + video.error.code)
+</script>
+</body>
+</html>

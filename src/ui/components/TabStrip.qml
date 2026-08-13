@@ -127,6 +127,9 @@ Item {
             required property bool isMuted
             required property var engineView
             required property string internalPage
+            required property string engineName
+            required property var tabId
+            required property bool discarded
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: strip.controller.tabDragIndex === index
 
@@ -244,51 +247,17 @@ Item {
                 id: tabMenu
 
                 y: tab.height
-                actions: [{
-                    "id": "new",
-                    "title": "New tab",
-                    "icon": "add"
-                }, {
-                    "id": "reload",
-                    "title": "Reload",
-                    "icon": "refresh"
-                }, {
-                    "id": "duplicate",
-                    "title": "Duplicate",
-                    "icon": "copy"
-                }, {
-                    "id": "pin",
-                    "title": tab.isPinned ? "Unpin" : "Pin",
-                    "icon": "pin"
-                }, {
-                    "id": "mute",
-                    "title": tab.isMuted ? "Unmute" : "Mute",
-                    "icon": tab.isMuted ? "volume" : "muted"
-                }, {
-                    "id": "close",
-                    "title": "Close",
-                    "icon": "close"
-                }, {
-                    "id": "close_others",
-                    "title": "Close others",
-                    "icon": "close"
-                }]
+                onAboutToShow: actions = strip.controller.tabContextMenuActions(tab.index)
                 onTriggered: (actionId) => {
-                    if (actionId === "new")
-                        strip.controller.newTabAndFocusOmnibox();
-                    else if (actionId === "reload" && tab.engineView)
-                        tab.engineView.reload();
-                    else if (actionId === "duplicate")
-                        strip.controller.tabs.duplicateTab(tab.index);
-                    else if (actionId === "pin")
-                        strip.controller.tabs.pinTab(tab.index, !tab.isPinned);
-                    else if (actionId === "mute")
-                        strip.controller.tabs.toggleMuted(tab.index);
-                    else if (actionId === "close")
-                        strip.controller.closeTab(tab.index);
-                    else if (actionId === "close_others")
-                        strip.controller.tabs.closeOthers(tab.index);
+                    return strip.controller.executeTabContextMenuCommand(tab.index, actionId);
                 }
+            }
+
+            TabPreview {
+                controller: strip.controller
+                tabIndex: tab.index
+                anchorItem: tab
+                anchorHovered: pointer.hovered && !tabMenu.opened && !tab.dragging
             }
 
             transform: Translate {

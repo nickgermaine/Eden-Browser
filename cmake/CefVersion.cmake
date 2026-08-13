@@ -1,0 +1,3 @@
+set(EDEN_CEF_VERSION "151.3.16+gbe1e15d+chromium-151.0.7922.109")
+set(EDEN_CEF_LINUX_X86_64_ARCHIVE "cef_binary_${EDEN_CEF_VERSION}_linux64_minimal.tar.bz2")
+set(EDEN_CEF_LINUX_X86_64_SHA1 "13042a73aeaf0e853a719d3ddad0751514665bb9")

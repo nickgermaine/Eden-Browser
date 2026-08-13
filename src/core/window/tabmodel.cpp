@@ -1,17 +1,58 @@
 #include "core/window/tabmodel.h"
 #include "core/urlsanitizer.h"
 #include "engine/engineprofile.h"
+#include "engine/engineregistry.h"
 #include "engine/engineview.h"
 
+#include <QJsonObject>
+
 #include <algorithm>
+#include <atomic>
 
 namespace eden::core {
 
-TabModel::TabModel(ViewFactory factory, bool privateMode, QObject *parent, std::shared_ptr<engine::EngineProfile> profileLease)
+static quint64 nextTabId() {
+    static std::atomic<quint64> next = 1;
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+static QString internalPageTitle(const QString &page) {
+    if (page == "settings") {
+        return "Settings";
+    }
+    if (page == "theme-editor") {
+        return "Theme Editor";
+    }
+    return "Eden";
+}
+
+QString TabModel::internalPageForUrl(const QUrl &url) {
+    if (url.scheme() != "eden") {
+        return {};
+    }
+    const QString host = url.host();
+    if (host == "settings" || host == "theme-editor") {
+        return host;
+    }
+    return {};
+}
+
+TabModel::TabModel(LegacyViewFactory factory, bool privateMode, QObject *parent, std::shared_ptr<engine::EngineProfile> profileLease)
+    : TabModel([factory = std::move(factory)](engine::Backend, engine::EngineProfile *) { return factory ? factory() : nullptr; },
+               [profileLease = std::move(profileLease)](engine::Backend) { return profileLease; }, engine::EngineRegistry::instance(),
+               engine::Backend::QtWebEngine, privateMode, parent) {}
+
+TabModel::TabModel(ViewFactory factory, ProfileResolver profileResolver, const engine::EngineRegistry *registry,
+                   engine::Backend defaultBackend, bool privateMode, QObject *parent)
     : QAbstractListModel(parent),
       m_factory(std::move(factory)),
-      m_profileLease(std::move(profileLease)),
+      m_profileResolver(std::move(profileResolver)),
+      m_registry(registry ? registry : engine::EngineRegistry::instance()),
+      m_defaultBackend(defaultBackend),
       m_privateMode(privateMode) {
+    if (!m_registry->contains(m_defaultBackend) && !m_registry->descriptors().isEmpty()) {
+        m_defaultBackend = m_registry->descriptors().constFirst().backend;
+    }
     m_undoTimer.setSingleShot(true);
     m_undoTimer.setInterval(10000);
     connect(&m_undoTimer, &QTimer::timeout, this, [this] {
@@ -33,16 +74,17 @@ QVariant TabModel::data(const QModelIndex &index, int role) const {
     const Tab &tab = *m_tabs.at(index.row());
     engine::EngineView *view = tab.view.get();
     if (role == TitleRole) {
-        if (!view) {
-            return tab.title;
+        if (!view || view->title().isEmpty()) {
+            return tab.title.isEmpty() ? tab.url.host() : tab.title;
         }
-        return view->title().isEmpty() ? view->url().host() : view->title();
+        return view->title();
     }
     if (role == UrlRole) {
-        return urlWithoutCredentials(view ? view->url() : tab.url);
+        const QUrl currentUrl = view && !view->url().isEmpty() ? view->url() : tab.url;
+        return urlWithoutCredentials(currentUrl);
     }
     if (role == FaviconRole) {
-        return view ? view->faviconUrl() : QUrl();
+        return view && !view->faviconUrl().isEmpty() ? view->faviconUrl() : tab.favicon;
     }
     if (role == LoadingRole) {
         return view && view->isLoading();
@@ -57,7 +99,7 @@ QVariant TabModel::data(const QModelIndex &index, int role) const {
         return view && view->isAudible();
     }
     if (role == MutedRole) {
-        return view && view->isMuted();
+        return view ? view->isMuted() : tab.state.value("muted").toBool();
     }
     if (role == PrivateRole) {
         return tab.privateMode;
@@ -67,6 +109,15 @@ QVariant TabModel::data(const QModelIndex &index, int role) const {
     }
     if (role == InternalPageRole) {
         return tab.internalPage;
+    }
+    if (role == EngineNameRole) {
+        return m_registry->displayName(tab.backend);
+    }
+    if (role == TabIdRole) {
+        return QVariant::fromValue(tab.id);
+    }
+    if (role == DiscardedRole) {
+        return !view && tab.internalPage.isEmpty();
     }
     return {};
 }
@@ -82,34 +133,29 @@ QHash<int, QByteArray> TabModel::roleNames() const {
             {MutedRole, "isMuted"},
             {PrivateRole, "isPrivate"},
             {EngineViewRole, "engineView"},
-            {InternalPageRole, "internalPage"}};
+            {InternalPageRole, "internalPage"},
+            {EngineNameRole, "engineName"},
+            {TabIdRole, "tabId"},
+            {DiscardedRole, "discarded"}};
 }
 
-int TabModel::addTab(const QUrl &url, bool background) {
+int TabModel::addTab(const QUrl &url, bool background, const QString &backendId) {
     std::unique_ptr<Tab> tab = std::make_unique<Tab>();
+    tab->id = nextTabId();
     tab->privateMode = m_privateMode;
-    tab->profileLease = m_profileLease;
-    const QUrl destination = url.isEmpty() ? QUrl("about:blank") : url;
-    if (destination.scheme() == "eden") {
-        tab->url = destination;
-        tab->internalPage = destination.host();
-        if (tab->internalPage == "settings") {
-            tab->title = "Settings";
-        } else if (tab->internalPage == "theme-editor") {
-            tab->title = "Theme Editor";
-        } else {
-            tab->title = "Eden";
-        }
-    } else {
-        tab->view = m_factory();
-        connectTab(*tab);
+    tab->backend = resolvedBackend(backendId);
+    tab->url = url.isEmpty() ? QUrl("about:blank") : url;
+    tab->state.insert("url", tab->url);
+    tab->internalPage = internalPageForUrl(tab->url);
+    if (!tab->internalPage.isEmpty()) {
+        tab->title = internalPageTitle(tab->internalPage);
     }
     const int row = rowCount();
     beginInsertRows({}, row, row);
     m_tabs.push_back(std::move(tab));
     endInsertRows();
-    if (m_tabs.back()->view) {
-        m_tabs.back()->view->load(destination);
+    if (m_tabs.back()->internalPage.isEmpty()) {
+        createView(row);
     }
     emit countChanged();
     emit operationOccurred();
@@ -123,10 +169,16 @@ bool TabModel::closeTab(int row) {
     }
     const bool hadUndo = canUndoClose();
     const bool removedPinned = m_tabs.at(row)->pinned;
+    if (m_tabs.at(row)->view) {
+        m_tabs.at(row)->view->closeDevTools();
+    }
     beginRemoveRows({}, row, row);
     std::unique_ptr<Tab> removed = std::move(m_tabs.at(row));
     m_tabs.erase(m_tabs.begin() + row);
     endRemoveRows();
+    updateCachedState(*removed);
+    removed->view.reset();
+    removed->profileLease.reset();
     m_closedTab = std::make_unique<ClosedTab>();
     m_closedTab->tab = std::move(removed);
     m_closedTab->index = row;
@@ -201,7 +253,7 @@ int TabModel::duplicateTab(int row) {
     if (row < 0 || row >= rowCount()) {
         return -1;
     }
-    const int added = addTab(data(index(row), UrlRole).toUrl(), false);
+    const int added = addTab(data(index(row), UrlRole).toUrl(), false, backendIdAt(row));
     if (added < 0) {
         return added;
     }
@@ -243,8 +295,107 @@ QObject *TabModel::engineAt(int row) const {
     return engineViewAt(row);
 }
 
+bool TabModel::convertTab(int row, const QString &backendId, bool rehydrate) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    const std::optional<engine::Backend> backend = m_registry->backendForId(backendId);
+    if (!backend) {
+        return false;
+    }
+    Tab &tab = *m_tabs.at(row);
+    if (tab.backend == *backend) {
+        return !rehydrate || ensureEngine(row);
+    }
+    discardTab(row);
+    tab.backend = *backend;
+    bool created = true;
+    if (rehydrate && tab.internalPage.isEmpty()) {
+        created = createView(row);
+    }
+    emit dataChanged(index(row), index(row),
+                     {EngineNameRole, EngineViewRole, LoadingRole, ProgressRole, AudibleRole, MutedRole, DiscardedRole});
+    emit operationOccurred();
+    return created;
+}
+
+bool TabModel::convertAllTabs(const QString &backendId, int activeIndex) {
+    const std::optional<engine::Backend> backend = m_registry->backendForId(backendId);
+    if (!backend) {
+        return false;
+    }
+    bool converted = true;
+    for (int row = 0; row < rowCount(); ++row) {
+        if (row == activeIndex) {
+            converted = convertTab(row, backendId, true) && converted;
+        } else if (m_tabs.at(row)->backend == *backend) {
+            converted = discardTab(row) && converted;
+        } else {
+            converted = convertTab(row, backendId, false) && converted;
+        }
+    }
+    return converted;
+}
+
+bool TabModel::ensureEngine(int row) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    Tab &tab = *m_tabs.at(row);
+    return tab.view || !tab.internalPage.isEmpty() || createView(row);
+}
+
+bool TabModel::setInternalPage(int row, const QUrl &url) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    const QString page = internalPageForUrl(url);
+    if (page.isEmpty()) {
+        return false;
+    }
+    discardTab(row);
+    Tab &tab = *m_tabs.at(row);
+    tab.url = url;
+    tab.internalPage = page;
+    tab.title = internalPageTitle(page);
+    tab.favicon = QUrl();
+    tab.state = QVariantMap();
+    tab.state.insert("url", tab.url);
+    tab.state.insert("title", tab.title);
+    emit dataChanged(index(row), index(row),
+                     {TitleRole, UrlRole, FaviconRole, LoadingRole, ProgressRole, AudibleRole, MutedRole, EngineViewRole, InternalPageRole,
+                      DiscardedRole});
+    emit operationOccurred();
+    return true;
+}
+
+bool TabModel::setInternalPageUrl(int row, const QUrl &url) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    Tab &tab = *m_tabs.at(row);
+    if (tab.internalPage.isEmpty() || internalPageForUrl(url) != tab.internalPage || tab.url == url) {
+        return false;
+    }
+    tab.url = url;
+    tab.state.insert("url", tab.url);
+    emit dataChanged(index(row), index(row), {UrlRole});
+    emit operationOccurred();
+    return true;
+}
+
+bool TabModel::setDefaultBackend(const QString &backendId) {
+    const std::optional<engine::Backend> backend = m_registry->backendForId(backendId);
+    if (!backend) {
+        return false;
+    }
+    m_defaultBackend = *backend;
+    return true;
+}
+
 bool TabModel::transferTabTo(int row, TabModel *destination, int destinationRow) {
-    if (!destination || row < 0 || row >= rowCount() || m_privateMode != destination->m_privateMode) {
+    if (!destination || row < 0 || row >= rowCount() || m_privateMode != destination->m_privateMode ||
+        !destination->m_registry->contains(m_tabs.at(row)->backend)) {
         return false;
     }
     const bool transferredPinned = m_tabs.at(row)->pinned;
@@ -283,10 +434,60 @@ bool TabModel::transferTabTo(int row, TabModel *destination, int destinationRow)
     emit operationOccurred();
     emit destination->operationOccurred();
     emit destination->tabAdded(destinationRow, false);
+    if (view) {
+        emit destination->tabEngineCreated(destinationRow, view);
+    }
     if (m_tabs.empty()) {
         emit tabCloseRequestedForWindow();
     }
     return true;
+}
+
+int TabModel::restoreTab(const QUrl &url, const QString &title, bool pinned, const QString &backendId) {
+    std::unique_ptr<Tab> tab = std::make_unique<Tab>();
+    tab->id = nextTabId();
+    tab->privateMode = m_privateMode;
+    tab->backend = resolvedBackend(backendId);
+    tab->url = url.isEmpty() ? QUrl("about:blank") : url;
+    tab->title = title;
+    tab->pinned = pinned;
+    tab->state.insert("url", tab->url);
+    tab->state.insert("title", tab->title);
+    tab->internalPage = internalPageForUrl(tab->url);
+    const int row = pinned ? pinnedCount() : rowCount();
+    beginInsertRows({}, row, row);
+    m_tabs.insert(m_tabs.begin() + row, std::move(tab));
+    endInsertRows();
+    emit countChanged();
+    if (pinned) {
+        emit pinnedCountChanged();
+    }
+    emit tabAdded(row, true);
+    return row;
+}
+
+void TabModel::restoreTabs(const QJsonArray &tabs) {
+    for (const QJsonValue &value : tabs) {
+        const QJsonObject tab = value.toObject();
+        restoreTab(urlWithoutCredentials(QUrl(tab.value("url").toString())), tab.value("title").toString(), tab.value("pinned").toBool(),
+                   tab.value("backend").toString());
+    }
+    if (!tabs.isEmpty()) {
+        emit operationOccurred();
+    }
+}
+
+QJsonArray TabModel::sessionTabs() const {
+    QJsonArray tabs;
+    for (int row = 0; row < rowCount(); ++row) {
+        QJsonObject tab;
+        tab.insert("url", data(index(row), UrlRole).toUrl().toString());
+        tab.insert("title", data(index(row), TitleRole).toString());
+        tab.insert("pinned", data(index(row), PinnedRole).toBool());
+        tab.insert("backend", backendIdAt(row));
+        tabs.append(tab);
+    }
+    return tabs;
 }
 
 int TabModel::pinnedCount() const {
@@ -308,7 +509,56 @@ engine::EngineProfile *TabModel::profileAt(int row) const {
     if (row < 0 || row >= rowCount()) {
         return nullptr;
     }
-    return m_tabs.at(row)->profileLease ? m_tabs.at(row)->profileLease.get() : nullptr;
+    return m_tabs.at(row)->profileLease.get();
+}
+
+QString TabModel::backendIdAt(int row) const {
+    if (row < 0 || row >= rowCount()) {
+        return {};
+    }
+    return m_registry->idForBackend(m_tabs.at(row)->backend);
+}
+
+QString TabModel::defaultBackendId() const {
+    return m_registry->idForBackend(m_defaultBackend);
+}
+
+quint64 TabModel::tabIdAt(int row) const {
+    if (row < 0 || row >= rowCount()) {
+        return 0;
+    }
+    return m_tabs.at(row)->id;
+}
+
+bool TabModel::isDiscarded(int row) const {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    const Tab &tab = *m_tabs.at(row);
+    return !tab.view && tab.internalPage.isEmpty();
+}
+
+qint64 TabModel::rendererProcessIdAt(int row) const {
+    engine::EngineView *view = engineViewAt(row);
+    return view ? view->rendererProcessId() : 0;
+}
+
+int TabModel::rendererProcessUseCount(qint64 processId) const {
+    if (processId <= 0) {
+        return 0;
+    }
+    return static_cast<int>(std::count_if(m_tabs.cbegin(), m_tabs.cend(), [processId](const std::unique_ptr<Tab> &tab) {
+        return tab->view && tab->view->rendererProcessId() == processId;
+    }));
+}
+
+int TabModel::indexForTabId(quint64 tabId) const {
+    for (int row = 0; row < rowCount(); ++row) {
+        if (m_tabs.at(row)->id == tabId) {
+            return row;
+        }
+    }
+    return -1;
 }
 
 void TabModel::connectTab(Tab &tab) {
@@ -323,8 +573,84 @@ void TabModel::connectTab(Tab &tab) {
     connect(view, &engine::EngineView::loadProgressChanged, this, [this, view] { notifyViewChanged(view, {ProgressRole}); });
     connect(view, &engine::EngineView::audibleChanged, this, [this, view] { notifyViewChanged(view, {AudibleRole}); });
     connect(view, &engine::EngineView::mutedChanged, this, [this, view] { notifyViewChanged(view, {MutedRole}); });
-    connect(view, &engine::EngineView::newViewRequested, this,
-            [this](engine::EngineNewViewRequest *request) { emit externalViewRequested(request); });
+    connect(view, &engine::EngineView::newViewRequested, this, [this, view](engine::EngineNewViewRequest *request) {
+        const int row = indexOf(view);
+        if (row >= 0) {
+            emit externalViewRequested(request, row, backendIdAt(row));
+        }
+    });
+}
+
+bool TabModel::discardTab(int row) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    Tab &tab = *m_tabs.at(row);
+    if (!tab.view) {
+        return true;
+    }
+    updateCachedState(tab);
+    tab.view.reset();
+    tab.profileLease.reset();
+    emit dataChanged(index(row), index(row),
+                     {TitleRole, UrlRole, FaviconRole, LoadingRole, ProgressRole, AudibleRole, MutedRole, EngineViewRole, DiscardedRole});
+    return true;
+}
+
+bool TabModel::createView(int row) {
+    if (row < 0 || row >= rowCount()) {
+        return false;
+    }
+    Tab &tab = *m_tabs.at(row);
+    if (tab.view || !tab.internalPage.isEmpty()) {
+        return true;
+    }
+    tab.profileLease = m_profileResolver ? m_profileResolver(tab.backend) : nullptr;
+    tab.view = m_factory ? m_factory(tab.backend, tab.profileLease.get()) : nullptr;
+    if (!tab.view) {
+        tab.profileLease.reset();
+        return false;
+    }
+    connectTab(tab);
+    emit tabEngineCreated(row, tab.view.get());
+    const QUrl storedUrl = tab.state.value("url").toUrl();
+    if (storedUrl.scheme() == "eden") {
+        const QUrl mapped = tab.view->internalUrlFor(storedUrl);
+        if (!mapped.isEmpty()) {
+            tab.state.insert("url", mapped);
+        }
+    }
+    tab.view->restoreState(tab.state);
+    emit dataChanged(index(row), index(row),
+                     {TitleRole, UrlRole, FaviconRole, LoadingRole, ProgressRole, AudibleRole, MutedRole, EngineViewRole, DiscardedRole});
+    return true;
+}
+
+engine::Backend TabModel::resolvedBackend(const QString &backendId) const {
+    if (backendId.isEmpty()) {
+        return m_defaultBackend;
+    }
+    return m_registry->backendForId(backendId).value_or(m_defaultBackend);
+}
+
+void TabModel::updateCachedState(Tab &tab) {
+    if (!tab.view) {
+        return;
+    }
+    const QUrl currentUrl = tab.view->url();
+    if (!currentUrl.isEmpty()) {
+        tab.url = currentUrl;
+    }
+    if (!tab.view->title().isEmpty()) {
+        tab.title = tab.view->title();
+    }
+    if (!tab.view->faviconUrl().isEmpty()) {
+        tab.favicon = tab.view->faviconUrl();
+    }
+    tab.state = tab.view->serializeState();
+    tab.state.insert("url", tab.url);
+    tab.state.insert("title", tab.title);
+    tab.state.insert("faviconUrl", tab.favicon);
 }
 
 int TabModel::indexOf(const engine::EngineView *view) const {
@@ -338,10 +664,27 @@ int TabModel::indexOf(const engine::EngineView *view) const {
 
 void TabModel::notifyViewChanged(engine::EngineView *view, const QList<int> &roles) {
     const int row = indexOf(view);
-    if (row >= 0) {
-        emit dataChanged(index(row), index(row), roles);
-        emit operationOccurred();
+    if (row < 0) {
+        return;
     }
+    Tab &tab = *m_tabs.at(row);
+    if (roles.contains(UrlRole) && !view->url().isEmpty()) {
+        tab.url = view->url();
+        tab.state.insert("url", tab.url);
+    }
+    if (roles.contains(TitleRole) && !view->title().isEmpty()) {
+        tab.title = view->title();
+        tab.state.insert("title", tab.title);
+    }
+    if (roles.contains(FaviconRole) && !view->faviconUrl().isEmpty()) {
+        tab.favicon = view->faviconUrl();
+        tab.state.insert("faviconUrl", tab.favicon);
+    }
+    if (roles.contains(MutedRole)) {
+        tab.state.insert("muted", view->isMuted());
+    }
+    emit dataChanged(index(row), index(row), roles);
+    emit operationOccurred();
 }
 
 }
