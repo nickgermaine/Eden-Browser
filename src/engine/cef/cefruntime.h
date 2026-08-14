@@ -13,7 +13,7 @@ class CefRuntime final {
     static CefRuntime &instance();
 
     int executeProcess(int argc, char *argv[]);
-    bool initialize(int argc, char *argv[], const std::filesystem::path &rootCachePath = {});
+    bool initialize(int argc, char *argv[], const char *product, const char *version, const std::filesystem::path &rootCachePath = {});
     void shutdown();
     bool isInitialized() const;
     int exitCode() const;

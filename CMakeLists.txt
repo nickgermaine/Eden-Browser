@@ -487,6 +487,13 @@ endif()
 add_test(NAME eden-tests COMMAND eden-tests)
 set_tests_properties(eden-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
 
+if(EDEN_ENGINE_QTWEBENGINE)
+    qt_add_executable(eden-qtwebengine-user-agent-tests tests/qtwebengineuseragent_test.cpp)
+    target_link_libraries(eden-qtwebengine-user-agent-tests PRIVATE eden-core eden-engine-qtwebengine Qt6::Test Qt6::WebEngineQuick)
+    add_test(NAME eden-qtwebengine-user-agent-tests COMMAND eden-qtwebengine-user-agent-tests)
+    set_tests_properties(eden-qtwebengine-user-agent-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
+endif()
+
 qt_add_executable(eden-thumbnail-cache-tests tests/thumbnailcache_test.cpp)
 target_link_libraries(eden-thumbnail-cache-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-thumbnail-cache-tests COMMAND eden-thumbnail-cache-tests)

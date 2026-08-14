@@ -4,22 +4,28 @@
 
 class QQuickWebEngineProfile;
 class QQmlEngine;
+class QString;
 
 namespace eden::engine {
 
-class QtWebEngineProfile final : public EngineProfile {
-    Q_OBJECT
+    class QtWebEngineProfile final : public EngineProfile {
+        Q_OBJECT
 
-  public:
-    explicit QtWebEngineProfile(bool privateProfile, QQmlEngine *engine, QObject *parent = nullptr);
-    ~QtWebEngineProfile() override;
+      public:
+        explicit QtWebEngineProfile(
+            bool privateProfile,
+            const QString &userAgent,
+            QQmlEngine *engine,
+            QObject *parent = nullptr
+        );
+        ~QtWebEngineProfile() override;
 
-    QObject *nativeProfile() const override;
-    void clearData() override;
+        QObject *nativeProfile() const override;
+        void clearData() override;
 
-  private:
-    QObject *m_profilePrototype;
-    QQuickWebEngineProfile *m_profile;
-};
+      private:
+        QObject *m_profilePrototype;
+        QQuickWebEngineProfile *m_profile;
+    };
 
 }

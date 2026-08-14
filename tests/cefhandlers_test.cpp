@@ -37,6 +37,7 @@
 #undef KeyPress
 #undef KeyRelease
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -91,15 +92,20 @@ class LocalPageServer final : public QTcpServer {
                         responseBody = "download-ok";
                         contentType = "text/plain";
                     } else if (path == "/popup") {
-                        const QString postValue = QString::fromUtf8(body).contains("value=posted") ? "posted" : "missing";
+                        const QString postValue =
+                            QString::fromUtf8(body).contains("value=posted") ? "posted" : "missing";
                         responseBody =
-                            QString("<!doctype html><title>Popup pending</title><body>popup<script>document.title='Popup "
-                                    "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')+' post=%1'</script></body>")
+                            QString(
+                                "<!doctype html><title>Popup pending</title><body>popup<script>document.title='Popup "
+                                "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')+' "
+                                "post=%1'</script></body>"
+                            )
                                 .arg(postValue)
                                 .toUtf8();
                     } else if (path == "/delayed") {
-                        responseBody = "<!doctype html><title>Delayed pending</title><body>delayed<script>document.title='Delayed "
-                                       "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')</script></body>";
+                        responseBody =
+                            "<!doctype html><title>Delayed pending</title><body>delayed<script>document.title='Delayed "
+                            "opener='+(window.opener&&window.opener.name==='source'?'yes':'no')</script></body>";
                     } else {
                         responseBody = R"HTML(<!doctype html>
 <html><head><title>E35 Main</title><link rel="icon" href="/favicon.png"></head>
@@ -151,6 +157,7 @@ class CefHandlersTest final : public QObject {
     void handlerSuite();
     void devToolsSuite();
     void shellDevToolsSuite();
+    void resizeStress();
     void cleanupTestCase();
 
   private:
@@ -205,7 +212,13 @@ void CefHandlersTest::initTestCase() {
     qmlRegisterType<eden::core::WindowController>("Eden.Ui", 1, 0, "WindowController");
     qmlRegisterType<eden::core::WindowFrame>("Eden.Ui", 1, 0, "WindowFrame");
     qmlRegisterType<eden::core::TabStripNavigator>("Eden.Ui", 1, 0, "TabStripNavigator");
-    qmlRegisterUncreatableType<eden::engine::EngineView>("Eden.Ui", 1, 0, "EngineView", "Engine views are created by WindowController");
+    qmlRegisterUncreatableType<eden::engine::EngineView>(
+        "Eden.Ui",
+        1,
+        0,
+        "EngineView",
+        "Engine views are created by WindowController"
+    );
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Engines", eden::engine::EngineRegistry::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
@@ -220,8 +233,15 @@ void CefHandlersTest::initTestCase() {
     for (QByteArray &argument : encodedArguments) {
         arguments.push_back(argument.data());
     }
-    QVERIFY(eden::engine::cef::CefRuntime::instance().initialize(static_cast<int>(arguments.size()), arguments.data(),
-                                                                 m_dataDirectory.path().toStdString()));
+    QVERIFY(
+        eden::engine::cef::CefRuntime::instance().initialize(
+            static_cast<int>(arguments.size()),
+            arguments.data(),
+            "Eden",
+            "0.3.0",
+            m_dataDirectory.path().toStdString()
+        )
+    );
 }
 
 void CefHandlersTest::handlerSuite() {
@@ -262,26 +282,35 @@ void CefHandlersTest::handlerSuite() {
     QStringList popupTitles;
     int popupRequests = 0;
     bool rejectPopup = false;
-    connect(&source, &eden::engine::EngineView::newViewRequested, &source, [&](eden::engine::EngineNewViewRequest *request) {
-        ++popupRequests;
-        if (rejectPopup) {
-            rejectPopup = false;
-            return;
+    connect(
+        &source,
+        &eden::engine::EngineView::newViewRequested,
+        &source,
+        [&](eden::engine::EngineNewViewRequest *request) {
+            ++popupRequests;
+            if (rejectPopup) {
+                rejectPopup = false;
+                return;
+            }
+            auto popupWindow = std::make_unique<QQuickWindow>();
+            popupWindow->resize(760, 520);
+            popupWindow->show();
+            auto popupViewport = std::make_unique<QQuickItem>(popupWindow->contentItem());
+            popupViewport->setSize(popupWindow->size());
+            auto popupView = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
+            popupView->attach(popupViewport.get());
+            connect(
+                popupView.get(),
+                &eden::engine::EngineView::titleChanged,
+                popupView.get(),
+                [&popupTitles, view = popupView.get()] { popupTitles.append(view->title()); }
+            );
+            QVERIFY(request->openIn(popupView.get()));
+            popupWindows.push_back(std::move(popupWindow));
+            popupViewports.push_back(std::move(popupViewport));
+            popupViews.push_back(std::move(popupView));
         }
-        auto popupWindow = std::make_unique<QQuickWindow>();
-        popupWindow->resize(760, 520);
-        popupWindow->show();
-        auto popupViewport = std::make_unique<QQuickItem>(popupWindow->contentItem());
-        popupViewport->setSize(popupWindow->size());
-        auto popupView = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
-        popupView->attach(popupViewport.get());
-        connect(popupView.get(), &eden::engine::EngineView::titleChanged, popupView.get(),
-                [&popupTitles, view = popupView.get()] { popupTitles.append(view->title()); });
-        QVERIFY(request->openIn(popupView.get()));
-        popupWindows.push_back(std::move(popupWindow));
-        popupViewports.push_back(std::move(popupViewport));
-        popupViews.push_back(std::move(popupView));
-    });
+    );
 
     QQuickItem *osrItem = viewport.childItems().isEmpty() ? nullptr : viewport.childItems().constFirst();
     QVERIFY(osrItem);
@@ -361,7 +390,8 @@ void CefHandlersTest::handlerSuite() {
     QSignalSpy dialog(&source, &eden::engine::EngineView::javaScriptDialogRequested);
     QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 185));
     QTRY_COMPARE_WITH_TIMEOUT(dialog.size(), 1, 10000);
-    const eden::engine::JavaScriptDialogInfo dialogInfo = dialog.constFirst().constFirst().value<eden::engine::JavaScriptDialogInfo>();
+    const eden::engine::JavaScriptDialogInfo dialogInfo =
+        dialog.constFirst().constFirst().value<eden::engine::JavaScriptDialogInfo>();
     QCOMPARE(dialogInfo.kind, QString("prompt"));
     QCOMPARE(dialogInfo.defaultText, QString("seed"));
     source.resolveJavaScriptDialog(dialogInfo.id, true, "accepted");
@@ -425,7 +455,8 @@ void CefHandlersTest::handlerSuite() {
         QTest::qWait(100);
     }
     {
-        auto pendingPermissionView = createPendingView(QUrl(QString("http://127.0.0.2:%1/").arg(m_server.serverPort())));
+        auto pendingPermissionView =
+            createPendingView(QUrl(QString("http://127.0.0.2:%1/").arg(m_server.serverPort())));
         QTRY_COMPARE_WITH_TIMEOUT(pendingPermissionView->title(), QString("E35 Main"), 15000);
         QSignalSpy pendingPermission(pendingPermissionView.get(), &eden::engine::EngineView::permissionRequested);
         QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 255));
@@ -442,6 +473,47 @@ void CefHandlersTest::handlerSuite() {
         pendingContextView.reset();
         QTest::qWait(100);
     }
+}
+
+void CefHandlersTest::resizeStress() {
+    eden::engine::cef::CefProfile profile(true);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView source(&profile);
+    source.attach(&viewport);
+    source.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(source.loadProgress(), 100, 15000);
+
+    const std::array<QSize, 8> sizes{
+        QSize(1000, 700),
+        QSize(1500, 900),
+        QSize(920, 640),
+        QSize(1420, 840),
+        QSize(1000, 700),
+        QSize(1280, 760),
+        QSize(940, 620),
+        QSize(1000, 700),
+    };
+    for (int iteration = 0; iteration < 12; ++iteration) {
+        for (const QSize &size : sizes) {
+            window.resize(size);
+            viewport.setSize(size);
+            QTest::qWait(16);
+        }
+    }
+
+    window.resize(1000, 700);
+    viewport.setSize(window.size());
+    QTest::qWait(250);
+    const QImage screenshot = window.grabWindow();
+    QVERIFY(!screenshot.isNull());
+    QCOMPARE(screenshot.size(), QSize(1000, 700));
+    QVERIFY(screenshot.pixelColor(430, 220) != screenshot.pixelColor(10, 10));
 }
 
 void CefHandlersTest::devToolsSuite() {
@@ -469,11 +541,13 @@ void CefHandlersTest::devToolsSuite() {
 
     QImage dockedImage;
     const QString devToolsScreenshotPath = qEnvironmentVariable("EDEN_E36_SCREENSHOT");
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 dockedImage = window.grabWindow();
-                                 return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
-                             })(),
-                             15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            dockedImage = window.grabWindow();
+            return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
+        })(),
+        15000
+    );
     if (!devToolsScreenshotPath.isEmpty()) {
         QVERIFY(dockedImage.save(devToolsScreenshotPath));
     }
@@ -487,19 +561,23 @@ void CefHandlersTest::devToolsSuite() {
     source.attachDevTools(&separateViewport);
     QTRY_VERIFY_WITH_TIMEOUT(!separateViewport.childItems().isEmpty(), 10000);
     QImage separateImage;
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 separateImage = separateWindow.grabWindow();
-                                 return !separateImage.isNull() && hasColorVariation(separateImage, QRect(200, 40, 500, 350), 300);
-                             })(),
-                             15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            separateImage = separateWindow.grabWindow();
+            return !separateImage.isNull() && hasColorVariation(separateImage, QRect(200, 40, 500, 350), 300);
+        })(),
+        15000
+    );
 
     source.attachDevTools(&devToolsViewport);
     QTRY_VERIFY_WITH_TIMEOUT(!devToolsViewport.childItems().isEmpty(), 10000);
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 dockedImage = window.grabWindow();
-                                 return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
-                             })(),
-                             15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            dockedImage = window.grabWindow();
+            return !dockedImage.isNull() && hasColorVariation(dockedImage, QRect(900, 40, 300, 350), 300);
+        })(),
+        15000
+    );
 
     source.closeDevTools();
     QVERIFY(!source.devToolsOpen());
@@ -521,11 +599,13 @@ void CefHandlersTest::shellDevToolsSuite() {
     QVERIFY(controller);
     controller->initialize(true, "cef", false, true);
     eden::engine::EngineView *view = nullptr;
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
-                                 return view;
-                             })(),
-                             10000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+            return view;
+        })(),
+        10000
+    );
     view->load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
     QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("E35 Main"), 15000);
 
@@ -533,13 +613,19 @@ void CefHandlersTest::shellDevToolsSuite() {
     bool commandPaletteShortcutFound = false;
     for (int row = 0; row < controller->shortcuts()->rowCount(); ++row) {
         const QModelIndex shortcutIndex = controller->shortcuts()->index(row);
-        const QString shortcutId = controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::IdRole).toString();
+        const QString shortcutId =
+            controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::IdRole).toString();
         if (shortcutId == "devtools") {
-            QCOMPARE(controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(), QString("F12"));
+            QCOMPARE(
+                controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
+                QString("F12")
+            );
             devToolsShortcutFound = true;
         } else if (shortcutId == "command_palette") {
-            QCOMPARE(controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
-                     QString("Ctrl+K"));
+            QCOMPARE(
+                controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
+                QString("Ctrl+K")
+            );
             commandPaletteShortcutFound = true;
         }
     }
@@ -549,24 +635,30 @@ void CefHandlersTest::shellDevToolsSuite() {
     QTRY_VERIFY_WITH_TIMEOUT(view->devToolsOpen(), 10000);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
     QImage dockedRight;
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 dockedRight = window->grabWindow();
-                                 return hasColorVariation(dockedRight, QRect(900, 140, 400, 500), 300);
-                             })(),
-                             15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            dockedRight = window->grabWindow();
+            return hasColorVariation(dockedRight, QRect(900, 140, 400, 500), 300);
+        })(),
+        15000
+    );
 
     view->toggleDevToolsOrientation();
     QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsBottom);
     QImage dockedBottom;
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 dockedBottom = window->grabWindow();
-                                 return hasColorVariation(dockedBottom, QRect(400, 560, 700, 250), 300);
-                             })(),
-                             15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            dockedBottom = window->grabWindow();
+            return hasColorVariation(dockedBottom, QRect(400, 560, 700, 250), 300);
+        })(),
+        15000
+    );
 
     const auto visibleWindowCount = [] {
         const QWindowList windows = QGuiApplication::topLevelWindows();
-        return std::count_if(windows.cbegin(), windows.cend(), [](QWindow *candidate) { return candidate->isVisible(); });
+        return std::count_if(windows.cbegin(), windows.cend(), [](QWindow *candidate) {
+            return candidate->isVisible();
+        });
     };
     const int originalWindowCount = visibleWindowCount();
     view->toggleDevToolsSeparate();
@@ -580,11 +672,13 @@ void CefHandlersTest::shellDevToolsSuite() {
     controller->shortcuts()->execute("command_palette");
     QTRY_VERIFY_WITH_TIMEOUT(controller->commandPaletteVisible(), 10000);
     QImage withOverlay;
-    QTRY_VERIFY_WITH_TIMEOUT(([&] {
-                                 withOverlay = window->grabWindow();
-                                 return differingPixels(beforeOverlay, withOverlay, QRect(700, 220, 250, 400)) > 1000;
-                             })(),
-                             10000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            withOverlay = window->grabWindow();
+            return differingPixels(beforeOverlay, withOverlay, QRect(700, 220, 250, 400)) > 1000;
+        })(),
+        10000
+    );
     const QString shellScreenshotPath = qEnvironmentVariable("EDEN_E36_SHELL_SCREENSHOT");
     if (!shellScreenshotPath.isEmpty()) {
         QVERIFY(withOverlay.save(shellScreenshotPath));

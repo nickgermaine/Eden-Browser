@@ -48,9 +48,12 @@ void CefBootstrapTest::alloyRuntimeIsExplicit() {
 void CefBootstrapTest::privateContextSettingsAreInMemory() {
     const std::filesystem::path rootCachePath = "/tmp/eden-cef-profile-test";
     const CefRequestContextSettings normal = eden::engine::cef::createCefRequestContextSettings(false, rootCachePath);
-    const CefRequestContextSettings privateProfile = eden::engine::cef::createCefRequestContextSettings(true, rootCachePath);
-    QCOMPARE(QString::fromStdString(CefString(&normal.cache_path).ToString()),
-             QString::fromStdString((rootCachePath / "default").string()));
+    const CefRequestContextSettings privateProfile =
+        eden::engine::cef::createCefRequestContextSettings(true, rootCachePath);
+    QCOMPARE(
+        QString::fromStdString(CefString(&normal.cache_path).ToString()),
+        QString::fromStdString((rootCachePath / "default").string())
+    );
     QCOMPARE(normal.persist_session_cookies, 1);
     QVERIFY(CefString(&privateProfile.cache_path).ToString().empty());
     QCOMPARE(privateProfile.persist_session_cookies, 0);
@@ -64,7 +67,7 @@ void CefBootstrapTest::runtimeCreatesIsolatedProfiles() {
     QByteArray ozonePlatform = "--ozone-platform=x11";
     char *arguments[] = {executable.data(), noSandbox.data(), ozonePlatform.data()};
     eden::engine::cef::CefRuntime &runtime = eden::engine::cef::CefRuntime::instance();
-    QVERIFY(runtime.initialize(3, arguments, temporaryDirectory.path().toStdString()));
+    QVERIFY(runtime.initialize(3, arguments, "Eden", "0.3.0", temporaryDirectory.path().toStdString()));
     {
         eden::engine::cef::CefProfile normalProfile(false);
         eden::engine::cef::CefProfile firstPrivateProfile(true);

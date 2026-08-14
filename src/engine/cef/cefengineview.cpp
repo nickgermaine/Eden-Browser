@@ -938,6 +938,7 @@ class CefEngineClient final : public CefClient,
     std::array<QRegion, 2> m_stagingDirtyRegions;
     std::array<bool, 2> m_stagingFrameAvailable{true, true};
     int m_nextStagingFrame = 0;
+    QSize m_stagingFrameSize;
     std::atomic_bool m_firstPaintLogged = false;
 #if EDEN_ENABLE_AUTOMATION
     std::atomic_bool m_benchmarkReadyLogged = false;
@@ -3396,8 +3397,15 @@ void CefEngineClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, cons
         if (incomingDirtyRegion.isEmpty()) {
             incomingDirtyRegion = frameBounds;
         }
-        for (QRegion &region : m_stagingDirtyRegions) {
-            region += incomingDirtyRegion;
+        if (m_stagingFrameSize != frameSize) {
+            for (QRegion &region : m_stagingDirtyRegions) {
+                region = frameBounds;
+            }
+            m_stagingFrameSize = frameSize;
+        } else {
+            for (QRegion &region : m_stagingDirtyRegions) {
+                region += incomingDirtyRegion;
+            }
         }
         for (int offset = 0; offset < static_cast<int>(m_stagingFrames.size()); ++offset) {
             const int candidate = (m_nextStagingFrame + offset) % static_cast<int>(m_stagingFrames.size());
@@ -3419,7 +3427,8 @@ void CefEngineClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, cons
         }
         const auto *source = static_cast<const uchar *>(buffer);
         const qsizetype sourceStride = static_cast<qsizetype>(width) * 4;
-        const QSpan<const QRect> copyRects = m_stagingDirtyRegions[stagingIndex].rects();
+        const QRegion copyRegion = m_stagingDirtyRegions[stagingIndex] & frameBounds;
+        const QSpan<const QRect> copyRects = copyRegion.rects();
         for (const QRect &copyRect : copyRects) {
             const qsizetype rowBytes = static_cast<qsizetype>(copyRect.width()) * 4;
             const qsizetype columnOffset = static_cast<qsizetype>(copyRect.x()) * 4;
