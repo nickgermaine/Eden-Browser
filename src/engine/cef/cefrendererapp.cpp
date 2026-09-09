@@ -108,11 +108,23 @@ namespace eden::engine::cef {
         };
 
         constexpr const char *kClipboardHookScript = R"JS((function(){
+'use strict';
 var report = window.__edenReportCopy;
 delete window.__edenReportCopy;
 if (!report) { return; }
-var forward = function(text){ if (text) { try { report(String(text)); } catch (error) {} } };
+var textValue = String;
+var then = Function.prototype.call.bind(Promise.prototype.then);
+var reject = Promise.reject.bind(Promise);
+var arrayFrom = Array.from.bind(Array);
+var arrayValues = Function.prototype.call.bind(Array.prototype.values);
+var defineProperty = Object.defineProperty;
+var iteratorKey = Symbol.iterator;
+var getItemType = typeof ClipboardItem === 'function' ?
+    Function.prototype.call.bind(ClipboardItem.prototype.getType) : null;
+var blobText = typeof Blob === 'function' ? Function.prototype.call.bind(Blob.prototype.text) : null;
+var forward = function(text){ try { report(textValue(text)); } catch (error) {} };
 var grab = function(event){
+    if (!event || !event.isTrusted) { return; }
     var text = '';
     try { if (event && event.clipboardData) { text = event.clipboardData.getData('text/plain') || ''; } } catch (error) {}
     if (!text) { try { var selection = window.getSelection(); text = selection ? selection.toString() : ''; } catch (error) {} }
@@ -131,19 +143,35 @@ window.addEventListener('cut', grab);
 if (navigator.clipboard) {
     if (navigator.clipboard.writeText) {
         var writeText = navigator.clipboard.writeText.bind(navigator.clipboard);
-        navigator.clipboard.writeText = function(value){ forward(value); return writeText(value); };
+        navigator.clipboard.writeText = function(value){
+            if (typeof value === 'symbol') { return writeText(value); }
+            var text;
+            try { text = textValue(value); } catch (error) { return reject(error); }
+            var pending = writeText(text);
+            then(pending, function(){ forward(text); }, function(){});
+            return pending;
+        };
     }
     if (navigator.clipboard.write) {
         var write = navigator.clipboard.write.bind(navigator.clipboard);
         navigator.clipboard.write = function(items){
+            var snapshot;
             try {
-                Array.prototype.forEach.call(items || [], function(item){
-                    if (item && item.types && item.getType && item.types.indexOf('text/plain') >= 0) {
-                        item.getType('text/plain').then(function(blob){ return blob.text(); }).then(forward).catch(function(){});
-                    }
-                });
-            } catch (error) {}
-            return write(items);
+                snapshot = arrayFrom(items);
+                defineProperty(snapshot, iteratorKey, {value:function(){ return arrayValues(snapshot); }});
+            } catch (error) { return reject(error); }
+            var pending = write(snapshot);
+            then(pending, function(){
+                if (!getItemType || !blobText) { return; }
+                for (var index = 0; index < snapshot.length; ++index) {
+                    try {
+                        then(getItemType(snapshot[index], 'text/plain'), function(blob){
+                            try { then(blobText(blob), forward, function(){}); } catch (error) {}
+                        }, function(){});
+                    } catch (error) {}
+                }
+            }, function(){});
+            return pending;
         };
     }
 }
@@ -151,7 +179,7 @@ try {
     var frontendHost = window.InspectorFrontendHost;
     if (frontendHost && typeof frontendHost.copyText === 'function') {
         var copyText = frontendHost.copyText.bind(frontendHost);
-        frontendHost.copyText = function(value){ forward(value); return copyText(value); };
+        frontendHost.copyText = function(value){ var result = copyText(value); forward(value); return result; };
     }
 } catch (error) {}
 })();)JS";

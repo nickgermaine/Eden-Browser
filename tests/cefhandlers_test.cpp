@@ -88,7 +88,20 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/events") {
+                    if (path == "/clipboard-denied") {
+                        responseBody = R"HTML(<!doctype html><title>Clipboard pending</title>
+<input value="Copied by user" style="position:absolute;left:20px;top:20px;width:300px;height:48px">
+<script>
+const data = new DataTransfer();
+data.setData('text/plain', 'Synthetic clipboard text');
+window.dispatchEvent(new ClipboardEvent('copy', {clipboardData:data}));
+window.dispatchEvent(new ClipboardEvent('cut', {clipboardData:data}));
+navigator.clipboard.writeText('Denied clipboard text').then(
+    () => document.title = 'Unexpected clipboard success',
+    () => document.title = 'Clipboard denied'
+);
+</script>)HTML";
+                    } else if (path == "/events") {
                         responseBody = R"HTML(<!doctype html>
 <title>Navigation events</title><link rel="icon" href="/favicon.png">
 <button id="frames" style="position:absolute;left:20px;top:20px;width:180px;height:48px">Frame activity</button>
@@ -197,6 +210,9 @@ document.getElementById('display').onclick=()=>{
                     }
                     QByteArray headers = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: " + contentType +
                                          "\r\nContent-Length: " + QByteArray::number(responseBody.size()) + "\r\n";
+                    if (path == "/clipboard-denied") {
+                        headers += "Permissions-Policy: clipboard-write=()\r\n";
+                    }
                     if (path == "/download.txt") {
                         headers += "Content-Disposition: attachment; filename=eden-handler.txt\r\n";
                     }
@@ -235,6 +251,7 @@ class CefHandlersTest final : public QObject {
     void initTestCase();
     void handlerSuite();
     void navigationEvents();
+    void clipboardPermissions();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -592,6 +609,42 @@ void CefHandlersTest::handlerSuite() {
         pendingContextView.reset();
         QTest::qWait(100);
     }
+}
+
+void CefHandlersTest::clipboardPermissions() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11Application = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11Application);
+    Display *display = x11Application->display();
+    QVERIFY(display);
+    XSetInputFocus(display, static_cast<Window>(window.winId()), RevertToParent, CurrentTime);
+    XSync(display, False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    QGuiApplication::clipboard()->setText("Original clipboard text");
+    view.load(QUrl(QString("http://127.0.0.1:%1/clipboard-denied").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Clipboard denied"), 15000);
+    QTest::qWait(200);
+    QCOMPARE(QGuiApplication::clipboard()->text(), QString("Original clipboard text"));
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 44));
+    QVERIFY(!viewport.childItems().isEmpty());
+    QQuickItem *osrItem = viewport.childItems().constFirst();
+    osrItem->forceActiveFocus(Qt::MouseFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(osrItem->hasActiveFocus(), 5000);
+    QTest::keyClick(&window, Qt::Key_A, Qt::ControlModifier);
+    QTest::qWait(100);
+    QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(QGuiApplication::clipboard()->text(), QString("Copied by user"), 5000);
 }
 
 void CefHandlersTest::navigationEvents() {
