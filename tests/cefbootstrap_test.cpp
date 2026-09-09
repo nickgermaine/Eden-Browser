@@ -5,11 +5,14 @@
 
 #include "include/internal/cef_string_wrappers.h"
 
+#include <QEventLoop>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <atomic>
 #include <filesystem>
+#include <memory>
 #include <thread>
 
 class CefBootstrapTest final : public QObject {
@@ -17,6 +20,9 @@ class CefBootstrapTest final : public QObject {
 
   private slots:
     void bridgeQueuesWorkToQtThread();
+    void bridgePreservesOrderAndYields();
+    void bridgeCancelsPendingWork();
+    void bridgeSupportsNestedEventLoops();
     void alloyRuntimeIsExplicit();
     void privateContextSettingsAreInMemory();
     void runtimeCreatesIsolatedProfiles();
@@ -36,6 +42,80 @@ void CefBootstrapTest::bridgeQueuesWorkToQtThread() {
     QVERIFY(queued.load());
     QTRY_VERIFY(invoked.load());
     QVERIFY(ranOnUiThread.load());
+}
+
+void CefBootstrapTest::bridgePreservesOrderAndYields() {
+    using eden::engine::cef::CefUiBridge;
+    CefUiBridge::resumeTasks();
+    QList<int> received;
+    int completedAtOtherWork = -1;
+    std::thread producer([&] {
+        for (int value = 0; value < 16000; ++value) {
+            CefUiBridge::runOnUiThread([&, value] { received.append(value); });
+        }
+    });
+    producer.join();
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(),
+        [&] { completedAtOtherWork = received.size(); },
+        Qt::QueuedConnection
+    );
+    QTRY_COMPARE(received.size(), 16000);
+    QVERIFY(completedAtOtherWork >= 0);
+    QVERIFY(completedAtOtherWork < received.size());
+    for (int index = 0; index < received.size(); ++index) {
+        QCOMPARE(received[index], index);
+    }
+}
+
+void CefBootstrapTest::bridgeCancelsPendingWork() {
+    using eden::engine::cef::CefUiBridge;
+    int completed = 0;
+    QVERIFY(CefUiBridge::runOnUiThread([&] {
+        ++completed;
+        CefUiBridge::beginShutdown();
+        QVERIFY(!CefUiBridge::runOnUiThread([&] { completed += 100; }));
+        CefUiBridge::resumeTasks();
+        QVERIFY(CefUiBridge::runOnUiThread([&] { ++completed; }));
+    }));
+    for (int index = 0; index < 256; ++index) {
+        QVERIFY(CefUiBridge::runOnUiThread([&] { completed += 100; }));
+    }
+    QTRY_COMPARE(completed, 2);
+    QCoreApplication::processEvents();
+    QCOMPARE(completed, 2);
+    int destroyed = 0;
+    auto capture = std::shared_ptr<int>(new int(0), [&](int *value) {
+        delete value;
+        ++destroyed;
+        CefUiBridge::runOnUiThread([&] { ++completed; });
+    });
+    QVERIFY(CefUiBridge::runOnUiThread([capture] {}));
+    capture.reset();
+    CefUiBridge::cancelPendingTasks();
+    QCOMPARE(destroyed, 1);
+    QTRY_COMPARE(completed, 3);
+}
+
+void CefBootstrapTest::bridgeSupportsNestedEventLoops() {
+    using eden::engine::cef::CefUiBridge;
+    QEventLoop nested;
+    bool completed = false;
+    bool timedOut = false;
+    QVERIFY(CefUiBridge::runOnUiThread([&] {
+        QVERIFY(CefUiBridge::runOnUiThread([&] { nested.quit(); }));
+        QTimer deadline;
+        deadline.setSingleShot(true);
+        connect(&deadline, &QTimer::timeout, &nested, [&] {
+            timedOut = true;
+            nested.quit();
+        });
+        deadline.start(1000);
+        nested.exec();
+        completed = true;
+    }));
+    QTRY_VERIFY(completed);
+    QVERIFY(!timedOut);
 }
 
 void CefBootstrapTest::alloyRuntimeIsExplicit() {

@@ -1,104 +1,117 @@
 #include "engine/cef/cefuibridge.h"
 
 #include <QCoreApplication>
-#include <QEvent>
-#include <QList>
+#include <QMetaObject>
 #include <QMutex>
 #include <QObject>
-#include <QPointer>
 #include <QThread>
 
+#include <deque>
 #include <utility>
 
 namespace eden::engine::cef {
 
-    class CefUiTask;
-
-    static QMutex &pendingTaskMutex() {
-        static QMutex mutex;
-        return mutex;
-    }
-
-    static QList<QPointer<CefUiTask>> &pendingTasks() {
-        static QList<QPointer<CefUiTask>> tasks;
-        return tasks;
-    }
-
-    static bool &acceptingTasks() {
-        static bool accepting = true;
-        return accepting;
-    }
-
-    class CefUiTask final : public QObject {
-      public:
-        explicit CefUiTask(std::function<void()> task)
-            : m_task(std::move(task)) {}
-
-      protected:
-        bool event(QEvent *event) override {
-            if (event->type() != QEvent::User) {
-                return QObject::event(event);
-            }
-            CefUiBridge::assertOnUiThread();
-            std::function<void()> task;
-            {
-                const QMutexLocker lock(&pendingTaskMutex());
-                pendingTasks().removeAll(this);
-                task = std::move(m_task);
-            }
-            delete this;
-            task();
-            return true;
-        }
-
-      private:
-        std::function<void()> m_task;
+    struct CefUiQueue {
+        QMutex mutex;
+        std::deque<std::function<void()>> tasks;
+        quint64 generation = 0;
+        bool accepting = true;
+        bool scheduled = false;
     };
 
+    static CefUiQueue &uiQueue() {
+        static CefUiQueue queue;
+        return queue;
+    }
+
+    static void drainUiQueue(quint64 generation);
+
+    static bool scheduleDrain(quint64 generation) {
+        return QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [generation] { drainUiQueue(generation); },
+            Qt::QueuedConnection
+        );
+    }
+
+    static void drainUiQueue(quint64 generation) {
+        CefUiBridge::assertOnUiThread();
+        CefUiQueue &queue = uiQueue();
+        std::deque<std::function<void()>> canceled;
+        {
+            const QMutexLocker lock(&queue.mutex);
+            if (queue.generation != generation) {
+                return;
+            }
+            if (queue.tasks.empty()) {
+                queue.scheduled = false;
+                return;
+            }
+            queue.scheduled = scheduleDrain(generation);
+            if (!queue.scheduled) {
+                canceled.swap(queue.tasks);
+                return;
+            }
+        }
+        for (int processed = 0; processed < 64; ++processed) {
+            std::function<void()> task;
+            {
+                const QMutexLocker lock(&queue.mutex);
+                if (queue.generation != generation || queue.tasks.empty()) {
+                    return;
+                }
+                task = std::move(queue.tasks.front());
+                queue.tasks.pop_front();
+            }
+            task();
+        }
+    }
+
     bool CefUiBridge::runOnUiThread(std::function<void()> task) {
-        QCoreApplication *application = QCoreApplication::instance();
-        if (!application || !task) {
+        if (!QCoreApplication::instance() || QCoreApplication::closingDown() || !task) {
             return false;
         }
-        CefUiTask *uiTask = new CefUiTask(std::move(task));
-        {
-            const QMutexLocker lock(&pendingTaskMutex());
-            if (!acceptingTasks()) {
-                delete uiTask;
+        CefUiQueue &queue = uiQueue();
+        const QMutexLocker lock(&queue.mutex);
+        if (!queue.accepting) {
+            return false;
+        }
+        if (!queue.scheduled) {
+            queue.scheduled = scheduleDrain(queue.generation);
+            if (!queue.scheduled) {
                 return false;
             }
-            pendingTasks().append(uiTask);
-            uiTask->moveToThread(application->thread());
-            QCoreApplication::postEvent(uiTask, new QEvent(QEvent::User));
         }
+        queue.tasks.push_back(std::move(task));
         return true;
     }
 
     void CefUiBridge::resumeTasks() {
         assertOnUiThread();
-        const QMutexLocker lock(&pendingTaskMutex());
-        acceptingTasks() = true;
+        CefUiQueue &queue = uiQueue();
+        const QMutexLocker lock(&queue.mutex);
+        queue.accepting = true;
     }
 
     void CefUiBridge::beginShutdown() {
         assertOnUiThread();
+        CefUiQueue &queue = uiQueue();
         {
-            const QMutexLocker lock(&pendingTaskMutex());
-            acceptingTasks() = false;
+            const QMutexLocker lock(&queue.mutex);
+            queue.accepting = false;
         }
         cancelPendingTasks();
     }
 
     void CefUiBridge::cancelPendingTasks() {
         assertOnUiThread();
-        QList<QPointer<CefUiTask>> tasks;
+        CefUiQueue &queue = uiQueue();
+        std::deque<std::function<void()>> canceled;
         {
-            const QMutexLocker lock(&pendingTaskMutex());
-            tasks = std::move(pendingTasks());
-            pendingTasks().clear();
-        }
-        for (CefUiTask *task : tasks) {
-            delete task;
+            const QMutexLocker lock(&queue.mutex);
+            canceled.swap(queue.tasks);
+            queue.scheduled = false;
+            ++queue.generation;
         }
     }
 
