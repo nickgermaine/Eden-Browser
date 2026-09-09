@@ -4,10 +4,10 @@
 
 namespace eden::core {
 
-inline QUrl urlWithoutCredentials(const QUrl &url) {
-    QUrl sanitized = url;
-    sanitized.setUserInfo({});
-    return sanitized;
-}
+    inline QUrl urlWithoutCredentials(const QUrl &url) {
+        QUrl sanitized = url;
+        sanitized.setUserInfo({});
+        return sanitized;
+    }
 
 }

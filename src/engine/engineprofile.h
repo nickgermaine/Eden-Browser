@@ -1,27 +1,48 @@
 #pragma once
 
+#include "engine/engineprofileparameters.h"
+#include "engine/portablecookie.h"
+
 #include <QObject>
 #include <QUrl>
+
+#include <functional>
+
 namespace eden::engine {
 
-class EngineProfile : public QObject {
-    Q_OBJECT
-    Q_PROPERTY(bool privateProfile READ isPrivate CONSTANT)
+    class EngineProfile : public QObject {
+        Q_OBJECT
+        Q_PROPERTY(bool privateProfile READ isPrivate CONSTANT)
 
-  public:
-    explicit EngineProfile(bool privateProfile, QObject *parent = nullptr);
-    ~EngineProfile() override;
+      public:
+        explicit EngineProfile(const EngineProfileParameters &parameters, QObject *parent = nullptr);
+        ~EngineProfile() override;
 
-    bool isPrivate() const;
-    virtual QObject *nativeProfile() const = 0;
-    virtual void clearData() = 0;
+        bool isPrivate() const;
+        const QString &profileId() const;
+        Backend backend() const;
+        const EngineProfileParameters &parameters() const;
 
-  signals:
-    void downloadStarted(int id, const QString &fileName, const QUrl &sourceUrl, const QString &targetPath, qint64 totalBytes);
-    void downloadUpdated(int id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
+        virtual QObject *nativeProfile() const = 0;
+        virtual void clearData() = 0;
 
-  private:
-    bool m_privateProfile;
-};
+        virtual bool supportsPortableCookies() const;
+        virtual void exportPortableCookies(CookieSnapshotCallback callback);
+        virtual void replacePortableCookies(const QList<PortableCookie> &cookies, CookieReplaceCallback callback);
+        virtual void flushStorage(std::function<void()> completion);
+
+      signals:
+        void downloadStarted(
+            int id,
+            const QString &fileName,
+            const QUrl &sourceUrl,
+            const QString &targetPath,
+            qint64 totalBytes
+        );
+        void downloadUpdated(int id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
+
+      private:
+        EngineProfileParameters m_parameters;
+    };
 
 }

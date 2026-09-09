@@ -1,5 +1,6 @@
 import Eden.Ui
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Shapes
 
@@ -8,6 +9,7 @@ Window {
 
     property alias windowController: controller
     readonly property bool edgeToEdge: controller.contentFullscreen || root.visibility === Window.Maximized || root.visibility === Window.FullScreen
+    readonly property string tabLayout: controller.profileSettings ? controller.profileSettings.tabLayout : "horizontal"
 
     width: 1360
     height: 860
@@ -33,6 +35,9 @@ Window {
 
             if (forwardHistoryMenuLoader.item)
                 forwardHistoryMenuLoader.item.close();
+
+            if (profileMenuLoader.item)
+                profileMenuLoader.item.close();
 
         }
     }
@@ -92,7 +97,7 @@ Window {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            height: controller.contentFullscreen ? 0 : Settings.tabLayout === "horizontal" ? 96 : 56
+            height: controller.contentFullscreen ? 0 : root.tabLayout === "horizontal" ? 96 : 56
             visible: !controller.contentFullscreen
             radius: shell.radius
             color: "transparent"
@@ -106,7 +111,7 @@ Window {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 height: 48
-                visible: Settings.tabLayout === "horizontal"
+                visible: root.tabLayout === "horizontal"
 
                 ShapePath {
                     fillColor: Theme.tabBarBackground
@@ -160,7 +165,7 @@ Window {
                 id: moveArea
 
                 anchors.fill: parent
-                anchors.topMargin: Settings.tabLayout === "horizontal" ? tabStrip.height : 0
+                anchors.topMargin: root.tabLayout === "horizontal" ? tabStrip.height : 0
                 z: 0
 
                 DragHandler {
@@ -187,7 +192,7 @@ Window {
                 anchors.top: parent.top
                 height: 48
                 controller: root.windowController
-                visible: Settings.tabLayout === "horizontal"
+                visible: root.tabLayout === "horizontal"
                 opacity: visible ? 1 : 0
                 z: 1
                 onSystemMoveRequested: frame.startSystemMove()
@@ -207,7 +212,7 @@ Window {
                 id: toolbar
 
                 anchors.left: parent.left
-                anchors.right: Settings.tabLayout === "horizontal" ? parent.right : windowButtons.left
+                anchors.right: root.tabLayout === "horizontal" ? parent.right : windowButtons.left
                 anchors.bottom: parent.bottom
                 height: 44
                 z: 1
@@ -224,6 +229,7 @@ Window {
                         id: backButton
 
                         iconName: "arrow-left"
+                        buttonRadius: 20
                         enabled: controller.currentEngine && controller.currentEngine.canGoBack
                         onClicked: controller.back()
 
@@ -242,6 +248,7 @@ Window {
                         id: forwardButton
 
                         iconName: "arrow-right"
+                        buttonRadius: 20
                         enabled: controller.currentEngine && controller.currentEngine.canGoForward
                         onClicked: controller.forward()
 
@@ -257,6 +264,7 @@ Window {
                     }
 
                     EdenButton {
+                        buttonRadius: 20
                         iconName: controller.currentEngine && controller.currentEngine.loading ? "close" : "refresh"
                         onClicked: controller.currentEngine && controller.currentEngine.loading ? controller.stop() : controller.reload()
                     }
@@ -267,7 +275,7 @@ Window {
                     id: omnibox
 
                     anchors.left: navigationButtons.right
-                    anchors.right: menuButton.left
+                    anchors.right: profileButton.left
                     anchors.leftMargin: 8
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
@@ -275,8 +283,48 @@ Window {
                     controller: root.windowController
                     onSecurityRequested: {
                         securityPopoverLoader.active = true;
-                        securityPopoverLoader.item.open();
+                        securityPopoverLoader.item.toggle();
                     }
+                }
+
+                Item {
+                    id: profileButton
+
+                    anchors.right: menuButton.left
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 32
+                    height: 32
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Profile: " + controller.profileDisplayName
+
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: -2
+                        radius: 20
+                        color: profileButtonHover.hovered ? Theme.surfaceContainerHigh : "transparent"
+                        border.width: controller.mode === "private" ? 2 : 0
+                        border.color: Theme.privatePrimary
+                    }
+
+                    ProfileAvatar {
+                        anchors.fill: parent
+                        avatarUrl: controller.profileAvatarUrl
+                        displayName: controller.profileDisplayName
+                        avatarSize: 22
+                    }
+
+                    HoverHandler {
+                        id: profileButtonHover
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            profileMenuLoader.active = true;
+                            profileMenuLoader.item.open();
+                        }
+                    }
+
                 }
 
                 EdenButton {
@@ -284,11 +332,12 @@ Window {
 
                     anchors.right: parent.right
                     anchors.rightMargin: 8
+                    buttonRadius: 20
                     anchors.verticalCenter: parent.verticalCenter
                     iconName: "menu-dots"
                     onClicked: {
                         mainMenuLoader.active = true;
-                        mainMenuLoader.item.open();
+                        mainMenuLoader.item.toggle();
                     }
                 }
 
@@ -298,13 +347,14 @@ Window {
                 id: windowButtons
 
                 anchors.right: parent.right
-                anchors.top: Settings.tabLayout === "horizontal" ? parent.top : undefined
-                anchors.bottom: Settings.tabLayout === "horizontal" ? undefined : parent.bottom
+                anchors.top: root.tabLayout === "horizontal" ? parent.top : undefined
+                anchors.bottom: root.tabLayout === "horizontal" ? undefined : parent.bottom
                 height: 48
                 z: 2
 
                 EdenButton {
                     anchors.verticalCenter: parent.verticalCenter
+                    buttonRadius: 20
                     iconFamily: "material"
                     iconName: "minimize"
                     onClicked: frame.minimize()
@@ -313,6 +363,7 @@ Window {
                 EdenButton {
                     anchors.verticalCenter: parent.verticalCenter
                     iconFamily: "material"
+                    buttonRadius: 20
                     iconName: root.visibility === Window.Maximized ? "restore" : "maximize"
                     onClicked: frame.toggleMaximized()
                 }
@@ -320,6 +371,7 @@ Window {
                 EdenButton {
                     anchors.verticalCenter: parent.verticalCenter
                     iconFamily: "material"
+                    buttonRadius: 20
                     iconName: "close"
                     onClicked: frame.close()
                 }
@@ -344,8 +396,8 @@ Window {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: active && item ? item.implicitWidth : 0
-                active: !controller.contentFullscreen && Settings.tabLayout === "sidebar"
-                opacity: Settings.tabLayout === "sidebar" ? 1 : 0
+                active: !controller.contentFullscreen && root.tabLayout === "sidebar"
+                opacity: root.tabLayout === "sidebar" ? 1 : 0
                 z: 2
                 Component.onCompleted: setSource(Qt.resolvedUrl("../components/TabSidebar.qml"), {
                     "controller": root.windowController
@@ -356,7 +408,7 @@ Window {
 
                     origin.x: 0
                     origin.y: sidebarLoader.height / 2
-                    xScale: Settings.tabLayout === "sidebar" ? 1 : 0.96
+                    xScale: root.tabLayout === "sidebar" ? 1 : 0.96
 
                     Behavior on xScale {
                         NumberAnimation {
@@ -381,8 +433,8 @@ Window {
             Item {
                 id: viewportFrame
 
-                anchors.left: Settings.tabLayout === "sidebar" ? sidebarLoader.right : parent.left
-                anchors.leftMargin: Settings.tabLayout === "sidebar" ? Theme.workspaceGap : 0
+                anchors.left: root.tabLayout === "sidebar" ? sidebarLoader.right : parent.left
+                anchors.leftMargin: root.tabLayout === "sidebar" ? Theme.workspaceGap : 0
                 anchors.right: paneLoader.active ? paneLoader.left : parent.right
                 anchors.rightMargin: paneLoader.active ? Theme.workspaceGap : 0
                 anchors.top: parent.top
@@ -468,6 +520,12 @@ Window {
                                 Component.onCompleted: setSource(Qt.resolvedUrl("../pages/ThemeEditorPage.qml"), {
                                     "controller": root.windowController
                                 })
+                            }
+
+                            Loader {
+                                anchors.fill: parent
+                                active: internalPage === "newtab"
+                                source: Qt.resolvedUrl("../pages/NewTabPage.qml")
                             }
 
                         }
@@ -757,6 +815,17 @@ Window {
         }
 
         Loader {
+            id: displayCapturePromptLoader
+
+            active: false
+            asynchronous: false
+            Component.onCompleted: setSource(Qt.resolvedUrl("DisplayCapturePrompt.qml"), {
+                "controller": root.windowController,
+                "popupParent": shell
+            })
+        }
+
+        Loader {
             id: backHistoryMenuLoader
 
             active: false
@@ -810,9 +879,13 @@ Window {
 
             sourceComponent: Component {
                 EdenMenu {
+                    readonly property bool devToolsSurface: controller.pageContextMenuSurface === "devtools"
+                    readonly property real surfaceX: devToolsSurface ? workspace.x + viewportFrame.x + devToolsDockFrame.x + Theme.contentBorderWidth : workspace.x + viewportFrame.x
+                    readonly property real surfaceY: devToolsSurface ? workspace.y + viewportFrame.y + devToolsDockFrame.y + 52 + Theme.contentBorderWidth : workspace.y + viewportFrame.y
+
                     parent: shell
-                    x: Math.max(8, Math.min(shell.width - width - 8, workspace.x + viewportFrame.x + controller.pageContextMenuPosition.x))
-                    y: Math.max(8, Math.min(shell.height - height - 8, workspace.y + viewportFrame.y + controller.pageContextMenuPosition.y))
+                    x: Math.max(8, Math.min(shell.width - width - 8, surfaceX + controller.pageContextMenuPosition.x))
+                    y: Math.max(8, Math.min(shell.height - height - 8, surfaceY + controller.pageContextMenuPosition.y))
                     preferredWidth: 260
                     maximumHeight: shell.height - 16
                     z: 14
@@ -820,6 +893,30 @@ Window {
                     onClosed: controller.dismissPageContextMenu()
                     onTriggered: (command) => {
                         return controller.executePageContextMenuCommand(command);
+                    }
+                }
+
+            }
+
+        }
+
+        Loader {
+            id: autofillMenuLoader
+
+            active: false
+            asynchronous: false
+
+            sourceComponent: Component {
+                EdenMenu {
+                    parent: shell
+                    x: Math.max(8, Math.min(shell.width - width - 8, workspace.x + viewportFrame.x + controller.autofillPopupPosition.x))
+                    y: Math.max(8, Math.min(shell.height - height - 8, workspace.y + viewportFrame.y + controller.autofillPopupPosition.y + 4))
+                    preferredWidth: 320
+                    maximumHeight: shell.height - 16
+                    z: 14
+                    actions: controller.autofillSuggestions
+                    onTriggered: (command) => {
+                        return controller.fillAutofillSuggestion(command);
                     }
                 }
 
@@ -846,8 +943,26 @@ Window {
             }
 
             function onPageContextMenuRequested() {
+                if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2)
+                    return ;
+
                 pageContextMenuLoader.active = true;
-                pageContextMenuLoader.item.open();
+                if (!pageContextMenuLoader.item.tryOpen())
+                    controller.dismissPageContextMenu();
+
+            }
+
+            function onAutofillRequested() {
+                autofillMenuLoader.active = true;
+                if (autofillMenuLoader.item)
+                    autofillMenuLoader.item.tryOpen();
+
+            }
+
+            function onCredentialStateChanged() {
+                if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item)
+                    autofillMenuLoader.item.close();
+
             }
 
             function onJavaScriptDialogChanged() {
@@ -883,7 +998,184 @@ Window {
                 permissionPromptLoader.item.open();
             }
 
+            function onDisplayCaptureRequestChanged() {
+                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item) {
+                    displayCapturePromptLoader.item.close();
+                }
+
+            }
+
+            function onDisplayCaptureRequestRequested() {
+                displayCapturePromptLoader.active = true;
+                displayCapturePromptLoader.item.open();
+            }
+
             target: controller
+        }
+
+        Loader {
+            id: profileMenuLoader
+
+            active: false
+            asynchronous: false
+
+            sourceComponent: Component {
+                ProfileMenu {
+                    parent: shell
+                    controller: root.windowController
+                    x: shell.width - width - 56
+                    y: topChrome.height
+                    z: 12
+                }
+
+            }
+
+        }
+
+        Rectangle {
+            id: transientToast
+
+            property string message
+
+            function show(text) {
+                message = text;
+                opacity = 1;
+                toastTimer.restart();
+            }
+
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 24
+            width: Math.min(shell.width - 48, toastText.implicitWidth + 40)
+            height: 44
+            radius: 22
+            color: Theme.surfaceContainerHighest
+            border.width: Theme.menuBorderWidth
+            border.color: Theme.menuBorder
+            opacity: 0
+            visible: opacity > 0
+            z: 30
+            Accessible.role: Accessible.AlertMessage
+            Accessible.name: message
+
+            Text {
+                id: toastText
+
+                anchors.centerIn: parent
+                text: transientToast.message
+                color: Theme.surfaceText
+                font: Theme.labelFont
+            }
+
+            Timer {
+                id: toastTimer
+
+                interval: 6000
+                onTriggered: transientToast.opacity = 0
+            }
+
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: Theme.mediumDuration
+                    easing.type: Easing.OutCubic
+                }
+
+            }
+
+        }
+
+        Loader {
+            id: signOutConfirmLoader
+
+            active: false
+            asynchronous: false
+
+            sourceComponent: Component {
+                Popup {
+                    id: signOutConfirm
+
+                    property string profileId
+                    property int downloadCount
+
+                    function openFor(id, count) {
+                        profileId = id;
+                        downloadCount = count;
+                        open();
+                    }
+
+                    parent: shell
+                    anchors.centerIn: parent
+                    width: 380
+                    modal: true
+                    padding: 20
+                    closePolicy: Popup.NoAutoClose
+
+                    background: OverlaySurface {
+                        surfaceRadius: Theme.menuRadius
+                    }
+
+                    contentItem: Column {
+                        spacing: 14
+
+                        Text {
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            text: signOutConfirm.downloadCount === 1 ? "1 download is still running. Signing out will cancel it." : signOutConfirm.downloadCount + " downloads are still running. Signing out will cancel them."
+                            color: Theme.surfaceText
+                            font: Theme.bodyFont
+                        }
+
+                        Row {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: 12
+
+                            EdenButton {
+                                text: "Stay signed in"
+                                onClicked: {
+                                    Profiles.confirmSignOut(signOutConfirm.profileId, false);
+                                    signOutConfirm.close();
+                                }
+                            }
+
+                            EdenButton {
+                                text: "Sign out"
+                                iconName: "logout"
+                                onClicked: {
+                                    Profiles.confirmSignOut(signOutConfirm.profileId, true);
+                                    signOutConfirm.close();
+                                }
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+        }
+
+        Connections {
+            function onTransientMessageRequested(message) {
+                transientToast.show(message);
+            }
+
+            target: controller
+        }
+
+        Connections {
+            function onSignOutConfirmationRequired(profileId, downloadCount) {
+                if (profileId !== controller.profileId)
+                    return ;
+
+                if (root.active || Profiles.browserWindowCount === 1) {
+                    signOutConfirmLoader.active = true;
+                    signOutConfirmLoader.item.openFor(profileId, downloadCount);
+                }
+            }
+
+            target: Profiles
         }
 
         Loader {

@@ -3,21 +3,27 @@
 #include "engine/cef/cefruntime.h"
 #include "engine/engineplugin.h"
 
+#include <filesystem>
+
 namespace eden::engine::cef {
 
     static bool initializeCef(int argc, char *argv[], const EngineIdentity *identity) {
-        if (!identity || !identity->product || !identity->version) {
+        if (!identity || !identity->product || !identity->version || !identity->engineDataRoot) {
             return false;
         }
-        return CefRuntime::instance().initialize(argc, argv, identity->product, identity->version);
+        const std::filesystem::path profilesRoot = std::filesystem::path(identity->engineDataRoot) / "profiles";
+        return CefRuntime::instance().initialize(argc, argv, identity->product, identity->version, profilesRoot);
     }
 
     static EngineView *createCefView(EngineProfile *profile) {
         return new CefEngineView(profile);
     }
 
-    static EngineProfile *createCefProfile(bool privateProfile, QQmlEngine *, QObject *parent) {
-        return new CefProfile(privateProfile, parent);
+    static EngineProfile *createCefProfile(const EngineProfileParameters *parameters, QQmlEngine *, QObject *parent) {
+        if (!parameters) {
+            return nullptr;
+        }
+        return new CefProfile(*parameters, parent);
     }
 
     static void shutdownCef() {
@@ -29,6 +35,7 @@ namespace eden::engine::cef {
 extern "C" const eden::engine::EnginePluginApi *eden_engine_plugin() {
     static const eden::engine::EnginePluginApi api{
         eden::engine::enginePluginAbiVersion,
+        nullptr,
         eden::engine::cef::initializeCef,
         eden::engine::cef::createCefView,
         eden::engine::cef::createCefProfile,

@@ -4,7 +4,7 @@
 
 namespace eden::engine {
 
-enum class Backend { QtWebEngine, Cef, Wpe, Servo };
+    enum class Backend { QtWebEngine, Cef, Wpe, Servo };
 
 }
 

@@ -12,7 +12,7 @@ Rectangle {
         "title": "Appearance",
         "icon": "tuning"
     }, {
-        "id": "passwords",
+        "id": "autofill",
         "title": "Passwords & Auto-fill",
         "icon": "password"
     }, {
@@ -167,7 +167,7 @@ Rectangle {
                 if (settingsPage.currentSection === "appearance")
                     return appearancePage;
 
-                if (settingsPage.currentSection === "passwords")
+                if (settingsPage.currentSection === "autofill")
                     return passwordsPage;
 
                 if (settingsPage.currentSection === "search")
@@ -204,6 +204,7 @@ Rectangle {
         id: enginePage
 
         EngineSettings {
+            controller: settingsPage.controller
         }
 
     }
@@ -212,6 +213,7 @@ Rectangle {
         id: searchPage
 
         SearchSettings {
+            controller: settingsPage.controller
         }
 
     }
@@ -219,9 +221,9 @@ Rectangle {
     Component {
         id: passwordsPage
 
-        PlaceholderSettings {
-            title: "Passwords & Auto-fill"
-            body: "The password vault and form auto-fill arrive with the Records Office integration."
+        PasswordSettings {
+            controller: settingsPage.controller
+            pageUrl: settingsPage.pageUrl
         }
 
     }
@@ -229,9 +231,9 @@ Rectangle {
     Component {
         id: privacyPage
 
-        PlaceholderSettings {
-            title: "Privacy"
-            body: "History and bookmarks are stored locally. Private windows do not write history or sessions."
+        PrivacySettings {
+            controller: settingsPage.controller
+            pageUrl: settingsPage.pageUrl
         }
 
     }

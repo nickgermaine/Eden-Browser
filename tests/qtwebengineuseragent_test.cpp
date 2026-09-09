@@ -1,6 +1,7 @@
 #include "engine/engineplugin.h"
 #include "engine/engineprofile.h"
 
+#include <QGuiApplication>
 #include <QQmlEngine>
 #include <QQuickWebEngineProfile>
 #include <QtTest>
@@ -31,8 +32,22 @@ void QtWebEngineUserAgentTest::identityIsAppliedToEveryProfile() {
     QCOMPARE(userAgent.count("Eden/0.3.0"), 1);
 
     QQmlEngine qmlEngine;
-    std::unique_ptr<eden::engine::EngineProfile> regularProfile(api->createProfile(false, &qmlEngine, nullptr));
-    std::unique_ptr<eden::engine::EngineProfile> privateProfile(api->createProfile(true, &qmlEngine, nullptr));
+    QTemporaryDir storageDirectory;
+    QVERIFY(storageDirectory.isValid());
+    eden::engine::EngineProfileParameters regularParameters;
+    regularParameters.profileId = QStringLiteral("11111111-2222-3333-4444-555555555555");
+    regularParameters.backend = eden::engine::Backend::QtWebEngine;
+    regularParameters.dataPath = storageDirectory.path() + "/data";
+    regularParameters.cachePath = storageDirectory.path() + "/cache";
+    eden::engine::EngineProfileParameters privateParameters;
+    privateParameters.backend = eden::engine::Backend::QtWebEngine;
+    privateParameters.privateProfile = true;
+    std::unique_ptr<eden::engine::EngineProfile> regularProfile(
+        api->createProfile(&regularParameters, &qmlEngine, nullptr)
+    );
+    std::unique_ptr<eden::engine::EngineProfile> privateProfile(
+        api->createProfile(&privateParameters, &qmlEngine, nullptr)
+    );
     QVERIFY(regularProfile);
     QVERIFY(privateProfile);
 
@@ -44,6 +59,14 @@ void QtWebEngineUserAgentTest::identityIsAppliedToEveryProfile() {
     QCOMPARE(privateNativeProfile->httpUserAgent(), userAgent);
 }
 
-QTEST_MAIN(QtWebEngineUserAgentTest)
+int main(int argc, char *argv[]) {
+    const eden::engine::EnginePluginApi *api = eden_engine_plugin();
+    if (!api || !api->prepareApplication || !api->prepareApplication(argc, argv)) {
+        return 1;
+    }
+    QGuiApplication application(argc, argv);
+    QtWebEngineUserAgentTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 
 #include "qtwebengineuseragent_test.moc"

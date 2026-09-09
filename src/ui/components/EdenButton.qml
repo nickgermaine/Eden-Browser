@@ -9,6 +9,7 @@ T.Button {
     property string iconFamily: "solar"
     property bool filledIcon: false
     property int horizontalContentAlignment: text.length > 0 ? Qt.AlignLeft : Qt.AlignHCenter
+    property int buttonRadius: Theme.controlRadius
 
     implicitWidth: text.length > 0 ? Math.max(48, contentItem.implicitWidth + 28) : 40
     implicitHeight: 40
@@ -47,7 +48,7 @@ T.Button {
     }
 
     background: Rectangle {
-        radius: Math.min(Theme.controlRadius, height / 2)
+        radius: Math.min(buttonRadius, height / 2)
         color: control.down ? Theme.surfaceContainerHighest : control.hovered ? Theme.surfaceContainerHigh : "transparent"
         scale: control.down ? 0.94 : 1
 

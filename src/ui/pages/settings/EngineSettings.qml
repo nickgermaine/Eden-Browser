@@ -5,6 +5,9 @@ import QtQuick.Controls
 Item {
     id: page
 
+    required property var controller
+    readonly property var profileSettings: controller && controller.profileSettings ? controller.profileSettings : null
+
     ScrollView {
         anchors.fill: parent
         contentWidth: availableWidth
@@ -65,7 +68,7 @@ Item {
                             anchors.right: engineChevron.left
                             anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
-                            text: Settings.defaultEngineName
+                            text: page.profileSettings ? page.profileSettings.defaultEngineName : ""
                             color: Theme.surfaceText
                             font: Theme.bodyFont
                             elide: Text.ElideRight
@@ -95,9 +98,11 @@ Item {
 
                             y: parent.height + 4
                             preferredWidth: parent.width
-                            actions: Settings.engineActions
+                            actions: page.profileSettings ? page.profileSettings.engineActions : []
                             onTriggered: (actionId) => {
-                                return Settings.selectDefaultEngine(actionId);
+                                if (page.profileSettings)
+                                    page.profileSettings.selectDefaultEngine(actionId);
+
                             }
                         }
 

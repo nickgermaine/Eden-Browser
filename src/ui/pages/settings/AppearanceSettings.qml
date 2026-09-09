@@ -7,6 +7,7 @@ Item {
     id: page
 
     required property var controller
+    readonly property var profileSettings: controller && controller.profileSettings ? controller.profileSettings : null
 
     FileDialog {
         id: themeFileDialog
@@ -36,6 +37,111 @@ Item {
                 font.family: Themes.fontFamily
                 font.pixelSize: 30
                 font.weight: Font.DemiBold
+            }
+
+            Rectangle {
+                width: parent.width
+                height: startupColumn.implicitHeight + 32
+                radius: Theme.cardRadius
+                color: Theme.surfaceContainer
+
+                Column {
+                    id: startupColumn
+
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 12
+
+                    Text {
+                        text: "Startup and new tabs"
+                        color: Theme.surfaceText
+                        font: Theme.titleFont
+                    }
+
+                    Text {
+                        width: parent.width
+                        text: "Your home page opens when there are no tabs to restore."
+                        color: Theme.surfaceVariantText
+                        font: Theme.bodyFont
+                        wrapMode: Text.Wrap
+                    }
+
+                    EdenTextField {
+                        width: parent.width
+                        text: page.profileSettings ? page.profileSettings.homePageUrl : ""
+                        placeholderText: "Home page URL"
+                        onTextEdited: {
+                            if (page.profileSettings)
+                                page.profileSettings.homePageUrl = text;
+
+                        }
+                    }
+
+                    Text {
+                        text: "New tabs open"
+                        color: Theme.surfaceText
+                        font: Theme.labelFont
+                    }
+
+                    Flow {
+                        width: parent.width
+                        spacing: 8
+
+                        EdenButton {
+                            text: "New tab page"
+                            iconName: page.profileSettings && page.profileSettings.newTabBehavior === "new-tab-page" ? "check" : ""
+                            onClicked: {
+                                if (page.profileSettings)
+                                    page.profileSettings.newTabBehavior = "new-tab-page";
+
+                            }
+                        }
+
+                        EdenButton {
+                            text: "Home page"
+                            iconName: page.profileSettings && page.profileSettings.newTabBehavior === "home-page" ? "check" : ""
+                            onClicked: {
+                                if (page.profileSettings)
+                                    page.profileSettings.newTabBehavior = "home-page";
+
+                            }
+                        }
+
+                        EdenButton {
+                            text: "Custom URL"
+                            iconName: page.profileSettings && page.profileSettings.newTabBehavior === "custom-url" ? "check" : ""
+                            onClicked: {
+                                if (page.profileSettings)
+                                    page.profileSettings.newTabBehavior = "custom-url";
+
+                            }
+                        }
+
+                    }
+
+                    EdenTextField {
+                        width: parent.width
+                        visible: page.profileSettings && page.profileSettings.newTabBehavior === "custom-url"
+                        text: page.profileSettings ? page.profileSettings.newTabUrl : ""
+                        placeholderText: "New tab URL"
+                        onTextEdited: {
+                            if (page.profileSettings)
+                                page.profileSettings.newTabUrl = text;
+
+                        }
+                    }
+
+                    Text {
+                        width: parent.width
+                        visible: page.profileSettings && page.profileSettings.newTabBehavior === "custom-url"
+                        text: "Changes save automatically for this profile."
+                        color: Theme.surfaceVariantText
+                        font: Theme.bodyFont
+                        wrapMode: Text.Wrap
+                    }
+
+                }
+
             }
 
             Rectangle {
@@ -104,14 +210,22 @@ Item {
 
                         EdenButton {
                             text: "Horizontal"
-                            iconName: Settings.tabLayout === "horizontal" ? "check" : "window"
-                            onClicked: Settings.tabLayout = "horizontal"
+                            iconName: page.profileSettings && page.profileSettings.tabLayout === "horizontal" ? "check" : "window"
+                            onClicked: {
+                                if (page.profileSettings)
+                                    page.profileSettings.tabLayout = "horizontal";
+
+                            }
                         }
 
                         EdenButton {
                             text: "Sidebar"
-                            iconName: Settings.tabLayout === "sidebar" ? "check" : "sidebar"
-                            onClicked: Settings.tabLayout = "sidebar"
+                            iconName: page.profileSettings && page.profileSettings.tabLayout === "sidebar" ? "check" : "sidebar"
+                            onClicked: {
+                                if (page.profileSettings)
+                                    page.profileSettings.tabLayout = "sidebar";
+
+                            }
                         }
 
                     }
@@ -160,11 +274,6 @@ Item {
                             model: Themes
 
                             delegate: ThemePreviewCard {
-                                required themeId
-                                required themeName
-                                required themeAuthor
-                                required active
-
                                 width: (themeGrid.width - (themeGrid.cardColumns - 1) * themeGrid.spacing) / themeGrid.cardColumns
                                 onActivated: Themes.activateTheme(themeId)
                             }

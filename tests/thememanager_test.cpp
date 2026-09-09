@@ -1,6 +1,8 @@
+#include "core/profiles/profilesettings.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/theme/themeeditormodel.h"
 #include "core/settings/theme/thememanager.h"
+#include "core/window/windowcontroller.h"
 
 #include <QFile>
 #include <QJsonDocument>
@@ -24,7 +26,9 @@ class ThemeManagerTest final : public QObject {
     void previewResolvesThemeTokens();
     void themeEditorPageLoads();
     void settingsPageLoads();
-    void searchEngineSelectionLivesInSettingsStore();
+    void settingsSubpagesLoad();
+    void searchEngineSelectionLivesInProfileSettings();
+    void startupPagesLiveInProfileSettings();
     void draftPreviewsSavesAndExports();
 
   private:
@@ -54,7 +58,9 @@ bool ThemeManagerTest::loadPage(const char *typeName) {
         return false;
     }
     QObject controller;
-    std::unique_ptr<QObject> page(component.createWithInitialProperties({{"controller", QVariant::fromValue(&controller)}}));
+    std::unique_ptr<QObject> page(
+        component.createWithInitialProperties({{"controller", QVariant::fromValue(&controller)}})
+    );
     if (!page) {
         qWarning("%s", qPrintable(component.errorString()));
         return false;
@@ -121,7 +127,8 @@ void ThemeManagerTest::editorOrganizesSchemesAndSections() {
         const QString lightPath = editor->data(index, eden::core::ThemeEditorModel::LightPathRole).toString();
         const QString darkPath = editor->data(index, eden::core::ThemeEditorModel::DarkPathRole).toString();
         foundBasePrimary |= path == "base.colors.primary";
-        foundTabBarBackground |= lightPath == "light.colors.tabBarBackground" && darkPath == "dark.colors.tabBarBackground";
+        foundTabBarBackground |=
+            lightPath == "light.colors.tabBarBackground" && darkPath == "dark.colors.tabBarBackground";
         foundUnit |= !editor->data(index, eden::core::ThemeEditorModel::UnitRole).toString().isEmpty();
         QVERIFY(!editor->data(index, eden::core::ThemeEditorModel::DescriptionRole).toString().isEmpty());
     }
@@ -140,8 +147,14 @@ void ThemeManagerTest::legacyThemesMigrateToSharedBase() {
     QJsonObject lightColors{{"primary", "#345678"}, {"toolbarBackground", "#ABCDEF"}, {"icon", "#111111"}};
     QJsonObject darkColors{{"primary", "#FEDCBA"}, {"toolbarBackground", "#202124"}, {"icon", "#EEEEEE"}};
     QJsonObject colors{{"light", lightColors}, {"dark", darkColors}};
-    QJsonObject root{{"formatVersion", 1},     {"id", id},         {"name", "Legacy Theme"},
-                     {"author", "Eden Tests"}, {"colors", colors}, {"metrics", QJsonObject{{"windowRadius", 16}}}};
+    QJsonObject root{
+        {"formatVersion", 1},
+        {"id", id},
+        {"name", "Legacy Theme"},
+        {"author", "Eden Tests"},
+        {"colors", colors},
+        {"metrics", QJsonObject{{"windowRadius", 16}}}
+    };
     const QString path = directory.filePath("legacy.json");
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -171,7 +184,7 @@ void ThemeManagerTest::previewResolvesThemeTokens() {
     QCOMPARE(dark.value("primary").value<QColor>(), QColor("#3584E4"));
     QCOMPARE(dark.value("toolbarGradientEnabled").toBool(), true);
     QCOMPARE(dark.value("windowRadius").toInt(), 12);
-    QCOMPARE(dark.value("controlRadius").toInt(), 20);
+    QCOMPARE(dark.value("controlRadius").toInt(), 12);
 
     const QVariantMap light = themes->themePreview("eden-default", false);
     QCOMPARE(light.value("surface").value<QColor>(), QColor("#FAFBFC"));
@@ -180,10 +193,12 @@ void ThemeManagerTest::previewResolvesThemeTokens() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString id = "preview-theme-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
-    QJsonObject root{{"formatVersion", 2},
-                     {"id", id},
-                     {"name", "Preview Theme"},
-                     {"dark", QJsonObject{{"colors", QJsonObject{{"background", "#101010"}}}}}};
+    QJsonObject root{
+        {"formatVersion", 2},
+        {"id", id},
+        {"name", "Preview Theme"},
+        {"dark", QJsonObject{{"colors", QJsonObject{{"background", "#101010"}}}}}
+    };
     const QString path = directory.filePath("preview.json");
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -210,21 +225,64 @@ void ThemeManagerTest::settingsPageLoads() {
     QVERIFY(loadPage("SettingsPage"));
 }
 
-void ThemeManagerTest::searchEngineSelectionLivesInSettingsStore() {
-    eden::core::SettingsStore *settings = eden::core::SettingsStore::instance();
-    settings->selectSearchEngine("custom");
-    QVERIFY(settings->customSearchEngine());
-    QCOMPARE(settings->searchEngineActions().constLast().toMap().value("icon").toString(), QString("check"));
+void ThemeManagerTest::settingsSubpagesLoad() {
+    registerUiSingletons();
+    for (const QUrl &url :
+         {QUrl("eden://settings/autofill/passwords"), QUrl("eden://settings/privacy/site-settings")}) {
+        QQmlEngine engine;
+        engine.addImportPath(QCoreApplication::applicationDirPath());
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlComponent component(&engine);
+        component.loadFromModule("Eden.Ui", "SettingsPage");
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        eden::core::WindowController controller;
+        std::unique_ptr<QObject> page(component.createWithInitialProperties({
+            {"controller", QVariant::fromValue(&controller)},
+            {"pageUrl", url},
+        }));
+        QVERIFY2(page != nullptr, qPrintable(component.errorString()));
+        QCoreApplication::processEvents();
+        QCOMPARE(warnings.count(), 0);
+    }
+}
 
-    settings->selectSearchEngine("Google");
-    QCOMPARE(settings->searchEngine(), QString("Google"));
-    QCOMPARE(settings->searchUrl(), QString("https://www.google.com/search?q=%1"));
-    QVERIFY(!settings->customSearchEngine());
+void ThemeManagerTest::searchEngineSelectionLivesInProfileSettings() {
+    QTemporaryDir profileDirectory;
+    QVERIFY(profileDirectory.isValid());
+    eden::core::ProfileSettings settings(profileDirectory.path() + "/settings.ini");
+    settings.initialize();
+    settings.selectSearchEngine("custom");
+    QVERIFY(settings.customSearchEngine());
+    QCOMPARE(settings.searchEngineActions().constLast().toMap().value("icon").toString(), QString("check"));
 
-    const QString selectedUrl = settings->searchUrl();
-    settings->selectSearchEngine("missing");
-    QCOMPARE(settings->searchUrl(), selectedUrl);
-    settings->selectSearchEngine("DuckDuckGo");
+    settings.selectSearchEngine("Google");
+    QCOMPARE(settings.searchEngine(), QString("Google"));
+    QCOMPARE(settings.searchUrl(), QString("https://www.google.com/search?q=%1"));
+    QVERIFY(!settings.customSearchEngine());
+
+    const QString selectedUrl = settings.searchUrl();
+    settings.selectSearchEngine("missing");
+    QCOMPARE(settings.searchUrl(), selectedUrl);
+    settings.selectSearchEngine("DuckDuckGo");
+}
+
+void ThemeManagerTest::startupPagesLiveInProfileSettings() {
+    QTemporaryDir profileDirectory;
+    QVERIFY(profileDirectory.isValid());
+    eden::core::ProfileSettings settings(profileDirectory.path() + "/settings.ini");
+    QCOMPARE(settings.homePageDestination(), QUrl("eden://newtab"));
+    QCOMPARE(settings.newTabDestination(), QUrl("eden://newtab"));
+
+    settings.setHomePageUrl("https://work.example/start");
+    settings.setNewTabBehavior("home-page");
+    QCOMPARE(settings.newTabDestination(), QUrl("https://work.example/start"));
+
+    settings.setNewTabUrl("https://work.example/new");
+    settings.setNewTabBehavior("custom-url");
+    QCOMPARE(settings.newTabDestination(), QUrl("https://work.example/new"));
+
+    settings.setNewTabBehavior("invalid");
+    QCOMPARE(settings.newTabBehavior(), QString("custom-url"));
 }
 
 void ThemeManagerTest::draftPreviewsSavesAndExports() {

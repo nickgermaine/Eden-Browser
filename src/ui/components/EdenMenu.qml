@@ -6,15 +6,37 @@ Popup {
     id: menu
 
     property var actions: []
+    property Component headerComponent
     property real maximumHeight: 480
     property real preferredWidth: 240
+    property double dismissedAt: 0
 
     signal triggered(var actionId)
+
+    function tryOpen() {
+        if (opened)
+            return true;
+
+        if (Date.now() - dismissedAt < 250)
+            return false;
+
+        open();
+        return true;
+    }
+
+    function toggle() {
+        if (opened) {
+            close();
+            return ;
+        }
+        tryOpen();
+    }
 
     padding: 6
     implicitWidth: preferredWidth
     implicitHeight: Math.min(menu.maximumHeight, menuList.contentHeight + topPadding + bottomPadding)
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    onClosed: dismissedAt = Date.now()
 
     background: OverlaySurface {
         surfaceRadius: Theme.menuRadius
@@ -27,25 +49,40 @@ Popup {
         spacing: 2
         model: menu.actions
 
+        header: Loader {
+            width: menuList.width
+            active: menu.headerComponent !== null
+            sourceComponent: menu.headerComponent
+        }
+
         delegate: Item {
             id: menuItem
 
             required property var modelData
-            readonly property string subtitle: modelData.subtitle || ""
+            readonly property string actionTitle: modelData.title === undefined || modelData.title === null ? "" : String(modelData.title)
+            readonly property string subtitle: modelData.subtitle === undefined || modelData.subtitle === null ? "" : String(modelData.subtitle)
+            readonly property string iconName: modelData.icon === undefined || modelData.icon === null || String(modelData.icon).length === 0 ? (checked ? "check" : "menu-dots") : String(modelData.icon)
             readonly property bool actionEnabled: modelData.enabled === undefined || modelData.enabled
             readonly property bool hasChildren: modelData.children !== undefined && modelData.children.length > 0
-            readonly property bool submenuPointerInside: menuHover.hovered || childMenuHover.hovered
+            readonly property bool separator: modelData.separator === true
+            readonly property bool checked: modelData.checked === true
 
             width: menuList.width
-            height: subtitle.length > 0 ? 54 : 40
-            onSubmenuPointerInsideChanged: {
-                if (submenuPointerInside)
-                    childCloseTimer.stop();
-                else if (childMenu.opened)
-                    childCloseTimer.restart();
+            height: separator ? 9 : subtitle.length > 0 ? 54 : 40
+
+            Rectangle {
+                visible: menuItem.separator
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                height: Theme.paneBorderWidth
+                color: Theme.paneBorder
             }
 
             Rectangle {
+                visible: !menuItem.separator
                 anchors.fill: parent
                 radius: Theme.controlRadius
                 color: Theme.surfaceContainerHigh
@@ -62,6 +99,7 @@ Popup {
             }
 
             Row {
+                visible: !menuItem.separator
                 anchors.fill: parent
                 anchors.leftMargin: 12
                 anchors.rightMargin: 12
@@ -72,7 +110,7 @@ Popup {
 
                     anchors.verticalCenter: parent.verticalCenter
                     visible: name.length > 0
-                    name: menuItem.modelData.icon || ""
+                    name: menuItem.iconName
                     color: menuItem.actionEnabled ? Theme.iconColor : Theme.disabledIconColor
                 }
 
@@ -83,7 +121,7 @@ Popup {
 
                     Text {
                         width: parent.width
-                        text: menuItem.modelData.title
+                        text: menuItem.actionTitle
                         color: menuItem.actionEnabled ? Theme.surfaceText : Theme.disabledText
                         font: Theme.labelFont
                         elide: Text.ElideRight
@@ -113,13 +151,13 @@ Popup {
             HoverHandler {
                 id: menuHover
 
-                enabled: menuItem.actionEnabled
+                enabled: menuItem.actionEnabled && !menuItem.separator
             }
 
             TapHandler {
                 id: menuTap
 
-                enabled: menuItem.actionEnabled
+                enabled: menuItem.actionEnabled && !menuItem.separator
                 onTapped: {
                     if (menuItem.hasChildren) {
                         childMenu.open();
@@ -134,44 +172,15 @@ Popup {
                 }
             }
 
-            Timer {
-                interval: 160
-                running: menuHover.hovered && menuItem.hasChildren && !childMenu.opened
-                onTriggered: childMenu.open()
-            }
-
-            Timer {
-                id: childCloseTimer
-
-                interval: 160
-                onTriggered: {
-                    if (!menuItem.submenuPointerInside && childMenu.opened)
-                        childMenu.close();
-
-                }
-            }
-
-            Popup {
+            AnchoredSubmenu {
                 id: childMenu
 
-                parent: Overlay.overlay
-                width: menu.preferredWidth
-                height: Math.min(menu.maximumHeight, childList.contentHeight + topPadding + bottomPadding)
-                padding: 6
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                onAboutToShow: {
-                    const anchor = menuItem.mapToItem(Overlay.overlay, menuItem.width + menu.padding + 2, 0);
-                    let targetX = anchor.x;
-                    if (targetX + width > Overlay.overlay.width - 8)
-                        targetX = Math.max(8, anchor.x - menuItem.width - menu.padding * 2 - width - 4);
-
-                    x = targetX;
-                    y = Math.max(8, Math.min(Overlay.overlay.height - height - 8, anchor.y));
-                }
-
-                background: OverlaySurface {
-                    surfaceRadius: Theme.menuRadius
-                }
+                anchorItem: menuItem
+                parentMenu: menu
+                anchorHovered: menuHover.hovered && menuItem.hasChildren
+                preferredWidth: menu.preferredWidth
+                maximumHeight: menu.maximumHeight
+                implicitHeight: childList.contentHeight + topPadding + bottomPadding
 
                 contentItem: ListView {
                     id: childList
@@ -180,39 +189,82 @@ Popup {
                     spacing: 2
                     model: menuItem.hasChildren ? menuItem.modelData.children : []
 
-                    HoverHandler {
-                        id: childMenuHover
-                    }
-
                     delegate: Rectangle {
                         id: childItem
 
                         required property var modelData
+                        readonly property string actionTitle: modelData.title === undefined || modelData.title === null ? "" : String(modelData.title)
+                        readonly property string avatarUrl: modelData.avatarUrl === undefined || modelData.avatarUrl === null ? "" : String(modelData.avatarUrl)
+                        readonly property bool separator: modelData.separator === true
+                        readonly property bool checked: modelData.checked === true
+                        readonly property string iconName: modelData.icon === undefined || modelData.icon === null || String(modelData.icon).length === 0 ? (checked ? "check" : "menu-dots") : String(modelData.icon)
+                        readonly property string trailingIconName: modelData.trailingIcon === undefined || modelData.trailingIcon === null ? "" : String(modelData.trailingIcon)
 
                         width: childList.width
-                        height: 40
+                        height: separator ? 9 : 40
                         radius: Theme.controlRadius
-                        color: childHover.hovered || childTap.pressed ? Theme.surfaceContainerHigh : "transparent"
+                        color: !separator && (childHover.hovered || childTap.pressed) ? Theme.surfaceContainerHigh : "transparent"
 
-                        Text {
+                        Rectangle {
+                            visible: childItem.separator
                             anchors.left: parent.left
                             anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            height: Theme.paneBorderWidth
+                            color: Theme.paneBorder
+                        }
+
+                        Row {
+                            visible: !childItem.separator
+                            anchors.fill: parent
                             anchors.leftMargin: 12
                             anchors.rightMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: childItem.modelData.title
-                            color: Theme.surfaceText
-                            font: Theme.labelFont
-                            elide: Text.ElideRight
+                            spacing: 10
+
+                            ProfileAvatar {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: childItem.avatarUrl.length > 0
+                                avatarUrl: childItem.avatarUrl
+                                displayName: childItem.actionTitle
+                                avatarSize: 28
+                            }
+
+                            Icon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: childItem.avatarUrl.length === 0 && childItem.iconName.length > 0
+                                name: childItem.iconName
+                            }
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0))
+                                text: childItem.actionTitle
+                                color: Theme.surfaceText
+                                font: Theme.labelFont
+                                elide: Text.ElideRight
+                            }
+
+                            Icon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: childItem.trailingIconName.length > 0
+                                name: childItem.trailingIconName
+                                iconSize: 16
+                            }
+
                         }
 
                         HoverHandler {
                             id: childHover
+
+                            enabled: !childItem.separator && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
                         }
 
                         TapHandler {
                             id: childTap
 
+                            enabled: !childItem.separator && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
                             onTapped: {
                                 const rootMenu = menu;
                                 const subMenu = childMenu;

@@ -63,6 +63,7 @@ Rectangle {
 
         delegate: Rectangle {
             required property string fileName
+            required property string targetPath
             required property double receivedBytes
             required property double totalBytes
             required property string downloadState
@@ -73,10 +74,13 @@ Rectangle {
 
             Text {
                 anchors.left: parent.left
+                anchors.right: actions.left
+                anchors.rightMargin: 8
                 anchors.top: parent.top
                 text: fileName
                 color: Theme.surfaceText
                 font: Theme.bodyFont
+                elide: Text.ElideMiddle
             }
 
             Text {
@@ -89,7 +93,8 @@ Rectangle {
 
             Rectangle {
                 anchors.left: parent.left
-                anchors.right: parent.right
+                anchors.right: actions.left
+                anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
                 height: 4
                 radius: Math.min(Theme.controlRadius, height / 2)
@@ -100,6 +105,28 @@ Rectangle {
                     height: parent.height
                     radius: Math.min(Theme.controlRadius, height / 2)
                     color: Theme.primary
+                }
+
+            }
+
+            Row {
+                id: actions
+
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+
+                EdenButton {
+                    iconName: "new-window"
+                    enabled: downloadState === "complete"
+                    Accessible.name: "Open download"
+                    onClicked: pane.controller.downloads.openDownload(targetPath)
+                }
+
+                EdenButton {
+                    iconName: "folder-open"
+                    Accessible.name: "View in folder"
+                    onClicked: pane.controller.downloads.showInFolder(targetPath)
                 }
 
             }

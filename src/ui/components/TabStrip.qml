@@ -10,20 +10,25 @@ Item {
     readonly property real dropNormalExtent: renderedTabWidth
     readonly property real dropPinnedExtent: Theme.pinnedTabWidth
     readonly property real dropSpacing: 4
+    readonly property real edgePadding: 4
+    readonly property real leadingTabsPadding: 8
+    readonly property real newTabSpacing: 6
     readonly property var tabModel: controller ? controller.tabs : null
     readonly property int tabCount: tabModel ? tabModel.count : 0
     readonly property int pinnedTabCount: tabModel ? tabModel.pinnedCount : 0
     readonly property int normalTabCount: Math.max(0, tabCount - pinnedTabCount)
-    readonly property real baseTabsWidth: Math.max(0, width - newTabButton.width - 12)
-    readonly property real minimumTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * Theme.tabMinimumWidth + Math.max(0, tabCount - 1) * 4
+    readonly property real baseTabsWidth: Math.max(0, width - newTabButton.width - 2 * edgePadding - leadingTabsPadding - newTabSpacing)
+    readonly property real minimumTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * Theme.tabMinimumWidth + Math.max(0, tabCount - 1) * dropSpacing
     readonly property bool overflowing: minimumTabsContentWidth > baseTabsWidth
-    readonly property real fittedTabWidth: normalTabCount > 0 ? (baseTabsWidth - pinnedTabCount * Theme.pinnedTabWidth - Math.max(0, tabCount - 1) * 4) / normalTabCount : Theme.tabMaximumWidth
+    readonly property real fittedTabWidth: normalTabCount > 0 ? (baseTabsWidth - pinnedTabCount * Theme.pinnedTabWidth - Math.max(0, tabCount - 1) * dropSpacing) / normalTabCount : Theme.tabMaximumWidth
     readonly property real renderedTabWidth: Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, fittedTabWidth))
-    readonly property real renderedTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * renderedTabWidth + Math.max(0, tabCount - 1) * 4
+    readonly property real renderedTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * renderedTabWidth + Math.max(0, tabCount - 1) * dropSpacing
 
     signal systemMoveRequested()
     signal toggleMaximizedRequested()
 
+    onRenderedTabsContentWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
+    onWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     objectName: "tabDropArea"
     implicitHeight: 44
 
@@ -37,7 +42,7 @@ Item {
         id: previousTabsButton
 
         anchors.left: parent.left
-        anchors.leftMargin: 4
+        anchors.leftMargin: strip.edgePadding
         anchors.verticalCenter: parent.verticalCenter
         width: strip.overflowing ? 32 : 0
         height: 32
@@ -63,20 +68,22 @@ Item {
         anchors.right: nextTabsButton.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.leftMargin: strip.overflowing ? 4 : 8
-        anchors.rightMargin: strip.overflowing ? 4 : 0
+        anchors.leftMargin: strip.overflowing ? strip.dropSpacing : strip.leadingTabsPadding
+        anchors.rightMargin: strip.overflowing ? strip.dropSpacing : 0
         orientation: ListView.Horizontal
-        spacing: 4
+        spacing: strip.dropSpacing
         clip: !strip.controller.tabDragTorn
         z: strip.controller.tabDragTorn ? 5 : 0
         boundsBehavior: Flickable.StopAtBounds
         model: strip.tabModel
         currentIndex: strip.controller.activeIndex
         onCurrentIndexChanged: navigator.reveal(currentIndex)
+        onWidthChanged: navigator.scheduleRelayout(strip.overflowing, currentIndex)
+        Component.onCompleted: navigator.scheduleRelayout(strip.overflowing, currentIndex)
 
         add: Transition {
             NumberAnimation {
-                properties: "opacity,scale"
+                property: "opacity"
                 from: 0
                 to: 1
                 duration: Theme.shortDuration
@@ -87,10 +94,18 @@ Item {
 
         remove: Transition {
             NumberAnimation {
-                properties: "opacity,scale"
+                property: "opacity"
                 to: 0
-                duration: Theme.shortDuration
+                duration: 0
                 easing.type: Easing.OutCubic
+            }
+
+        }
+
+        removeDisplaced: Transition {
+            NumberAnimation {
+                properties: "x,y"
+                duration: 0
             }
 
         }
@@ -102,6 +117,12 @@ Item {
                 easing.type: Easing.OutBack
             }
 
+            NumberAnimation {
+                property: "opacity"
+                to: 1
+                duration: Theme.shortDuration
+            }
+
         }
 
         displaced: Transition {
@@ -109,6 +130,12 @@ Item {
                 properties: "x,y"
                 duration: Theme.shortDuration
                 easing.type: Easing.OutBack
+            }
+
+            NumberAnimation {
+                property: "opacity"
+                to: 1
+                duration: Theme.shortDuration
             }
 
         }
@@ -132,6 +159,7 @@ Item {
             required property bool discarded
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: strip.controller.tabDragIndex === index
+            property bool previewSuppressed: false
 
             width: isPinned ? Theme.pinnedTabWidth : Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, strip.fittedTabWidth))
             height: 36
@@ -140,6 +168,11 @@ Item {
             color: "transparent"
             scale: dragging ? 1.04 : 1
             z: dragging ? 3 : 1
+            onActiveTabChanged: {
+                if (activeTab)
+                    opacity = 1;
+
+            }
 
             Rectangle {
                 anchors.fill: parent
@@ -213,10 +246,21 @@ Item {
 
             HoverHandler {
                 id: pointer
+
+                onHoveredChanged: {
+                    if (!hovered)
+                        tab.previewSuppressed = false;
+
+                }
             }
 
             TapHandler {
                 acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                onPressedChanged: {
+                    if (pressed)
+                        tab.previewSuppressed = true;
+
+                }
                 onTapped: (_, button) => {
                     if (button === Qt.MiddleButton)
                         strip.controller.closeTab(tab.index);
@@ -240,7 +284,12 @@ Item {
 
             TapHandler {
                 acceptedButtons: Qt.RightButton
-                onTapped: tabMenu.open()
+                onPressedChanged: {
+                    if (pressed)
+                        tab.previewSuppressed = true;
+
+                }
+                onTapped: tabMenu.toggle()
             }
 
             EdenMenu {
@@ -257,7 +306,7 @@ Item {
                 controller: strip.controller
                 tabIndex: tab.index
                 anchorItem: tab
-                anchorHovered: pointer.hovered && !tabMenu.opened && !tab.dragging
+                anchorHovered: pointer.hovered && !tab.previewSuppressed && !tabMenu.opened && !tab.dragging
             }
 
             transform: Translate {
@@ -313,8 +362,9 @@ Item {
     EdenButton {
         id: newTabButton
 
+        buttonRadius: 20
         anchors.verticalCenter: parent.verticalCenter
-        x: strip.overflowing ? strip.width - width - 4 : Math.min(tabsView.x + strip.renderedTabsContentWidth + 6, strip.width - width - 4)
+        x: strip.overflowing ? strip.width - width - strip.edgePadding : Math.min(tabsView.x + strip.renderedTabsContentWidth + strip.newTabSpacing, strip.width - width - strip.edgePadding)
         iconName: "add"
         onClicked: strip.controller.newTabAndFocusOmnibox()
     }

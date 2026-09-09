@@ -46,17 +46,19 @@ void CefBootstrapTest::alloyRuntimeIsExplicit() {
 }
 
 void CefBootstrapTest::privateContextSettingsAreInMemory() {
-    const std::filesystem::path rootCachePath = "/tmp/eden-cef-profile-test";
-    const CefRequestContextSettings normal = eden::engine::cef::createCefRequestContextSettings(false, rootCachePath);
-    const CefRequestContextSettings privateProfile =
-        eden::engine::cef::createCefRequestContextSettings(true, rootCachePath);
+    const std::filesystem::path profilePath = "/tmp/eden-cef-profile-test/profiles/abc";
+    const CefRequestContextSettings normal = eden::engine::cef::createCefRequestContextSettings(false, profilePath);
+    const CefRequestContextSettings privateProfile = eden::engine::cef::createCefRequestContextSettings(true, {});
     QCOMPARE(
         QString::fromStdString(CefString(&normal.cache_path).ToString()),
-        QString::fromStdString((rootCachePath / "default").string())
+        QString::fromStdString(profilePath.string())
     );
     QCOMPARE(normal.persist_session_cookies, 1);
     QVERIFY(CefString(&privateProfile.cache_path).ToString().empty());
     QCOMPARE(privateProfile.persist_session_cookies, 0);
+    QVERIFY(eden::engine::cef::isPathWithinRoot(profilePath, "/tmp/eden-cef-profile-test"));
+    QVERIFY(!eden::engine::cef::isPathWithinRoot("/tmp/elsewhere/abc", "/tmp/eden-cef-profile-test"));
+    QVERIFY(!eden::engine::cef::isPathWithinRoot("/tmp/eden-cef-profile-test/../escape", "/tmp/eden-cef-profile-test"));
 }
 
 void CefBootstrapTest::runtimeCreatesIsolatedProfiles() {
@@ -69,9 +71,16 @@ void CefBootstrapTest::runtimeCreatesIsolatedProfiles() {
     eden::engine::cef::CefRuntime &runtime = eden::engine::cef::CefRuntime::instance();
     QVERIFY(runtime.initialize(3, arguments, "Eden", "0.3.0", temporaryDirectory.path().toStdString()));
     {
-        eden::engine::cef::CefProfile normalProfile(false);
-        eden::engine::cef::CefProfile firstPrivateProfile(true);
-        eden::engine::cef::CefProfile secondPrivateProfile(true);
+        eden::engine::EngineProfileParameters normalParameters;
+        normalParameters.profileId = QStringLiteral("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        normalParameters.backend = eden::engine::Backend::Cef;
+        normalParameters.dataPath = temporaryDirectory.path() + "/profiles/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        eden::engine::EngineProfileParameters privateParameters;
+        privateParameters.backend = eden::engine::Backend::Cef;
+        privateParameters.privateProfile = true;
+        eden::engine::cef::CefProfile normalProfile(normalParameters);
+        eden::engine::cef::CefProfile firstPrivateProfile(privateParameters);
+        eden::engine::cef::CefProfile secondPrivateProfile(privateParameters);
         QVERIFY(normalProfile.requestContext());
         QVERIFY(firstPrivateProfile.requestContext());
         QVERIFY(secondPrivateProfile.requestContext());

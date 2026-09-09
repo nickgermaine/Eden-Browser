@@ -67,7 +67,8 @@ void DevToolsSocketServerTest::rejectsMissingWrongAndReusedTokens() {
 void DevToolsSocketServerTest::forwardsMessagesWithoutChangingPayload() {
     DevToolsSocketServer server;
     QByteArray received;
-    const DevToolsSocketServer::Session session = server.openSession([&received](const QByteArray &message) { received = message; });
+    const DevToolsSocketServer::Session session =
+        server.openSession([&received](const QByteArray &message) { received = message; });
     QVERIFY(session.isValid());
 
     QWebSocket socket;

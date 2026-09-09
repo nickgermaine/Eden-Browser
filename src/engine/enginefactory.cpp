@@ -1,28 +1,25 @@
 #include "engine/enginefactory.h"
+#include "core/profiles/profilepaths.h"
 #include "engine/engineplugin.h"
 #include "engine/engineprofile.h"
+#include "engine/engineregistry.h"
 #include "engine/engineview.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
-#include <QHash>
+#include <QFileInfo>
 #include <QLibrary>
-#include <QPointer>
 
 #include <map>
 #include <vector>
 
 namespace eden::engine {
 
-    static QHash<Backend, QPointer<EngineProfile>> &persistentProfiles() {
-        static QHash<Backend, QPointer<EngineProfile>> profiles;
-        return profiles;
-    }
-
     struct BackendModule {
         std::unique_ptr<QLibrary> library;
         const EnginePluginApi *api = nullptr;
+        bool prepared = false;
         bool initialized = false;
     };
 
@@ -47,6 +44,45 @@ namespace eden::engine {
         return {};
     }
 
+    static QString executableDirectory() {
+        if (QCoreApplication::instance()) {
+            return QCoreApplication::applicationDirPath();
+        }
+        const QString executablePath = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+        return executablePath.isEmpty() ? QString() : QFileInfo(executablePath).absolutePath();
+    }
+
+    static BackendModule *loadBackendModule(Backend backend) {
+        EngineFactoryState &state = factoryState();
+        BackendModule &module = state.modules[backend];
+        if (module.library) {
+            return &module;
+        }
+        const QString name = moduleName(backend);
+        const QString directory = executableDirectory();
+        if (name.isEmpty() || directory.isEmpty()) {
+            return nullptr;
+        }
+        const QString path = QDir(directory).filePath(name);
+        module.library = std::make_unique<QLibrary>(path);
+        module.library->setLoadHints(QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
+        if (!module.library->load()) {
+            qCritical().noquote() << "The engine module could not be loaded:" << module.library->errorString();
+            module.library.reset();
+            return nullptr;
+        }
+        const auto resolve = reinterpret_cast<ResolveEnginePlugin>(module.library->resolve("eden_engine_plugin"));
+        module.api = resolve ? resolve() : nullptr;
+        if (!module.api || module.api->abiVersion != enginePluginAbiVersion || !module.api->initialize ||
+            !module.api->createView || !module.api->createProfile || !module.api->shutdown) {
+            qCritical().noquote() << "The engine module has an incompatible interface:" << path;
+            module.api = nullptr;
+            module.library.reset();
+            return nullptr;
+        }
+        return &module;
+    }
+
     void EngineFactory::configureApplicationArguments(int argc, char *argv[]) {
         EngineFactoryState &state = factoryState();
         state.arguments.clear();
@@ -61,42 +97,48 @@ namespace eden::engine {
         }
     }
 
+    bool EngineFactory::prepareApplication(Backend backend) {
+        EngineFactoryState &state = factoryState();
+        BackendModule *module = loadBackendModule(backend);
+        if (!module) {
+            return false;
+        }
+        if (module->prepared) {
+            return true;
+        }
+        if (state.arguments.isEmpty()) {
+            return false;
+        }
+        if (module->api->prepareApplication && !module->api->prepareApplication(
+                                                   static_cast<int>(state.argumentPointers.size()),
+                                                   state.argumentPointers.data()
+                                               )) {
+            return false;
+        }
+        module->prepared = true;
+        return true;
+    }
+
     bool EngineFactory::initialize(Backend backend) {
+        if (!prepareApplication(backend)) {
+            return false;
+        }
         EngineFactoryState &state = factoryState();
         BackendModule &module = state.modules[backend];
         if (module.initialized) {
             return true;
         }
-        if (!module.library) {
-            const QString name = moduleName(backend);
-            if (name.isEmpty()) {
-                return false;
-            }
-            const QString path = QDir(QCoreApplication::applicationDirPath()).filePath(name);
-            module.library = std::make_unique<QLibrary>(path);
-            module.library->setLoadHints(QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
-            if (!module.library->load()) {
-                qCritical().noquote() << "The engine module could not be loaded:" << module.library->errorString();
-                module.library.reset();
-                return false;
-            }
-            const auto resolve = reinterpret_cast<ResolveEnginePlugin>(module.library->resolve("eden_engine_plugin"));
-            module.api = resolve ? resolve() : nullptr;
-            if (!module.api || module.api->abiVersion != enginePluginAbiVersion || !module.api->initialize ||
-                !module.api->createView || !module.api->createProfile || !module.api->shutdown) {
-                qCritical().noquote() << "The engine module has an incompatible interface:" << path;
-                module.api = nullptr;
-                module.library.reset();
-                return false;
-            }
-        }
-        if (state.arguments.isEmpty()) {
-            return false;
-        }
 
         const QByteArray product{"Eden"};
         const QByteArray version = QCoreApplication::applicationVersion().toUtf8();
-        const EngineIdentity identity{.product = product.constData(), .version = version.constData()};
+        const QString backendId = EngineRegistry::instance()->idForBackend(backend);
+        const QByteArray engineDataRoot =
+            core::ProfilePaths::engineDataDirectory(core::ProfilePaths::standardRoots(), backendId).toUtf8();
+        const EngineIdentity identity{
+            .product = product.constData(),
+            .version = version.constData(),
+            .engineDataRoot = engineDataRoot.constData(),
+        };
         module.initialized = module.api->initialize(
             static_cast<int>(state.argumentPointers.size()),
             state.argumentPointers.data(),
@@ -117,11 +159,6 @@ namespace eden::engine {
     }
 
     void EngineFactory::shutdown() {
-        QHash<Backend, QPointer<EngineProfile>> &profiles = persistentProfiles();
-        for (EngineProfile *profile : std::as_const(profiles)) {
-            delete profile;
-        }
-        profiles.clear();
         EngineFactoryState &state = factoryState();
         for (auto &[backend, module] : state.modules) {
             Q_UNUSED(backend)
@@ -141,21 +178,13 @@ namespace eden::engine {
         return std::unique_ptr<EngineView>(api->createView(profile));
     }
 
-    std::shared_ptr<EngineProfile> EngineFactory::create(Backend backend, bool privateProfile, QQmlEngine *engine) {
-        if (!initialize(backend)) {
+    std::shared_ptr<EngineProfile>
+    EngineFactory::create(const EngineProfileParameters &parameters, QQmlEngine *engine) {
+        if (!initialize(parameters.backend)) {
             return nullptr;
         }
-        const EnginePluginApi *api = factoryState().modules.at(backend).api;
-        if (privateProfile) {
-            return std::shared_ptr<EngineProfile>(api->createProfile(true, engine, nullptr));
-        }
-        QHash<Backend, QPointer<EngineProfile>> &profiles = persistentProfiles();
-        EngineProfile *profile = profiles.value(backend);
-        if (!profile) {
-            profile = api->createProfile(false, engine, QCoreApplication::instance());
-            profiles.insert(backend, profile);
-        }
-        return std::shared_ptr<EngineProfile>(profile, [](EngineProfile *) {});
+        const EnginePluginApi *api = factoryState().modules.at(parameters.backend).api;
+        return std::shared_ptr<EngineProfile>(api->createProfile(&parameters, engine, nullptr));
     }
 
 }

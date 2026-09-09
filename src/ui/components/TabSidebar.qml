@@ -102,6 +102,7 @@ Rectangle {
             required property bool discarded
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: sidebar.controller.tabDragIndex === index
+            property bool previewSuppressed: false
 
             width: tabsView.width
             height: 42
@@ -181,10 +182,21 @@ Rectangle {
 
             HoverHandler {
                 id: hover
+
+                onHoveredChanged: {
+                    if (!hovered)
+                        tab.previewSuppressed = false;
+
+                }
             }
 
             TapHandler {
                 acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                onPressedChanged: {
+                    if (pressed)
+                        tab.previewSuppressed = true;
+
+                }
                 onTapped: (_, button) => {
                     if (button === Qt.MiddleButton)
                         sidebar.controller.closeTab(tab.index);
@@ -195,6 +207,11 @@ Rectangle {
 
             TapHandler {
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed)
+                        tab.previewSuppressed = true;
+
+                }
                 onTapped: tabMenu.open()
             }
 
@@ -225,7 +242,7 @@ Rectangle {
                 controller: sidebar.controller
                 tabIndex: tab.index
                 anchorItem: tab
-                anchorHovered: hover.hovered && !tabMenu.opened && !tab.dragging
+                anchorHovered: hover.hovered && !tab.previewSuppressed && !tabMenu.opened && !tab.dragging
                 vertical: true
             }
 

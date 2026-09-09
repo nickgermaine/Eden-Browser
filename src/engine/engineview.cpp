@@ -2,108 +2,118 @@
 
 namespace eden::engine {
 
-EngineView::EngineView(QObject *parent)
-    : QObject(parent) {}
+    EngineView::EngineView(QObject *parent)
+        : QObject(parent) {}
 
-EngineView::~EngineView() = default;
+    EngineView::~EngineView() = default;
 
-qint64 EngineView::rendererProcessId() const {
-    return 0;
-}
-
-bool EngineView::devToolsOpen() const {
-    return m_devToolsOpen;
-}
-
-EngineView::DevToolsPlacement EngineView::devToolsPlacement() const {
-    return m_devToolsPlacement;
-}
-
-void EngineView::setDevToolsOpen(bool open) {
-    if (m_devToolsOpen == open) {
-        return;
+    qint64 EngineView::rendererProcessId() const {
+        return 0;
     }
-    m_devToolsOpen = open;
-    emit devToolsOpenChanged();
-}
 
-void EngineView::setDevToolsPlacement(DevToolsPlacement placement) {
-    if (m_devToolsPlacement == placement) {
-        return;
+    bool EngineView::devToolsOpen() const {
+        return m_devToolsOpen;
     }
-    m_devToolsPlacement = placement;
-    emit devToolsPlacementChanged();
-}
 
-void EngineView::closeDevTools() {
-    setDevToolsOpen(false);
-}
-
-void EngineView::attachDevTools(QQuickItem *) {}
-
-void EngineView::detachDevTools(QQuickItem *) {}
-
-void EngineView::toggleDevToolsOrientation() {
-    if (m_devToolsPlacement == DevToolsSeparate) {
-        return;
+    EngineView::DevToolsPlacement EngineView::devToolsPlacement() const {
+        return m_devToolsPlacement;
     }
-    setDevToolsPlacement(m_devToolsPlacement == DevToolsRight ? DevToolsBottom : DevToolsRight);
-}
 
-void EngineView::toggleDevToolsSeparate() {
-    if (m_devToolsPlacement == DevToolsSeparate) {
-        setDevToolsPlacement(m_lastDockedPlacement);
-        return;
+    void EngineView::setDevToolsOpen(bool open) {
+        if (m_devToolsOpen == open) {
+            return;
+        }
+        m_devToolsOpen = open;
+        emit devToolsOpenChanged();
     }
-    m_lastDockedPlacement = m_devToolsPlacement;
-    setDevToolsPlacement(DevToolsSeparate);
-}
 
-bool EngineView::containsPageScenePoint(const QPointF &) const {
-    return false;
-}
+    void EngineView::setDevToolsPlacement(DevToolsPlacement placement) {
+        if (m_devToolsPlacement == placement) {
+            return;
+        }
+        m_devToolsPlacement = placement;
+        emit devToolsPlacementChanged();
+    }
+
+    void EngineView::closeDevTools() {
+        setDevToolsOpen(false);
+    }
+
+    void EngineView::attachDevTools(QQuickItem *) {}
+
+    void EngineView::detachDevTools(QQuickItem *) {}
+
+    void EngineView::toggleDevToolsOrientation() {
+        if (m_devToolsPlacement == DevToolsSeparate) {
+            return;
+        }
+        setDevToolsPlacement(m_devToolsPlacement == DevToolsRight ? DevToolsBottom : DevToolsRight);
+    }
+
+    void EngineView::toggleDevToolsSeparate() {
+        if (m_devToolsPlacement == DevToolsSeparate) {
+            setDevToolsPlacement(m_lastDockedPlacement);
+            return;
+        }
+        m_lastDockedPlacement = m_devToolsPlacement;
+        setDevToolsPlacement(DevToolsSeparate);
+    }
+
+    bool EngineView::containsPageScenePoint(const QPointF &) const {
+        return false;
+    }
+
+    QVariantMap EngineView::certificateDetails() const {
+        return {};
+    }
 
 #if EDEN_ENABLE_AUTOMATION
-bool EngineView::automationWheel(int) {
-    return false;
-}
+    bool EngineView::automationWheel(int) {
+        return false;
+    }
 #endif
 
-void EngineView::executeContextMenuCommand(const QString &) {}
+    void EngineView::executeContextMenuCommand(const QString &) {}
 
-void EngineView::dismissContextMenu() {}
+    void EngineView::dismissContextMenu() {}
 
-void EngineView::resolveJavaScriptDialog(quint64, bool, const QString &) {}
+    void EngineView::resolveJavaScriptDialog(quint64, bool, const QString &) {}
 
-void EngineView::resolvePermissionRequest(quint64, bool) {}
+    void EngineView::resolvePermissionRequest(quint64, bool) {}
 
-void EngineView::resolveFileDialog(quint64, bool, const QList<QUrl> &) {}
+    void EngineView::resolveDisplayCaptureRequest(quint64, const QString &) {}
 
-void EngineView::releaseFocus() {}
+    void EngineView::resolveFileDialog(quint64, bool, const QList<QUrl> &) {}
 
-QUrl EngineView::internalUrlFor(const QUrl &) const {
-    return {};
-}
+    void EngineView::fillCredential(const QString &, const QString &) {}
 
-void EngineView::requestThumbnail(const QSize &, ThumbnailCallback callback) {
-    if (callback) {
-        callback({});
+    void EngineView::fillForm(const QVariantMap &) {}
+
+    void EngineView::releaseFocus() {}
+
+    QUrl EngineView::internalUrlFor(const QUrl &) const {
+        return {};
     }
-}
 
-QVariantMap EngineView::serializeState() const {
-    QVariantMap state;
-    state.insert("url", url());
-    state.insert("title", title());
-    state.insert("faviconUrl", faviconUrl());
-    state.insert("muted", isMuted());
-    return state;
-}
+    void EngineView::requestThumbnail(const QSize &, ThumbnailCallback callback) {
+        if (callback) {
+            callback({});
+        }
+    }
 
-void EngineView::restoreState(const QVariantMap &state) {
-    setMuted(state.value("muted").toBool());
-    const QUrl restoredUrl = state.value("url").toUrl();
-    load(restoredUrl.isEmpty() ? QUrl("about:blank") : restoredUrl);
-}
+    QVariantMap EngineView::serializeState() const {
+        QVariantMap state;
+        state.insert("url", url());
+        state.insert("title", title());
+        state.insert("faviconUrl", faviconUrl());
+        state.insert("muted", isMuted());
+        return state;
+    }
+
+    void EngineView::restoreState(const QVariantMap &state) {
+        setMuted(state.value("muted").toBool());
+        const QUrl restoredUrl = state.value("url").toUrl();
+        load(restoredUrl.isEmpty() ? QUrl("about:blank") : restoredUrl);
+    }
 
 }

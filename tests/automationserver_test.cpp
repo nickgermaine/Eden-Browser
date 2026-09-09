@@ -1,7 +1,9 @@
 #include "core/automation/automationserver.h"
 #include "core/automation/performancemetrics.h"
+#include "core/profiles/windowregistry.h"
 #include "core/window/tabmodel.h"
 #include "core/window/windowcontroller.h"
+#include "profiletesthelpers.h"
 
 #include <QElapsedTimer>
 #include <QFile>
@@ -55,9 +57,7 @@ void AutomationServerTest::cleanup() {
 
 void AutomationServerTest::disabledCreatesNoServer() {
     qunsetenv("EDEN_AUTOMATION");
-    QQuickWindow window;
-    eden::core::WindowController controller(&window);
-    QVERIFY(!eden::core::AutomationServer::createIfEnabled(&controller, &window));
+    QVERIFY(!eden::core::AutomationServer::createIfEnabled());
 }
 
 void AutomationServerTest::commandsAndTeardown() {
@@ -78,11 +78,15 @@ void AutomationServerTest::commandsAndTeardown() {
     field->setParent(&window);
     field->setParentItem(window.contentItem());
 
+    eden::core::WindowRegistry windowRegistry;
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qml));
     eden::core::WindowController controller(&window);
-    controller.initialize(false, "qtwebengine", false, false);
+    controller.initialize(harness.context, false, "qtwebengine", false);
     bool quitCalled = false;
     {
-        eden::core::AutomationServer server(&controller, &window, socketPath, nullptr, [&quitCalled] { quitCalled = true; });
+        eden::core::AutomationServer server(socketPath, nullptr, [&quitCalled] { quitCalled = true; });
+        server.attach(&controller, &window);
         QVERIFY(server.start());
         QVERIFY(QFileInfo::exists(socketPath));
         QLocalSocket socket;
@@ -98,13 +102,20 @@ void AutomationServerTest::commandsAndTeardown() {
         window.show();
         window.update();
         QTest::qWait(100);
-        const QJsonObject metrics = request(socket, 6, "dumpMetrics", {{"afterSequence", 0}}).value("result").toObject();
+        const QJsonObject metrics =
+            request(socket, 6, "dumpMetrics", {{"afterSequence", 0}}).value("result").toObject();
         QVERIFY(metrics.value("sequence").toInteger() >= 1);
         const QJsonArray samples = metrics.value("samples").toArray();
         QCOMPARE(
-            std::count_if(samples.begin(), samples.end(),
-                          [](const QJsonValue &sample) { return sample.toObject().value("name").toString() == "input.key_to_frame_ms"; }),
-            1);
+            std::count_if(
+                samples.begin(),
+                samples.end(),
+                [](const QJsonValue &sample) {
+                    return sample.toObject().value("name").toString() == "input.key_to_frame_ms";
+                }
+            ),
+            1
+        );
         const QString capturePath = runtime.filePath("window.png");
         QVERIFY(request(socket, 7, "captureWindow", {{"path", capturePath}}).value("result").toBool());
         QVERIFY(!QImage(capturePath).isNull());
@@ -123,9 +134,7 @@ void AutomationServerTest::rejectsUnsafePaths() {
     QTemporaryDir outside("/tmp/eo-XXXXXX");
     QVERIFY(outside.isValid());
     QFile::setPermissions(outside.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-    QQuickWindow window;
-    eden::core::WindowController controller(&window);
-    eden::core::AutomationServer server(&controller, &window, outside.filePath("automation.sock"));
+    eden::core::AutomationServer server(outside.filePath("automation.sock"));
     QVERIFY(!server.start());
 }
 
@@ -134,15 +143,12 @@ void AutomationServerTest::rejectsUnsafeTargets() {
     QVERIFY(runtime.isValid());
     QFile::setPermissions(runtime.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     qputenv("XDG_RUNTIME_DIR", QFile::encodeName(runtime.path()));
-    QQuickWindow window;
-    eden::core::WindowController controller(&window);
-
     const QString regularPath = runtime.filePath("regular");
     QFile regular(regularPath);
     QVERIFY(regular.open(QIODevice::WriteOnly));
     QCOMPARE(regular.write("kept"), 4);
     regular.close();
-    eden::core::AutomationServer regularServer(&controller, &window, regularPath);
+    eden::core::AutomationServer regularServer(regularPath);
     QVERIFY(!regularServer.start());
     QVERIFY(regular.open(QIODevice::ReadOnly));
     QCOMPARE(regular.readAll(), QByteArray("kept"));
@@ -153,16 +159,19 @@ void AutomationServerTest::rejectsUnsafeTargets() {
     target.close();
     const QString socketLink = runtime.filePath("socket-link");
     QVERIFY(QFile::link(targetPath, socketLink));
-    eden::core::AutomationServer linkServer(&controller, &window, socketLink);
+    eden::core::AutomationServer linkServer(socketLink);
     QVERIFY(!linkServer.start());
     QVERIFY(QFileInfo::exists(targetPath));
     QVERIFY(QFileInfo(socketLink).isSymLink());
 
     const QString insecureParent = runtime.filePath("insecure");
     QVERIFY(QDir().mkdir(insecureParent));
-    QFile::setPermissions(insecureParent, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner |
-                                              QFileDevice::ReadGroup | QFileDevice::ExeGroup);
-    eden::core::AutomationServer modeServer(&controller, &window, insecureParent + "/automation.sock");
+    QFile::setPermissions(
+        insecureParent,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner | QFileDevice::ReadGroup |
+            QFileDevice::ExeGroup
+    );
+    eden::core::AutomationServer modeServer(insecureParent + "/automation.sock");
     QVERIFY(!modeServer.start());
 
     const QString realParent = runtime.filePath("real-parent");
@@ -170,7 +179,7 @@ void AutomationServerTest::rejectsUnsafeTargets() {
     QFile::setPermissions(realParent, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     const QString parentLink = runtime.filePath("parent-link");
     QVERIFY(QFile::link(realParent, parentLink));
-    eden::core::AutomationServer parentLinkServer(&controller, &window, parentLink + "/automation.sock");
+    eden::core::AutomationServer parentLinkServer(parentLink + "/automation.sock");
     QVERIFY(!parentLinkServer.start());
 }
 
@@ -179,9 +188,7 @@ void AutomationServerTest::disconnectsInvalidPayloads() {
     QVERIFY(runtime.isValid());
     QFile::setPermissions(runtime.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     qputenv("XDG_RUNTIME_DIR", QFile::encodeName(runtime.path()));
-    QQuickWindow window;
-    eden::core::WindowController controller(&window);
-    eden::core::AutomationServer server(&controller, &window, runtime.filePath("automation.sock"));
+    eden::core::AutomationServer server(runtime.filePath("automation.sock"));
     QVERIFY(server.start());
 
     QLocalSocket oversized;
@@ -199,7 +206,8 @@ void AutomationServerTest::disconnectsInvalidPayloads() {
     QTRY_COMPARE(nul.state(), QLocalSocket::UnconnectedState);
 }
 
-QJsonObject AutomationServerTest::request(QLocalSocket &socket, int id, const QString &method, const QJsonObject &parameters) {
+QJsonObject
+AutomationServerTest::request(QLocalSocket &socket, int id, const QString &method, const QJsonObject &parameters) {
     QJsonObject command;
     command.insert("jsonrpc", "2.0");
     command.insert("id", id);

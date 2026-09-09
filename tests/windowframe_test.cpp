@@ -23,12 +23,17 @@ class FakeTabView final : public QQuickItem {
         lastMode = mode;
     }
 
+    Q_INVOKABLE void forceLayout() {
+        ++layoutCount;
+    }
+
     qreal originX = 0;
     qreal contentWidth = 1000;
     qreal contentX = 0;
     int count = 10;
     int lastIndex = -1;
     int lastMode = -1;
+    int layoutCount = 0;
 };
 
 class WindowFrameTest final : public QObject {
@@ -38,6 +43,8 @@ class WindowFrameTest final : public QObject {
     void outsideClickClearsFocus();
     void childRemovalDuringTeardownIsIgnored();
     void tabNavigatorScrollsAndSnaps();
+    void tabNavigatorRelayoutNormalizesGeometry();
+    void tabNavigatorCancelsRelayoutAfterDestruction();
 };
 
 void WindowFrameTest::outsideClickClearsFocus() {
@@ -52,13 +59,27 @@ void WindowFrameTest::outsideClickClearsFocus() {
     field.forceActiveFocus(Qt::MouseFocusReason);
     QCOMPARE(window.activeFocusItem(), &field);
 
-    QMouseEvent insidePress(QEvent::MouseButtonPress, QPointF(30, 30), QPointF(30, 30), QPointF(30, 30), Qt::LeftButton, Qt::LeftButton,
-                            Qt::NoModifier);
+    QMouseEvent insidePress(
+        QEvent::MouseButtonPress,
+        QPointF(30, 30),
+        QPointF(30, 30),
+        QPointF(30, 30),
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier
+    );
     QCoreApplication::sendEvent(&window, &insidePress);
     QCOMPARE(window.activeFocusItem(), &field);
 
-    QMouseEvent outsidePress(QEvent::MouseButtonPress, QPointF(240, 180), QPointF(240, 180), QPointF(240, 180), Qt::LeftButton,
-                             Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent outsidePress(
+        QEvent::MouseButtonPress,
+        QPointF(240, 180),
+        QPointF(240, 180),
+        QPointF(240, 180),
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier
+    );
     QCoreApplication::sendEvent(&window, &outsidePress);
     QVERIFY(window.activeFocusItem() != &field);
 }
@@ -96,6 +117,40 @@ void WindowFrameTest::tabNavigatorScrollsAndSnaps() {
     QCOMPARE(navigator.destinationForDrag(2, 450), 4);
     QCOMPARE(navigator.destinationForDrag(2, -20), 0);
     QCOMPARE(navigator.destinationForDrag(2, 1200), 9);
+}
+
+void WindowFrameTest::tabNavigatorRelayoutNormalizesGeometry() {
+    FakeTabView view;
+    view.setSize(QSizeF(300, 40));
+    eden::core::TabStripNavigator navigator;
+    navigator.setView(&view);
+
+    view.originX = 12;
+    view.contentWidth = 1000;
+    view.contentX = 920;
+    navigator.scheduleRelayout(true, 7);
+    QCoreApplication::processEvents();
+    QCOMPARE(view.layoutCount, 1);
+    QCOMPARE(view.contentX, 712);
+    QCOMPARE(view.lastIndex, 7);
+    QCOMPARE(view.lastMode, 4);
+
+    view.contentX = 280;
+    navigator.scheduleRelayout(true, 4);
+    navigator.scheduleRelayout(false, 4);
+    QCoreApplication::processEvents();
+    QCOMPARE(view.layoutCount, 2);
+    QCOMPARE(view.contentX, 12);
+}
+
+void WindowFrameTest::tabNavigatorCancelsRelayoutAfterDestruction() {
+    FakeTabView view;
+    auto *navigator = new eden::core::TabStripNavigator;
+    navigator->setView(&view);
+    navigator->scheduleRelayout(true, 0);
+    delete navigator;
+    QCoreApplication::processEvents();
+    QCOMPARE(view.layoutCount, 0);
 }
 
 QTEST_MAIN(WindowFrameTest)

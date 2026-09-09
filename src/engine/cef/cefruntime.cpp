@@ -19,9 +19,9 @@ namespace eden::engine::cef {
 
     static std::filesystem::path defaultRootCachePath() {
         const QString configuredDataHome = qEnvironmentVariable("XDG_DATA_HOME");
-        const std::filesystem::path dataHome = configuredDataHome.isEmpty()
-                                                   ? std::filesystem::path(QDir::homePath().toStdString()) / ".local" / "share"
-                                                   : std::filesystem::path(configuredDataHome.toStdString());
+        const std::filesystem::path dataHome =
+            configuredDataHome.isEmpty() ? std::filesystem::path(QDir::homePath().toStdString()) / ".local" / "share"
+                                         : std::filesystem::path(configuredDataHome.toStdString());
         return dataHome / "eden" / "cef";
     }
 
@@ -31,7 +31,12 @@ namespace eden::engine::cef {
         if (error) {
             return false;
         }
-        std::filesystem::permissions(rootCachePath, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, error);
+        std::filesystem::permissions(
+            rootCachePath,
+            std::filesystem::perms::owner_all,
+            std::filesystem::perm_options::replace,
+            error
+        );
         return !error;
     }
 
@@ -48,7 +53,13 @@ namespace eden::engine::cef {
         return CefExecuteProcess(mainArguments, m_application, nullptr);
     }
 
-    bool CefRuntime::initialize(int argc, char *argv[], const char *product, const char *version, const std::filesystem::path &rootCachePath) {
+    bool CefRuntime::initialize(
+        int argc,
+        char *argv[],
+        const char *product,
+        const char *version,
+        const std::filesystem::path &rootCachePath
+    ) {
         if (m_initialized) {
             return true;
         }
@@ -74,7 +85,7 @@ namespace eden::engine::cef {
             std::filesystem::absolute(argv[0]),
             product,
             version,
-        std::span<const std::string_view>(arguments),
+            std::span<const std::string_view>(arguments),
             m_rootCachePath
         );
         if (!processSettings.valid) {
@@ -123,14 +134,34 @@ namespace eden::engine::cef {
         return m_rootCachePath;
     }
 
-    CefRefPtr<CefRequestContext> CefRuntime::createRequestContext(bool privateProfile) const {
+    bool isPathWithinRoot(const std::filesystem::path &candidate, const std::filesystem::path &root) {
+        const std::filesystem::path normalizedCandidate = candidate.lexically_normal();
+        const std::filesystem::path normalizedRoot = root.lexically_normal();
+        auto rootIterator = normalizedRoot.begin();
+        for (auto candidateIterator = normalizedCandidate.begin();
+             rootIterator != normalizedRoot.end() && candidateIterator != normalizedCandidate.end();
+             ++rootIterator, ++candidateIterator) {
+            if (*rootIterator != *candidateIterator) {
+                return false;
+            }
+        }
+        return rootIterator == normalizedRoot.end() && normalizedCandidate != normalizedRoot;
+    }
+
+    CefRefPtr<CefRequestContext>
+    CefRuntime::createRequestContext(bool privateProfile, const std::filesystem::path &profileDataPath) const {
         if (!m_initialized) {
             throw std::logic_error("CEF is not initialized");
         }
-        if (!privateProfile && !prepareRootCachePath(m_rootCachePath / "default")) {
-            throw std::runtime_error("CEF profile directory creation failed");
+        if (!privateProfile) {
+            if (profileDataPath.empty() || !isPathWithinRoot(profileDataPath, m_rootCachePath)) {
+                throw std::invalid_argument("The CEF profile path is outside the engine root");
+            }
+            if (!prepareRootCachePath(profileDataPath)) {
+                throw std::runtime_error("CEF profile directory creation failed");
+            }
         }
-        const CefRequestContextSettings settings = createCefRequestContextSettings(privateProfile, m_rootCachePath);
+        const CefRequestContextSettings settings = createCefRequestContextSettings(privateProfile, profileDataPath);
         CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
         if (!context) {
             throw std::runtime_error("CEF request context creation failed");
@@ -138,10 +169,11 @@ namespace eden::engine::cef {
         return context;
     }
 
-    CefRequestContextSettings createCefRequestContextSettings(bool privateProfile, const std::filesystem::path &rootCachePath) {
+    CefRequestContextSettings
+    createCefRequestContextSettings(bool privateProfile, const std::filesystem::path &profileDataPath) {
         CefRequestContextSettings settings;
         if (!privateProfile) {
-            CefString(&settings.cache_path) = (rootCachePath / "default").string();
+            CefString(&settings.cache_path) = profileDataPath.string();
             settings.persist_session_cookies = true;
         }
         return settings;

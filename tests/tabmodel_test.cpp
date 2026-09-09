@@ -134,10 +134,17 @@ class FakeEngineView : public eden::engine::EngineView {
     int m_scroll = 0;
 };
 
+static eden::engine::EngineProfileParameters fakeProfileParameters(bool privateProfile, eden::engine::Backend backend) {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = backend;
+    parameters.privateProfile = privateProfile;
+    return parameters;
+}
+
 class FakeEngineProfile final : public eden::engine::EngineProfile {
   public:
     FakeEngineProfile(bool privateProfile, eden::engine::Backend backend)
-        : EngineProfile(privateProfile),
+        : EngineProfile(fakeProfileParameters(privateProfile, backend)),
           m_backend(backend) {}
 
     QObject *nativeProfile() const override {
@@ -397,7 +404,8 @@ void TabModelTest::internalPageDoesNotCreateEngine() {
             ++engineCount;
             return std::make_unique<FakeEngineView>();
         },
-        false);
+        false
+    );
     const int row = model.addTab(QUrl("eden://settings"));
     QCOMPARE(engineCount, 0);
     QCOMPARE(model.data(model.index(row), eden::core::TabModel::TitleRole).toString(), QString("Settings"));
@@ -407,7 +415,15 @@ void TabModelTest::internalPageDoesNotCreateEngine() {
     const int editorRow = model.addTab(QUrl("eden://theme-editor"));
     QCOMPARE(engineCount, 0);
     QCOMPARE(model.data(model.index(editorRow), eden::core::TabModel::TitleRole).toString(), QString("Theme Editor"));
-    QCOMPARE(model.data(model.index(editorRow), eden::core::TabModel::InternalPageRole).toString(), QString("theme-editor"));
+    QCOMPARE(
+        model.data(model.index(editorRow), eden::core::TabModel::InternalPageRole).toString(),
+        QString("theme-editor")
+    );
+    const int newTabRow = model.addTab();
+    QCOMPARE(engineCount, 0);
+    QCOMPARE(model.data(model.index(newTabRow), eden::core::TabModel::TitleRole).toString(), QString("New Tab"));
+    QCOMPARE(model.data(model.index(newTabRow), eden::core::TabModel::UrlRole).toUrl(), QUrl("eden://newtab"));
+    QCOMPARE(model.data(model.index(newTabRow), eden::core::TabModel::InternalPageRole).toString(), QString("newtab"));
 }
 
 void TabModelTest::urlCredentialsAreNotExposed() {
@@ -427,19 +443,27 @@ void TabModelTest::newViewRequestCrossesTheEngineSeam() {
     QVERIFY(view);
     const QUrl destination("https://destination.example/new-tab");
     bool received = false;
-    connect(&model, &eden::core::TabModel::externalViewRequested, &model,
-            [&received, &destination](eden::engine::EngineNewViewRequest *request) {
-                received = request && request->requestedUrl() == destination && request->isUserInitiated() &&
-                           request->disposition() == eden::engine::EngineView::Disposition::NewBackgroundTab;
-            });
+    connect(
+        &model,
+        &eden::core::TabModel::externalViewRequested,
+        &model,
+        [&received, &destination](eden::engine::EngineNewViewRequest *request) {
+            received = request && request->requestedUrl() == destination && request->isUserInitiated() &&
+                       request->disposition() == eden::engine::EngineView::Disposition::NewBackgroundTab;
+        }
+    );
     view->requestNewView(destination, eden::engine::EngineView::Disposition::NewBackgroundTab);
     QVERIFY(received);
 }
 
 void TabModelTest::qtWebEngineBridgeMethodsArePublic() {
     const QMetaObject &metaObject = eden::engine::QtWebEngineView::staticMetaObject;
-    const QList<QByteArray> methods = {"handleNewWindow(QObject*)", "handleFullScreen(bool)",
-                                       "handleContextMenu(QPoint,QUrl,QUrl,QString,bool)", "handleCertificateError()"};
+    const QList<QByteArray> methods = {
+        "handleNewWindow(QObject*)",
+        "handleFullScreen(bool)",
+        "handleContextMenu(QPoint,QUrl,QUrl,QString,bool)",
+        "handleCertificateError()"
+    };
     for (const QByteArray &signature : methods) {
         const int index = metaObject.indexOfMethod(signature);
         QVERIFY2(index >= 0, signature.constData());
@@ -453,7 +477,8 @@ void TabModelTest::qmlCanInvokeQtWebEngineBridge() {
     QSignalSpy contextMenuRequested(&view, &eden::engine::EngineView::contextMenuRequested);
     QQmlEngine engine;
     QQmlComponent component(&engine);
-    component.setData(R"QML(import QtQml
+    component.setData(
+        R"QML(import QtQml
 QtObject {
     required property var bridge
     Component.onCompleted: {
@@ -463,13 +488,15 @@ QtObject {
     }
 }
 )QML",
-                      QUrl());
+        QUrl()
+    );
     std::unique_ptr<QObject> object(component.createWithInitialProperties({{"bridge", QVariant::fromValue(&view)}}));
     QVERIFY2(object, qPrintable(component.errorString()));
     QCOMPARE(fullscreenRequested.size(), 1);
     QVERIFY(fullscreenRequested.first().at(0).toBool());
     QCOMPARE(contextMenuRequested.size(), 1);
-    const eden::engine::ContextMenuInfo info = contextMenuRequested.first().at(0).value<eden::engine::ContextMenuInfo>();
+    const eden::engine::ContextMenuInfo info =
+        contextMenuRequested.first().at(0).value<eden::engine::ContextMenuInfo>();
     QCOMPARE(info.position, QPoint(0, 0));
     QCOMPARE(info.linkUrl, QUrl("https://link.example"));
     QCOMPARE(info.mediaUrl, QUrl("https://image.example/picture.png"));
@@ -496,7 +523,7 @@ void TabModelTest::registryBuildsSelectionActions() {
     QCOMPARE(actions.at(0).toMap().value("title").toString(), QString("Blink"));
     QCOMPARE(actions.at(0).toMap().value("icon").toString(), QString("check"));
     QCOMPARE(actions.at(1).toMap().value("title").toString(), QString("Blink (Qt)"));
-    QVERIFY(actions.at(1).toMap().value("icon").toString().isEmpty());
+    QCOMPARE(actions.at(1).toMap().value("icon").toString(), QString("programming"));
 }
 
 void TabModelTest::backendOverrideCreatesMixedWindow() {
@@ -504,7 +531,8 @@ void TabModelTest::backendOverrideCreatesMixedWindow() {
         {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
-    auto factory = [](eden::engine::Backend backend, eden::engine::EngineProfile *) -> std::unique_ptr<eden::engine::EngineView> {
+    auto factory = [](eden::engine::Backend backend,
+                      eden::engine::EngineProfile *) -> std::unique_ptr<eden::engine::EngineView> {
         if (backend == eden::engine::Backend::QtWebEngine) {
             return std::make_unique<eden::engine::QtWebEngineView>(nullptr);
         }
@@ -525,11 +553,11 @@ void TabModelTest::backendOverrideCreatesMixedWindow() {
 }
 
 void TabModelTest::profilesAreSeparatedByBackendAndPrivacy() {
-    eden::engine::EngineProfileMap normal(false, [](eden::engine::Backend backend, bool privateProfile) {
-        return std::make_shared<FakeEngineProfile>(privateProfile, backend);
+    eden::engine::EngineProfileMap normal(false, [](eden::engine::Backend backend) {
+        return std::make_shared<FakeEngineProfile>(false, backend);
     });
-    eden::engine::EngineProfileMap privateProfiles(true, [](eden::engine::Backend backend, bool privateProfile) {
-        return std::make_shared<FakeEngineProfile>(privateProfile, backend);
+    eden::engine::EngineProfileMap privateProfiles(true, [](eden::engine::Backend backend) {
+        return std::make_shared<FakeEngineProfile>(true, backend);
     });
     auto normalQt = normal.profile(eden::engine::Backend::QtWebEngine);
     auto normalServo = normal.profile(eden::engine::Backend::Servo);
@@ -625,8 +653,17 @@ void TabModelTest::restoreKeepsPinnedRegionAndBackend() {
     };
     eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
     QJsonArray tabs;
-    tabs.append(QJsonObject{{"url", "https://normal.example"}, {"title", "Normal"}, {"pinned", false}, {"backend", "servo"}});
-    tabs.append(QJsonObject{{"url", "https://pinned.example"}, {"title", "Pinned"}, {"pinned", true}, {"backend", "qtwebengine"}});
+    tabs.append(
+        QJsonObject{{"url", "https://normal.example"}, {"title", "Normal"}, {"pinned", false}, {"backend", "servo"}}
+    );
+    tabs.append(
+        QJsonObject{
+            {"url", "https://pinned.example"},
+            {"title", "Pinned"},
+            {"pinned", true},
+            {"backend", "qtwebengine"}
+        }
+    );
     model.restoreTabs(tabs);
     QCOMPARE(created, 0);
     QCOMPARE(model.pinnedCount(), 1);

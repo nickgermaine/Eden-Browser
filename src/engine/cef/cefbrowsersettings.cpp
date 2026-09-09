@@ -2,8 +2,8 @@
 
 namespace eden::engine::cef {
 
-void configureAlloyRuntime(CefWindowInfo &windowInfo) {
-    windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-}
+    void configureAlloyRuntime(CefWindowInfo &windowInfo) {
+        windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    }
 
 }

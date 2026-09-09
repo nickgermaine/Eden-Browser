@@ -1,3 +1,7 @@
+#include "core/profiles/applicationcontext.h"
+#include "core/profiles/profileeditorcontroller.h"
+#include "core/profiles/profilelistmodel.h"
+#include "core/profiles/profilemanager.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/shortcutregistry.h"
 #include "core/settings/theme/thememanager.h"
@@ -8,7 +12,9 @@
 #include "engine/cef/cefprofile.h"
 #include "engine/cef/cefruntime.h"
 #include "engine/cef/devtoolssocketserver.h"
+#include "engine/enginefactory.h"
 #include "engine/engineregistry.h"
+#include "profiletesthelpers.h"
 
 #include <QBuffer>
 #include <QClipboard>
@@ -23,6 +29,7 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -81,9 +88,57 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/favicon.png") {
+                    if (path == "/events") {
+                        responseBody = R"HTML(<!doctype html>
+<title>Navigation events</title><link rel="icon" href="/favicon.png">
+<button id="frames" style="position:absolute;left:20px;top:20px;width:180px;height:48px">Frame activity</button>
+<a href="#section" style="position:absolute;left:20px;top:90px;width:180px;height:48px">Same document</a>
+<button id="state" style="position:absolute;left:220px;top:20px;width:180px;height:48px">Update page</button>
+<button id="same-url" style="position:absolute;left:220px;top:90px;width:180px;height:48px">Add history state</button>
+<input type="file" style="position:absolute;left:20px;top:160px;width:240px;height:48px">
+<script>
+document.getElementById('same-url').onclick = () => history.pushState({step:1}, '', location.href);
+document.getElementById('state').onclick = () => {
+    history.pushState({}, '', '/events?state=1');
+    history.replaceState({}, '', '/events?state=2');
+    document.title = 'Updated navigation';
+    document.querySelector('link').href = '/frame-icon.png';
+};
+document.getElementById('frames').onclick = async () => {
+    for (let index = 0; index < 24; ++index) {
+        const frame = document.createElement('iframe');
+        const loaded = new Promise(resolve => frame.onload = resolve);
+        const url = new URL('/event-frame?index=' + index, location.href);
+        if (index % 2) { url.hostname = 'localhost'; }
+        frame.src = url.href;
+        document.body.append(frame);
+        await loaded;
+        if (index % 2 === 0) {
+            frame.contentWindow.history.replaceState({}, '', '/frame-state?index=' + index);
+        }
+        frame.remove();
+    }
+    await fetch('/events-complete');
+};
+</script>)HTML";
+                    } else if (path.startsWith("/event-frame?")) {
+                        responseBody = "<!doctype html><title>Child frame</title>"
+                                       "<link rel=icon href=/frame-icon.png><body>Frame content";
+                    } else if (path == "/events-complete") {
+                        ++m_completedFrameRuns;
+                        responseBody = "complete";
+                    } else if (path == "/events-pending") {
+                        ++m_pendingNavigations;
+                        return;
+                    } else if (path == "/events-redirect") {
+                        socket->write(
+                            "HTTP/1.1 302 Found\r\nLocation: /events\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        socket->disconnectFromHost();
+                        return;
+                    } else if (path == "/favicon.png" || path == "/frame-icon.png") {
                         QImage icon(16, 16, QImage::Format_ARGB32);
-                        icon.fill(QColor("#315d32"));
+                        icon.fill(QColor(path == "/favicon.png" ? "#315d32" : "#cc0088"));
                         QBuffer buffer(&responseBody);
                         buffer.open(QIODevice::WriteOnly);
                         icon.save(&buffer, "PNG");
@@ -117,6 +172,7 @@ class LocalPageServer final : public QTcpServer {
 <a id="download" download="eden-handler.txt" href="/download.txt" style="position:absolute;left:20px;top:300px">Download</a>
 <a id="cursor-link" href="#cursor" style="position:absolute;left:20px;top:360px">Cursor link</a>
 <input id="editor" style="position:absolute;left:20px;top:410px;width:400px;height:42px;font-size:20px">
+<button id="display" style="position:absolute;left:20px;top:470px;width:180px;height:48px">Share display</button>
 <div style="position:absolute;left:280px;top:40px;width:500px;height:380px;border-radius:32px;background:#315d32;color:white;display:grid;place-items:center;font-size:36px">E3.5 OSR</div>
 <script>
 window.name='source'
@@ -124,6 +180,19 @@ document.getElementById('delayed').onclick=()=>setTimeout(()=>window.open('/dela
 document.getElementById('dialog').onclick=()=>prompt('Handler prompt','seed')
 document.getElementById('permission').onclick=()=>navigator.geolocation.getCurrentPosition(()=>{},()=>{})
 document.getElementById('editor').oninput=event=>document.title='Input '+event.target.value
+document.getElementById('display').onclick=()=>{
+    Object.defineProperty(navigator.mediaDevices,'getUserMedia',{
+        configurable:true,
+        value:constraints=>{
+            const videoId=constraints.video.mandatory.chromeMediaSourceId
+            const audioId=constraints.audio&&constraints.audio.mandatory?constraints.audio.mandatory.chromeMediaSourceId:'none'
+            document.title='Capture source '+videoId+' audio '+audioId
+            return Promise.resolve(new MediaStream())
+        },
+        writable:true
+    })
+    navigator.mediaDevices.getDisplayMedia({video:true,audio:true}).catch(()=>document.title='Capture cancelled')
+}
 </script></body></html>)HTML";
                     }
                     QByteArray headers = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: " + contentType +
@@ -144,8 +213,18 @@ document.getElementById('editor').oninput=event=>document.title='Input '+event.t
         return m_rootRequests;
     }
 
+    int completedFrameRuns() const {
+        return m_completedFrameRuns;
+    }
+
+    int pendingNavigations() const {
+        return m_pendingNavigations;
+    }
+
   private:
     int m_rootRequests = 0;
+    int m_completedFrameRuns = 0;
+    int m_pendingNavigations = 0;
     QHash<QTcpSocket *, QByteArray> m_requests;
 };
 
@@ -155,6 +234,7 @@ class CefHandlersTest final : public QObject {
   private slots:
     void initTestCase();
     void handlerSuite();
+    void navigationEvents();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -164,6 +244,7 @@ class CefHandlersTest final : public QObject {
     QTemporaryDir m_dataDirectory;
     QTemporaryDir m_environmentDirectory;
     LocalPageServer m_server;
+    std::unique_ptr<eden::core::ApplicationContext> m_applicationContext;
 };
 
 static bool hasColorVariation(const QImage &image, const QRect &region, int minimumColors) {
@@ -219,6 +300,24 @@ void CefHandlersTest::initTestCase() {
         "EngineView",
         "Engine views are created by WindowController"
     );
+    qmlRegisterUncreatableType<eden::core::ProfileListModel>(
+        "Eden.Ui",
+        1,
+        0,
+        "ProfileListModel",
+        "The profile list is owned by ProfileManager"
+    );
+    qmlRegisterUncreatableType<eden::core::ProfileEditorController>(
+        "Eden.Ui",
+        1,
+        0,
+        "ProfileEditorController",
+        "Profile editors are created by ProfileManager"
+    );
+    m_applicationContext = std::make_unique<eden::core::ApplicationContext>(
+        eden::core::ProfilePaths::Roots{m_dataDirectory.path() + "/app-data", m_dataDirectory.path() + "/app-cache"}
+    );
+    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Profiles", m_applicationContext->profiles());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Engines", eden::engine::EngineRegistry::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
@@ -251,7 +350,10 @@ void CefHandlersTest::handlerSuite() {
     QVERIFY(existingDownload.open(QIODevice::WriteOnly));
     QCOMPARE(existingDownload.write("preserve"), qint64(8));
     existingDownload.close();
-    eden::engine::cef::CefProfile profile(true);
+    eden::engine::EngineProfileParameters privateParameters;
+    privateParameters.backend = eden::engine::Backend::Cef;
+    privateParameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(privateParameters);
     QQuickWindow window;
     window.resize(1000, 700);
     window.show();
@@ -404,6 +506,23 @@ void CefHandlersTest::handlerSuite() {
     QVERIFY(permissionInfo.permissions.contains("location"));
     source.resolvePermissionRequest(permissionInfo.id, false);
 
+    QSignalSpy displayCapture(&source, &eden::engine::EngineView::displayCaptureRequested);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 495));
+    QTRY_COMPARE_WITH_TIMEOUT(displayCapture.size(), 1, 10000);
+    const eden::engine::DisplayCaptureRequestInfo displayCaptureInfo =
+        displayCapture.constFirst().constFirst().value<eden::engine::DisplayCaptureRequestInfo>();
+    QVERIFY(displayCaptureInfo.audioRequested);
+    QCOMPARE(displayCaptureInfo.origin.host(), QString("127.0.0.1"));
+    source.resolveDisplayCaptureRequest(displayCaptureInfo.id, {});
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Capture cancelled"), 10000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 495));
+    QTRY_COMPARE_WITH_TIMEOUT(displayCapture.size(), 2, 10000);
+    const eden::engine::DisplayCaptureRequestInfo windowCaptureInfo =
+        displayCapture.at(1).constFirst().value<eden::engine::DisplayCaptureRequestInfo>();
+    source.resolveDisplayCaptureRequest(windowCaptureInfo.id, "window");
+    const QRegularExpression windowCaptureTitle("^Capture source window:([1-9][0-9]*):0 audio none$");
+    QTRY_VERIFY_WITH_TIMEOUT(windowCaptureTitle.match(source.title()).hasMatch(), 10000);
+
     QSignalSpy downloadStarted(&profile, &eden::engine::EngineProfile::downloadStarted);
     QSignalSpy downloadUpdated(&profile, &eden::engine::EngineProfile::downloadUpdated);
     QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 315));
@@ -475,8 +594,122 @@ void CefHandlersTest::handlerSuite() {
     }
 }
 
+void CefHandlersTest::navigationEvents() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    const QUrl page(QString("http://127.0.0.1:%1/events").arg(m_server.serverPort()));
+    view.load(page);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Navigation events"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading() && !view.faviconUrl().isEmpty(), 15000);
+    QTest::qWait(250);
+    const QUrl favicon = view.faviconUrl();
+    QSignalSpy loading(&view, &eden::engine::EngineView::loadingChanged);
+    QSignalSpy progress(&view, &eden::engine::EngineView::loadProgressChanged);
+    QSignalSpy urls(&view, &eden::engine::EngineView::urlChanged);
+    QSignalSpy titles(&view, &eden::engine::EngineView::titleChanged);
+    QSignalSpy favicons(&view, &eden::engine::EngineView::faviconUrlChanged);
+    const int completedRuns = m_server.completedFrameRuns();
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.completedFrameRuns(), completedRuns + 1, 15000);
+    QTest::qWait(250);
+    qInfo(
+        "Frame activity: loading=%lld progress=%lld url=%lld title=%lld favicon=%lld",
+        static_cast<long long>(loading.size()),
+        static_cast<long long>(progress.size()),
+        static_cast<long long>(urls.size()),
+        static_cast<long long>(titles.size()),
+        static_cast<long long>(favicons.size())
+    );
+    QCOMPARE(view.url(), page);
+    QCOMPARE(view.title(), QString("Navigation events"));
+    QCOMPARE(view.faviconUrl(), favicon);
+    QCOMPARE(loading.size(), 0);
+    QCOMPARE(progress.size(), 0);
+    QCOMPARE(urls.size(), 0);
+    QCOMPARE(titles.size(), 0);
+    QCOMPARE(favicons.size(), 0);
+
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 100));
+    QUrl fragment = page;
+    fragment.setFragment("section");
+    QTRY_COMPARE_WITH_TIMEOUT(view.url(), fragment, 10000);
+    QTest::qWait(100);
+    QCOMPARE(loading.size(), 0);
+    QCOMPARE(progress.size(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(view.canGoBack(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.navigationHistory(-1).isEmpty(), 10000);
+    view.back();
+    QTRY_COMPARE_WITH_TIMEOUT(view.url(), page, 10000);
+    QCOMPARE(loading.size(), 0);
+
+    const qsizetype historyEntries = view.navigationHistory(-1).size();
+    const qsizetype urlChanges = urls.size();
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(310, 114));
+    QTRY_COMPARE_WITH_TIMEOUT(view.navigationHistory(-1).size(), historyEntries + 1, 10000);
+    QCOMPARE(urls.size(), urlChanges);
+    QCOMPARE(loading.size(), 0);
+    view.back();
+    QTRY_COMPARE_WITH_TIMEOUT(view.navigationHistory(-1).size(), historyEntries, 10000);
+    QCOMPARE(urls.size(), urlChanges);
+    QCOMPARE(loading.size(), 0);
+
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(310, 44));
+    QUrl stateUrl = page;
+    stateUrl.setQuery("state=2");
+    QTRY_COMPARE_WITH_TIMEOUT(view.url(), stateUrl, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Updated navigation"), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.faviconUrl().isEmpty() && view.faviconUrl() != favicon, 10000);
+    QCOMPARE(loading.size(), 0);
+    QCOMPARE(progress.size(), 0);
+    view.back();
+    QTRY_COMPARE_WITH_TIMEOUT(view.url(), page, 10000);
+    QCOMPARE(loading.size(), 0);
+
+    QSignalSpy fileDialogs(&view, &eden::engine::EngineView::fileDialogRequested);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(50, 180));
+    QTRY_COMPARE_WITH_TIMEOUT(fileDialogs.size(), 1, 10000);
+    const eden::engine::FileDialogInfo fileDialog =
+        fileDialogs.constFirst().constFirst().value<eden::engine::FileDialogInfo>();
+    view.resolveFileDialog(fileDialog.id, false, {});
+
+    view.reload();
+    QTRY_COMPARE_WITH_TIMEOUT(loading.size(), 2, 10000);
+    QVERIFY(!view.isLoading());
+    QCOMPARE(view.loadProgress(), 100);
+    loading.clear();
+    view.load(QUrl(QString("http://127.0.0.1:%1/events-redirect").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(loading.size(), 2, 10000);
+    QCOMPARE(view.url(), page);
+    QVERIFY(!view.isLoading());
+    loading.clear();
+    const int pendingNavigations = m_server.pendingNavigations();
+    view.load(QUrl(QString("http://127.0.0.1:%1/events-pending").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.pendingNavigations(), pendingNavigations + 1, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(view.isLoading(), 10000);
+    view.stop();
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 10000);
+    QCOMPARE(loading.size(), 2);
+    view.load(QUrl("http://127.0.0.1:1/"));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Page unavailable"), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 10000);
+    QCOMPARE(view.url(), QUrl("http://127.0.0.1:1/"));
+}
+
 void CefHandlersTest::resizeStress() {
-    eden::engine::cef::CefProfile profile(true);
+    eden::engine::EngineProfileParameters privateParameters;
+    privateParameters.backend = eden::engine::Backend::Cef;
+    privateParameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(privateParameters);
     QQuickWindow window;
     window.resize(1000, 700);
     window.show();
@@ -517,7 +750,10 @@ void CefHandlersTest::resizeStress() {
 }
 
 void CefHandlersTest::devToolsSuite() {
-    eden::engine::cef::CefProfile profile(true);
+    eden::engine::EngineProfileParameters privateProfileParameters;
+    privateProfileParameters.backend = eden::engine::Backend::Cef;
+    privateProfileParameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(privateProfileParameters);
     QQuickWindow window;
     window.resize(1200, 700);
     window.show();
@@ -587,6 +823,7 @@ void CefHandlersTest::devToolsSuite() {
 
 void CefHandlersTest::shellDevToolsSuite() {
     QQmlApplicationEngine qmlEngine;
+    m_applicationContext->profiles()->setQmlEngine(&qmlEngine);
     qmlEngine.rootContext()->setContextProperty("startupPrivateWindow", true);
     qmlEngine.rootContext()->setContextProperty("startupEngineName", QString("cef"));
     qmlEngine.loadFromModule("Eden.Ui", "BrowserWindow");
@@ -597,7 +834,9 @@ void CefHandlersTest::shellDevToolsSuite() {
     QVERIFY(QTest::qWaitForWindowExposed(window));
     auto *controller = window->findChild<eden::core::WindowController *>("windowController");
     QVERIFY(controller);
-    controller->initialize(true, "cef", false, true);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    controller->initialize(harness.context, true, "cef", true);
     eden::engine::EngineView *view = nullptr;
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&] {
@@ -665,7 +904,7 @@ void CefHandlersTest::shellDevToolsSuite() {
     QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsSeparate);
     QTRY_VERIFY_WITH_TIMEOUT(visibleWindowCount() > originalWindowCount, 10000);
     view->toggleDevToolsSeparate();
-    QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsRight);
+    QCOMPARE(view->devToolsPlacement(), eden::engine::EngineView::DevToolsBottom);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 10000);
 
     const QImage beforeOverlay = window->grabWindow();
@@ -704,8 +943,15 @@ int main(int argc, char *argv[]) {
         return processExitCode;
     }
     QGuiApplication application(argc, argv);
+    eden::engine::EngineFactory::configureApplicationArguments(argc, argv);
     CefHandlersTest test;
-    return QTest::qExec(&test);
+    QStringList testArguments;
+    for (const QString &argument : QCoreApplication::arguments()) {
+        if (!argument.startsWith("--")) {
+            testArguments.append(argument);
+        }
+    }
+    return QTest::qExec(&test, testArguments);
 }
 
 #include "cefhandlers_test.moc"

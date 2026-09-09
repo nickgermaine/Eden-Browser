@@ -18,7 +18,7 @@ class CefProcessSettingsTest final : public QObject {
     void initTestCase();
     void usesDedicatedHelperWithSandbox();
     void configuresUserAgentProduct();
-    void explicitFlagDisablesSandbox();
+    void explicitFlagCannotDisableSandbox();
     void configuresThreadingAndRootCache();
     void defaultsToWindowlessRendering();
     void explicitWindowedModeDisablesWindowlessRendering();
@@ -73,11 +73,11 @@ void CefProcessSettingsTest::configuresUserAgentProduct() {
     QCOMPARE(QString::fromStdString(CefString(&result.settings.user_agent_product).ToString()), expected);
 }
 
-void CefProcessSettingsTest::explicitFlagDisablesSandbox() {
+void CefProcessSettingsTest::explicitFlagCannotDisableSandbox() {
     const std::array<std::string_view, 2> arguments{"--engine=cef", "--no-sandbox"};
     const eden::engine::cef::CefProcessSettingsResult result = createSettings(arguments);
     QVERIFY(result.valid);
-    QCOMPARE(result.settings.no_sandbox, 1);
+    QCOMPARE(result.settings.no_sandbox, 0);
 }
 
 void CefProcessSettingsTest::configuresThreadingAndRootCache() {

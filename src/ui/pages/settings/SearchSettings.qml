@@ -5,6 +5,9 @@ import QtQuick.Controls
 Item {
     id: page
 
+    required property var controller
+    readonly property var profileSettings: controller && controller.profileSettings ? controller.profileSettings : null
+
     ScrollView {
         id: scroll
 
@@ -69,7 +72,7 @@ Item {
                             anchors.right: dropdownChevron.left
                             anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
-                            text: Settings.customSearchEngine ? "Custom" : Settings.searchEngine
+                            text: page.profileSettings ? (page.profileSettings.customSearchEngine ? "Custom" : page.profileSettings.searchEngine) : ""
                             color: Theme.surfaceText
                             font: Theme.bodyFont
                             elide: Text.ElideRight
@@ -100,9 +103,11 @@ Item {
                             y: parent.height + 4
                             preferredWidth: parent.width
                             maximumHeight: 380
-                            actions: Settings.searchEngineActions
+                            actions: page.profileSettings ? page.profileSettings.searchEngineActions : []
                             onTriggered: (actionId) => {
-                                return Settings.selectSearchEngine(actionId);
+                                if (page.profileSettings)
+                                    page.profileSettings.selectSearchEngine(actionId);
+
                             }
                         }
 
@@ -116,31 +121,39 @@ Item {
                     }
 
                     Text {
-                        visible: Settings.customSearchEngine
+                        visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         text: "Search engine name"
                         color: Theme.surfaceVariantText
                         font: Theme.labelFont
                     }
 
                     EdenTextField {
-                        visible: Settings.customSearchEngine
+                        visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         width: parent.width
-                        text: Settings.searchEngine
-                        onEditingFinished: Settings.searchEngine = text
+                        text: page.profileSettings ? page.profileSettings.searchEngine : ""
+                        onEditingFinished: {
+                            if (page.profileSettings)
+                                page.profileSettings.searchEngine = text;
+
+                        }
                     }
 
                     Text {
-                        visible: Settings.customSearchEngine
+                        visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         text: "Search URL, use %1 for the query"
                         color: Theme.surfaceVariantText
                         font: Theme.labelFont
                     }
 
                     EdenTextField {
-                        visible: Settings.customSearchEngine
+                        visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         width: parent.width
-                        text: Settings.searchUrl
-                        onEditingFinished: Settings.searchUrl = text
+                        text: page.profileSettings ? page.profileSettings.searchUrl : ""
+                        onEditingFinished: {
+                            if (page.profileSettings)
+                                page.profileSettings.searchUrl = text;
+
+                        }
                     }
 
                 }
@@ -167,9 +180,13 @@ Item {
                     }
 
                     EdenButton {
-                        text: Settings.searchSuggestions ? "Search suggestions on" : "Search suggestions off"
-                        iconName: Settings.searchSuggestions ? "check" : ""
-                        onClicked: Settings.searchSuggestions = !Settings.searchSuggestions
+                        text: page.profileSettings && page.profileSettings.searchSuggestions ? "Search suggestions on" : "Search suggestions off"
+                        iconName: page.profileSettings && page.profileSettings.searchSuggestions ? "check" : ""
+                        onClicked: {
+                            if (page.profileSettings)
+                                page.profileSettings.searchSuggestions = !page.profileSettings.searchSuggestions;
+
+                        }
                     }
 
                     Text {

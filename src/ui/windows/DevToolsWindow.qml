@@ -39,4 +39,43 @@ Window {
 
     }
 
+    Loader {
+        id: contextMenuLoader
+
+        active: false
+        asynchronous: false
+
+        sourceComponent: Component {
+            EdenMenu {
+                parent: devToolsWindow.contentItem
+                x: Math.max(8, Math.min(devToolsWindow.width - width - 8, Theme.contentBorderWidth + controller.pageContextMenuPosition.x))
+                y: Math.max(8, Math.min(devToolsWindow.height - height - 8, 52 + Theme.contentBorderWidth + controller.pageContextMenuPosition.y))
+                preferredWidth: 280
+                maximumHeight: devToolsWindow.height - 16
+                z: 20
+                actions: controller.pageContextMenuActions
+                onClosed: controller.dismissPageContextMenu()
+                onTriggered: (command) => {
+                    return controller.executePageContextMenuCommand(command);
+                }
+            }
+
+        }
+
+    }
+
+    Connections {
+        function onPageContextMenuRequested() {
+            if (controller.pageContextMenuSurface !== "devtools" || !controller.currentEngine || controller.currentEngine.devToolsPlacement !== 2)
+                return ;
+
+            contextMenuLoader.active = true;
+            if (!contextMenuLoader.item.tryOpen())
+                controller.dismissPageContextMenu();
+
+        }
+
+        target: controller
+    }
+
 }

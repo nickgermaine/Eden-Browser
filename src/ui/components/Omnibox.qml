@@ -24,8 +24,10 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: 36
         height: 36
-        iconName: omnibox.engine && omnibox.engine.securityState === "secure" ? "lock" : "tuning"
+        buttonRadius: 20
+        iconName: omnibox.engine && omnibox.engine.securityState === "secure" ? "lock" : omnibox.engine && omnibox.engine.securityState === "insecure" ? "info-circle" : "tuning"
         enabled: !!omnibox.engine
+        Accessible.name: "Page information"
         onClicked: omnibox.securityRequested()
     }
 
@@ -34,7 +36,7 @@ Rectangle {
 
         objectName: "omniboxField"
         anchors.left: securityButton.right
-        anchors.right: bookmarkButton.left
+        anchors.right: keyButton.visible ? keyButton.left : bookmarkButton.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         leftPadding: 8
@@ -101,6 +103,19 @@ Rectangle {
     }
 
     EdenButton {
+        id: keyButton
+
+        anchors.right: bookmarkButton.left
+        anchors.verticalCenter: parent.verticalCenter
+        width: visible ? 36 : 0
+        height: 36
+        visible: omnibox.controller.credentialKeyVisible
+        iconName: "password"
+        filledIcon: omnibox.controller.credentialPrompt.mode !== undefined
+        onClicked: credentialPopup.opened ? credentialPopup.close() : credentialPopup.open()
+    }
+
+    EdenButton {
         id: bookmarkButton
 
         anchors.right: parent.right
@@ -130,7 +145,179 @@ Rectangle {
             field.selectAll();
         }
 
+        function onCredentialPromptRequested() {
+            credentialPopup.open();
+        }
+
         target: omnibox.controller
+    }
+
+    Popup {
+        id: credentialPopup
+
+        property bool passwordRevealed: false
+
+        popupType: Popup.Item
+        parent: omnibox
+        x: Math.max(0, omnibox.width - width)
+        y: omnibox.height + 4
+        width: Math.min(380, omnibox.width)
+        padding: 12
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onOpened: passwordRevealed = false
+
+        background: OverlaySurface {
+            surfaceRadius: Theme.menuRadius
+        }
+
+        contentItem: Column {
+            spacing: 10
+
+            Column {
+                visible: omnibox.controller.credentialPrompt.mode !== undefined
+                width: parent.width
+                spacing: 8
+
+                Text {
+                    width: parent.width
+                    text: omnibox.controller.credentialPrompt.mode === "update" ? "Update saved password?" : "Save password?"
+                    color: Theme.surfaceText
+                    font: Theme.titleFont
+                }
+
+                Text {
+                    width: parent.width
+                    text: omnibox.controller.credentialPrompt.site || ""
+                    color: Theme.surfaceVariantText
+                    font: Theme.bodyFont
+                    elide: Text.ElideRight
+                }
+
+                EdenTextField {
+                    width: parent.width
+                    text: omnibox.controller.credentialDraftUsername
+                    placeholderText: "Email or username"
+                    Accessible.name: "Email or username"
+                    onTextEdited: omnibox.controller.credentialDraftUsername = text
+                }
+
+                Item {
+                    width: parent.width
+                    height: 44
+
+                    EdenTextField {
+                        id: credentialPasswordField
+
+                        anchors.fill: parent
+                        rightPadding: 48
+                        text: omnibox.controller.credentialDraftPassword
+                        echoMode: credentialPopup.passwordRevealed ? TextInput.Normal : TextInput.Password
+                        inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText
+                        placeholderText: "Password"
+                        Accessible.name: "Password"
+                        onTextEdited: omnibox.controller.credentialDraftPassword = text
+                    }
+
+                    EdenButton {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 40
+                        height: 40
+                        iconName: "eye"
+                        filledIcon: credentialPopup.passwordRevealed
+                        Accessible.name: credentialPopup.passwordRevealed ? "Hide password" : "Show password"
+                        onClicked: credentialPopup.passwordRevealed = !credentialPopup.passwordRevealed
+                    }
+
+                }
+
+                Row {
+                    spacing: 8
+
+                    EdenButton {
+                        text: omnibox.controller.credentialPrompt.mode === "update" ? "Update" : "Save"
+                        enabled: omnibox.controller.credentialDraftPassword.length > 0
+                        onClicked: {
+                            omnibox.controller.acceptCredentialPrompt();
+                            credentialPopup.close();
+                        }
+                    }
+
+                    EdenButton {
+                        text: "Not now"
+                        onClicked: {
+                            omnibox.controller.dismissCredentialPrompt();
+                            credentialPopup.close();
+                        }
+                    }
+
+                }
+
+            }
+
+            Text {
+                visible: omnibox.controller.autofillSuggestions.length > 0
+                text: "Auto-fill"
+                color: Theme.surfaceText
+                font: Theme.titleFont
+            }
+
+            Repeater {
+                model: omnibox.controller.autofillSuggestions
+
+                delegate: Rectangle {
+                    required property var modelData
+
+                    width: parent.width
+                    height: 50
+                    radius: Theme.suggestionRadius
+                    color: fillHover.hovered ? Theme.surfaceContainerHighest : "transparent"
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+
+                        Text {
+                            width: parent.width
+                            text: modelData.title || ""
+                            color: Theme.surfaceText
+                            font: Theme.labelFont
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.subtitle || ""
+                            color: Theme.surfaceVariantText
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+
+                    }
+
+                    HoverHandler {
+                        id: fillHover
+
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            omnibox.controller.fillAutofillSuggestion(modelData.id);
+                            credentialPopup.close();
+                        }
+                    }
+
+                }
+
+            }
+
+        }
+
     }
 
     Popup {

@@ -4,6 +4,6 @@
 
 namespace eden::engine::cef {
 
-void configureAlloyRuntime(CefWindowInfo &windowInfo);
+    void configureAlloyRuntime(CefWindowInfo &windowInfo);
 
 }

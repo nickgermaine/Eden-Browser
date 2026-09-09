@@ -52,9 +52,6 @@ namespace eden::engine::cef {
             if (argument == "--engine-compositing=windowed") {
                 result.settings.windowless_rendering_enabled = false;
             }
-            if (argument == "--no-sandbox") {
-                result.settings.no_sandbox = true;
-            }
         }
         return result;
     }
