@@ -88,7 +88,21 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/clipboard-denied") {
+                    if (path == "/address-form") {
+                        responseBody = R"HTML(<!doctype html><title>Address form</title>
+<input autocomplete="email"><textarea autocomplete="street-address"></textarea>
+<input autocomplete="address-level2">
+<script>
+const fields = Array.from(document.querySelectorAll('input,textarea'));
+const changes = [];
+for (const kind of ['input', 'change']) {
+    document.addEventListener(kind, event => {
+        changes.push(event.type);
+        document.title = fields.map(field => field.value).join('|') + ':' + changes.join(',');
+    });
+}
+</script>)HTML";
+                    } else if (path == "/clipboard-denied") {
                         responseBody = R"HTML(<!doctype html><title>Clipboard pending</title>
 <input value="Copied by user" style="position:absolute;left:20px;top:20px;width:300px;height:48px">
 <script>
@@ -252,6 +266,7 @@ class CefHandlersTest final : public QObject {
     void handlerSuite();
     void navigationEvents();
     void clipboardPermissions();
+    void addressAutofill();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -609,6 +624,29 @@ void CefHandlersTest::handlerSuite() {
         pendingContextView.reset();
         QTest::qWait(100);
     }
+}
+
+void CefHandlersTest::addressAutofill() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/address-form").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Address form"), 15000);
+    view.fillForm({{"email", "person@example.test"}, {"addressLine1", "12 Test Street"}, {"city", "Halifax"}});
+    QTRY_COMPARE_WITH_TIMEOUT(
+        view.title(),
+        QString("person@example.test|12 Test Street|Halifax:input,change,input,change,input,change"),
+        5000
+    );
 }
 
 void CefHandlersTest::clipboardPermissions() {
