@@ -3,6 +3,9 @@
 #include "include/cef_request_context.h"
 
 #include <filesystem>
+#include <functional>
+#include <mutex>
+#include <unordered_map>
 
 namespace eden::engine::cef {
 
@@ -21,6 +24,9 @@ namespace eden::engine::cef {
             const std::filesystem::path &rootCachePath = {}
         );
         void shutdown();
+        bool registerBrowserClient(const void *client, std::function<void()> requestClose);
+        void releaseBrowserClient(const void *client);
+        std::size_t browserClientCount() const;
         bool isInitialized() const;
         int exitCode() const;
         const std::filesystem::path &rootCachePath() const;
@@ -33,7 +39,12 @@ namespace eden::engine::cef {
         CefRefPtr<CefApplication> m_application;
         std::filesystem::path m_rootCachePath;
         bool m_initialized = false;
+        bool m_shuttingDown = false;
         int m_exitCode = 0;
+        mutable std::mutex m_browserClientsMutex;
+        std::unordered_map<const void *, std::function<void()>> m_browserClients;
+        std::function<void()> m_browsersClosed;
+        bool m_acceptingBrowserClients = false;
     };
 
     CefRequestContextSettings

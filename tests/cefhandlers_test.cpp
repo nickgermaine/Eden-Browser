@@ -51,7 +51,9 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 class LocalPageServer final : public QTcpServer {
@@ -333,6 +335,9 @@ class CefHandlersTest final : public QObject {
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
+    void asynchronousClose_data();
+    void asynchronousClose();
+    void shutdownWaitsForPendingCreation();
     void cleanupTestCase();
 
   private:
@@ -341,6 +346,137 @@ class CefHandlersTest final : public QObject {
     LocalPageServer m_server;
     std::unique_ptr<eden::core::ApplicationContext> m_applicationContext;
 };
+
+class CefUiPause final : public CefTask {
+  public:
+    void Execute() override {
+        entered.store(true);
+        std::unique_lock lock(m_mutex);
+        m_released.wait_for(lock, std::chrono::seconds(3), [this] { return m_resume; });
+        finished.store(true);
+    }
+
+    void resume() {
+        {
+            const std::lock_guard lock(m_mutex);
+            m_resume = true;
+        }
+        m_released.notify_all();
+    }
+
+    std::atomic_bool entered = false;
+    std::atomic_bool finished = false;
+
+  private:
+    std::mutex m_mutex;
+    std::condition_variable m_released;
+    bool m_resume = false;
+
+    IMPLEMENT_REFCOUNTING(CefUiPause);
+};
+
+void CefHandlersTest::asynchronousClose_data() {
+    QTest::addColumn<QString>("scenario");
+    for (const char *scenario : {"pending-creation", "loaded-page", "devtools-close", "page-with-devtools"}) {
+        QTest::newRow(scenario) << QString::fromLatin1(scenario);
+    }
+}
+
+void CefHandlersTest::asynchronousClose() {
+    QFETCH(QString, scenario);
+    auto &runtime = eden::engine::cef::CefRuntime::instance();
+    QTRY_COMPARE_WITH_TIMEOUT(runtime.browserClientCount(), std::size_t(0), 10000);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1200, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(QSizeF(700, 700));
+    QQuickItem devToolsViewport(window.contentItem());
+    devToolsViewport.setX(700);
+    devToolsViewport.setSize(QSizeF(500, 700));
+    auto view = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
+    if (scenario.contains("devtools") && !(view->capabilities() & eden::engine::EngineView::DockedDevtools)) {
+        QSKIP("The selected mode has no docked developer tools");
+    }
+    if (scenario != "pending-creation") {
+        view->attach(&viewport);
+        view->load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("E35 Main"), 15000);
+        if (scenario.contains("devtools")) {
+            view->openDevTools();
+            view->attachDevTools(&devToolsViewport);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(),
+                1,
+                15000
+            );
+        }
+    }
+    CefRefPtr<CefUiPause> pause = new CefUiPause;
+    QVERIFY(CefPostTask(TID_UI, pause));
+    QTRY_VERIFY_WITH_TIMEOUT(pause->entered.load(), 1000);
+    if (scenario == "pending-creation") {
+        view->attach(&viewport);
+    }
+    if (scenario == "devtools-close") {
+        view->closeDevTools();
+    } else {
+        view.reset();
+    }
+    const bool returnedBeforeNativeClose = !pause->finished.load();
+    pause->resume();
+    QVERIFY(returnedBeforeNativeClose);
+    QTRY_COMPARE_WITH_TIMEOUT(runtime.browserClientCount(), std::size_t(view ? 1 : 0), 10000);
+    if (view) {
+        view->reload();
+        QTRY_VERIFY_WITH_TIMEOUT(!view->isLoading(), 10000);
+        view.reset();
+        QTRY_COMPARE_WITH_TIMEOUT(runtime.browserClientCount(), std::size_t(0), 10000);
+    }
+}
+
+void CefHandlersTest::shutdownWaitsForPendingCreation() {
+    auto &runtime = eden::engine::cef::CefRuntime::instance();
+    QTRY_COMPARE_WITH_TIMEOUT(runtime.browserClientCount(), std::size_t(0), 10000);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    auto profile = std::make_unique<eden::engine::cef::CefProfile>(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    auto view = std::make_unique<eden::engine::cef::CefEngineView>(profile.get());
+    CefRefPtr<CefUiPause> pause = new CefUiPause;
+    QVERIFY(CefPostTask(TID_UI, pause));
+    QTRY_VERIFY_WITH_TIMEOUT(pause->entered.load(), 1000);
+    view->attach(&viewport);
+    QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+    QCOMPARE(QCoreApplication::exec(), 0);
+    view.reset();
+    profile.reset();
+    QCOMPARE(runtime.browserClientCount(), std::size_t(1));
+    bool qtResponded = false;
+    bool acceptedDuringShutdown = false;
+    QTimer::singleShot(0, &window, [&] {
+        qtResponded = true;
+        acceptedDuringShutdown = runtime.registerBrowserClient(&qtResponded, [] {});
+        runtime.shutdown();
+        pause->resume();
+    });
+    runtime.shutdown();
+    QVERIFY(qtResponded);
+    QVERIFY(!acceptedDuringShutdown);
+    QCOMPARE(runtime.browserClientCount(), std::size_t(0));
+    QVERIFY(!runtime.isInitialized());
+}
 
 class CefIsolatedWorldProbe final : public CefTask, public CefDevToolsMessageObserver {
   public:

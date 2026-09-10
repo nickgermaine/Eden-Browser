@@ -7,6 +7,7 @@
 #include "include/internal/cef_string_wrappers.h"
 
 #include <QDir>
+#include <QEventLoop>
 
 #include <chrono>
 #include <span>
@@ -60,6 +61,9 @@ namespace eden::engine::cef {
         const char *version,
         const std::filesystem::path &rootCachePath
     ) {
+        if (m_shuttingDown) {
+            return false;
+        }
         if (m_initialized) {
             return true;
         }
@@ -102,6 +106,10 @@ namespace eden::engine::cef {
             return false;
         }
         m_initialized = true;
+        {
+            const std::lock_guard lock(m_browserClientsMutex);
+            m_acceptingBrowserClients = true;
+        }
         if (!m_application->waitForContextInitialization(std::chrono::seconds(10))) {
             shutdown();
             m_exitCode = 1;
@@ -111,19 +119,74 @@ namespace eden::engine::cef {
     }
 
     void CefRuntime::shutdown() {
-        if (!m_initialized) {
+        if (!m_initialized || m_shuttingDown) {
             return;
         }
+        m_shuttingDown = true;
         CefUiBridge::beginShutdown();
+        QEventLoop closingBrowsers;
+        std::vector<std::function<void()>> clients;
+        {
+            const std::lock_guard lock(m_browserClientsMutex);
+            m_acceptingBrowserClients = false;
+            clients.reserve(m_browserClients.size());
+            for (const auto &[client, requestClose] : m_browserClients) {
+                clients.push_back(requestClose);
+            }
+            if (!clients.empty()) {
+                m_browsersClosed = [&closingBrowsers] {
+                    QMetaObject::invokeMethod(&closingBrowsers, &QEventLoop::quit, Qt::QueuedConnection);
+                };
+            }
+        }
+        if (!clients.empty()) {
+            for (const auto &requestClose : clients) {
+                requestClose();
+            }
+            clients.clear();
+            closingBrowsers.exec(QEventLoop::ExcludeUserInputEvents);
+        }
         CefShutdown();
         CefUiBridge::cancelPendingTasks();
         m_initialized = false;
+        m_shuttingDown = false;
         m_application = nullptr;
         m_rootCachePath.clear();
     }
 
+    bool CefRuntime::registerBrowserClient(const void *client, std::function<void()> requestClose) {
+        const std::lock_guard lock(m_browserClientsMutex);
+        return m_acceptingBrowserClients && m_browserClients.emplace(client, std::move(requestClose)).second;
+    }
+
+    void CefRuntime::releaseBrowserClient(const void *client) {
+        std::function<void()> releasedClient;
+        std::function<void()> browsersClosed;
+        {
+            const std::lock_guard lock(m_browserClientsMutex);
+            const auto found = m_browserClients.find(client);
+            if (found == m_browserClients.end()) {
+                return;
+            }
+            releasedClient = std::move(found->second);
+            m_browserClients.erase(found);
+            if (m_browserClients.empty()) {
+                browsersClosed = std::move(m_browsersClosed);
+            }
+        }
+        releasedClient = {};
+        if (browsersClosed) {
+            browsersClosed();
+        }
+    }
+
+    std::size_t CefRuntime::browserClientCount() const {
+        const std::lock_guard lock(m_browserClientsMutex);
+        return m_browserClients.size();
+    }
+
     bool CefRuntime::isInitialized() const {
-        return m_initialized;
+        return m_initialized && !m_shuttingDown;
     }
 
     int CefRuntime::exitCode() const {
@@ -150,7 +213,7 @@ namespace eden::engine::cef {
 
     CefRefPtr<CefRequestContext>
     CefRuntime::createRequestContext(bool privateProfile, const std::filesystem::path &profileDataPath) const {
-        if (!m_initialized) {
+        if (!isInitialized()) {
             throw std::logic_error("CEF is not initialized");
         }
         if (!privateProfile) {

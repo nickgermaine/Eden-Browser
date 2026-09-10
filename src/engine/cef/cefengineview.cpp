@@ -4,6 +4,7 @@
 #endif
 #include "engine/cef/cefbrowsersettings.h"
 #include "engine/cef/cefprofile.h"
+#include "engine/cef/cefruntime.h"
 #include "engine/cef/cefuibridge.h"
 #include "engine/cef/devtoolssocketserver.h"
 
@@ -75,7 +76,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -1096,9 +1096,9 @@ namespace eden::engine::cef {
         bool beginBrowserCreation();
         bool shouldCreateBrowser();
         void browserCreationFailed();
-        void closeAndWait();
         void requestClose();
         void requestCloseOnCefUi();
+        void finishBrowserClose();
         void setGeometry(const CefRect &rootWindowScreenRect, const CefRect &viewRect, float deviceScaleFactor);
         void executeContextMenuCommand(const QString &command);
         void dismissContextMenu();
@@ -1117,14 +1117,12 @@ namespace eden::engine::cef {
         QVariantList contextMenuActions(CefRefPtr<CefMenuModel> model);
 
         std::shared_ptr<CefViewLifetime> m_lifetime;
-        CefEngineClient *m_owner = nullptr;
+        CefRefPtr<CefEngineClient> m_owner;
         mutable std::mutex m_browserMutex;
-        std::condition_variable m_browserCondition;
         CefRefPtr<CefBrowser> m_browser;
         bool m_creationPending = false;
         bool m_closeRequested = false;
         bool m_closeIssued = false;
-        bool m_closed = false;
         std::mutex m_screenRectMutex;
         CefRect m_rootWindowScreenRect;
         CefRect m_osrViewRect{0, 0, 1, 1};
@@ -1369,9 +1367,9 @@ namespace eden::engine::cef {
         bool beginBrowserCreation();
         bool shouldCreateBrowser();
         void browserCreationFailed();
-        void closeAndWait();
         void requestClose();
         void requestCloseOnCefUi();
+        void finishBrowserClose();
         CefRefPtr<CefBrowser> browserSnapshot() const;
         void setRootWindowScreenRect(const CefRect &rect);
         void setOsrGeometry(const CefRect &rect, float deviceScaleFactor);
@@ -1382,6 +1380,7 @@ namespace eden::engine::cef {
         void resolveDisplayCaptureRequest(quint64 id, const QString &source);
         void resolveFileDialog(quint64 id, bool accepted, const std::vector<CefString> &files);
         void faviconDownloaded(CefRefPtr<CefBrowser> browser, quint64 serial, CefRefPtr<CefImage> image);
+        void retireWindow(QWindow *window);
         void setPopupSource(CefRefPtr<CefEngineClient> source, int popupId);
         void popupCreated(int popupId);
         void abortPopupCreation();
@@ -1437,13 +1436,13 @@ namespace eden::engine::cef {
         QString m_publishedTitle;
 
         std::shared_ptr<CefViewLifetime> m_lifetime;
+        std::function<void()> m_windowCleanup;
+        bool m_nativeClosePending = false;
         mutable std::mutex m_browserMutex;
-        std::condition_variable m_browserCondition;
         CefRefPtr<CefBrowser> m_browser;
         bool m_creationPending = false;
         bool m_closeRequested = false;
         bool m_closeIssued = false;
-        bool m_closed = false;
         std::mutex m_screenRectMutex;
         CefRect m_rootWindowScreenRect;
         CefRect m_osrViewRect{0, 0, 1, 1};
@@ -1596,17 +1595,15 @@ namespace eden::engine::cef {
         ~Private() {
             destroyDevTools();
             lifetime->close();
-            client->closeAndWait();
-            for (const CefRefPtr<CefEngineClient> &retired : std::as_const(retiredClients)) {
-                retired->closeAndWait();
-            }
-            retiredClients.clear();
+            client->requestClose();
             browser = nullptr;
-            client = nullptr;
             disconnectViewport();
             if (hostWindow) {
-                delete hostWindow;
+                hostWindow->removeEventFilter(q);
+                client->retireWindow(hostWindow);
+                hostWindow.clear();
             }
+            client = nullptr;
             if (osrItem) {
                 delete osrItem;
             }
@@ -2004,7 +2001,7 @@ namespace eden::engine::cef {
                 devToolsLifetime->close();
             }
             if (devToolsClient) {
-                devToolsClient->closeAndWait();
+                devToolsClient->requestClose();
             }
             devToolsBrowser = nullptr;
             devToolsClient = nullptr;
@@ -2024,7 +2021,11 @@ namespace eden::engine::cef {
             }
             lifetime->close();
             client->requestClose();
-            retiredClients.append(client);
+            if (hostWindow) {
+                hostWindow->removeEventFilter(q);
+                client->retireWindow(hostWindow);
+                hostWindow.clear();
+            }
             browser = nullptr;
             client = transfer->client;
             lifetime = transfer->lifetime;
@@ -2033,12 +2034,6 @@ namespace eden::engine::cef {
             browserCreationStarted = true;
             if (!osr) {
                 osr = true;
-                if (hostWindow) {
-                    hostWindow->removeEventFilter(q);
-                    hostWindow->setVisible(false);
-                    delete hostWindow;
-                    hostWindow.clear();
-                }
                 attachViewport();
             }
             if (CefRefPtr<CefBrowser> adoptedBrowser = client->browserSnapshot()) {
@@ -3041,7 +3036,6 @@ namespace eden::engine::cef {
         QList<QMetaObject::Connection> devToolsViewportConnections;
         std::shared_ptr<CefViewLifetime> lifetime;
         CefRefPtr<CefEngineClient> client;
-        QList<CefRefPtr<CefEngineClient>> retiredClients;
         CefRefPtr<CefBrowser> browser;
         std::optional<bool> browserVisible;
         std::shared_ptr<CefViewLifetime> devToolsLifetime;
@@ -3183,7 +3177,6 @@ namespace eden::engine::cef {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
             m_browser = browser;
-            m_closed = false;
             if (m_closeRequested && !m_closeIssued) {
                 m_closeIssued = true;
                 closeBrowser = true;
@@ -3209,10 +3202,9 @@ namespace eden::engine::cef {
                 m_browser = nullptr;
             }
             m_creationPending = false;
-            m_closed = true;
         }
-        m_browserCondition.notify_all();
         dispatch([identifier](CefEngineView::Private &state) { state.devToolsBrowserClosed(identifier); });
+        finishBrowserClose();
     }
 
     bool CefDevToolsClient::OnCursorChange(
@@ -3600,44 +3592,42 @@ namespace eden::engine::cef {
 
     bool CefDevToolsClient::beginBrowserCreation() {
         const std::lock_guard lock(m_browserMutex);
-        if (m_closeRequested) {
+        if (m_closeRequested || m_creationPending || m_browser) {
+            return false;
+        }
+        const CefRefPtr<CefDevToolsClient> self(this);
+        if (!CefRuntime::instance().registerBrowserClient(this, [self] { self->requestClose(); })) {
             return false;
         }
         m_creationPending = true;
-        m_closed = false;
         return true;
     }
 
     bool CefDevToolsClient::shouldCreateBrowser() {
-        const std::lock_guard lock(m_browserMutex);
-        if (m_creationPending && m_closeRequested) {
-            m_creationPending = false;
-            m_closed = true;
-            m_browserCondition.notify_all();
-            return false;
+        bool canceled = false;
+        {
+            const std::lock_guard lock(m_browserMutex);
+            if (!m_creationPending) {
+                return false;
+            }
+            canceled = m_closeRequested;
+            if (canceled) {
+                m_creationPending = false;
+            }
         }
-        return m_creationPending;
+        if (canceled) {
+            finishBrowserClose();
+        }
+        return !canceled;
     }
 
     void CefDevToolsClient::browserCreationFailed() {
         {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
-            m_closed = true;
         }
-        m_browserCondition.notify_all();
         dispatch([](CefEngineView::Private &state) { state.devToolsCreationFailed(); });
-    }
-
-    void CefDevToolsClient::closeAndWait() {
-        requestClose();
-        if (CefCurrentlyOn(TID_UI)) {
-            return;
-        }
-        std::unique_lock lock(m_browserMutex);
-        m_browserCondition.wait_for(lock, std::chrono::seconds(5), [this] {
-            return m_closed && !m_creationPending && !m_browser;
-        });
+        finishBrowserClose();
     }
 
     void CefDevToolsClient::requestClose() {
@@ -3648,8 +3638,6 @@ namespace eden::engine::cef {
             }
             m_closeRequested = true;
             if (!m_browser && !m_creationPending) {
-                m_closed = true;
-                m_browserCondition.notify_all();
                 return;
             }
         }
@@ -3664,14 +3652,20 @@ namespace eden::engine::cef {
             if (m_browser && !m_closeIssued) {
                 m_closeIssued = true;
                 closingBrowser = m_browser;
-            } else if (!m_browser && !m_creationPending) {
-                m_closed = true;
             }
         }
         if (closingBrowser) {
             closingBrowser->GetHost()->CloseBrowser(true);
-        } else {
-            m_browserCondition.notify_all();
+        }
+    }
+
+    void CefDevToolsClient::finishBrowserClose() {
+        const CefRefPtr<CefDevToolsClient> self(this);
+        const auto finish = [self] {
+            CefRuntime::instance().releaseBrowserClient(self.get());
+        };
+        if (!CefPostTask(TID_UI, new CefFunctionTask(finish))) {
+            finish();
         }
     }
 
@@ -3692,7 +3686,6 @@ namespace eden::engine::cef {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
             m_browser = browser;
-            m_closed = false;
             if (m_closeRequested && !m_closeIssued) {
                 m_closeIssued = true;
                 closeBrowser = true;
@@ -3728,10 +3721,16 @@ namespace eden::engine::cef {
                 m_browser = nullptr;
             }
             m_creationPending = false;
-            m_closed = true;
         }
-        m_browserCondition.notify_all();
+        CefOsrFrame pendingFrame;
+        {
+            const std::lock_guard lock(m_frameMutex);
+            pendingFrame = std::move(m_pendingFrame);
+            m_frameDeliveryQueued = false;
+        }
+        pendingFrame.reset();
         dispatch([identifier](CefEngineView::Private &state) { state.browserClosed(identifier); });
+        finishBrowserClose();
     }
 
     void CefEngineClient::OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, const CefString &url) {
@@ -4927,44 +4926,43 @@ namespace eden::engine::cef {
 
     bool CefEngineClient::beginBrowserCreation() {
         const std::lock_guard lock(m_browserMutex);
-        if (m_closeRequested) {
+        if (m_closeRequested || m_creationPending || m_browser) {
+            return false;
+        }
+        const CefRefPtr<CefEngineClient> self(this);
+        if (!CefRuntime::instance().registerBrowserClient(this, [self] { self->requestClose(); })) {
             return false;
         }
         m_creationPending = true;
-        m_closed = false;
+        m_nativeClosePending = true;
         return true;
     }
 
     bool CefEngineClient::shouldCreateBrowser() {
-        const std::lock_guard lock(m_browserMutex);
-        if (m_creationPending && m_closeRequested) {
-            m_creationPending = false;
-            m_closed = true;
-            m_browserCondition.notify_all();
-            return false;
+        bool canceled = false;
+        {
+            const std::lock_guard lock(m_browserMutex);
+            if (!m_creationPending) {
+                return false;
+            }
+            canceled = m_closeRequested;
+            if (canceled) {
+                m_creationPending = false;
+            }
         }
-        return m_creationPending;
+        if (canceled) {
+            finishBrowserClose();
+        }
+        return !canceled;
     }
 
     void CefEngineClient::browserCreationFailed() {
         {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
-            m_closed = true;
         }
-        m_browserCondition.notify_all();
         dispatch([](CefEngineView::Private &state) { state.creationFailed(); });
-    }
-
-    void CefEngineClient::closeAndWait() {
-        requestClose();
-        if (CefCurrentlyOn(TID_UI)) {
-            return;
-        }
-        std::unique_lock lock(m_browserMutex);
-        m_browserCondition.wait_for(lock, std::chrono::seconds(5), [this] {
-            return m_closed && !m_creationPending && !m_browser;
-        });
+        finishBrowserClose();
     }
 
     void CefEngineClient::requestClose() {
@@ -4975,8 +4973,6 @@ namespace eden::engine::cef {
             }
             m_closeRequested = true;
             if (!m_browser && !m_creationPending) {
-                m_closed = true;
-                m_browserCondition.notify_all();
                 return;
             }
         }
@@ -4991,16 +4987,50 @@ namespace eden::engine::cef {
             if (m_browser && !m_closeIssued) {
                 m_closeIssued = true;
                 closingBrowser = m_browser;
-            } else if (!m_browser && !m_creationPending) {
-                m_closed = true;
             }
         }
         if (closingBrowser) {
             cancelInteractions();
             closingBrowser->GetHost()->CloseBrowser(true);
-        } else {
-            m_browserCondition.notify_all();
         }
+    }
+
+    void CefEngineClient::finishBrowserClose() {
+        const CefRefPtr<CefEngineClient> self(this);
+        const auto finish = [self] {
+            std::function<void()> windowCleanup;
+            {
+                const std::lock_guard lock(self->m_browserMutex);
+                self->m_nativeClosePending = false;
+                windowCleanup = std::move(self->m_windowCleanup);
+            }
+            if (windowCleanup) {
+                CefUiBridge::runOnUiThread(std::move(windowCleanup));
+            }
+            CefRuntime::instance().releaseBrowserClient(self.get());
+        };
+        if (!CefPostTask(TID_UI, new CefFunctionTask(finish))) {
+            finish();
+        }
+    }
+
+    void CefEngineClient::retireWindow(QWindow *window) {
+        CefUiBridge::assertOnUiThread(window);
+        window->hide();
+        window->setParent(nullptr);
+        auto *owner = new QObject(qApp);
+        window->QObject::setParent(owner);
+        std::function<void()> cleanup = [guard = QPointer<QObject>(owner)] {
+            delete guard.data();
+        };
+        {
+            const std::lock_guard lock(m_browserMutex);
+            if (m_nativeClosePending) {
+                m_windowCleanup = std::move(cleanup);
+                return;
+            }
+        }
+        cleanup();
     }
 
     CefRefPtr<CefBrowser> CefEngineClient::browserSnapshot() const {
@@ -5276,13 +5306,12 @@ namespace eden::engine::cef {
                 closingBrowser = m_browser;
             } else if (!m_browser) {
                 m_creationPending = false;
-                m_closed = true;
                 creationFailed = true;
             }
         }
-        m_browserCondition.notify_all();
         if (creationFailed) {
             dispatch([](CefEngineView::Private &state) { state.creationFailed(); });
+            finishBrowserClose();
         }
         if (closingBrowser) {
             const CefRefPtr<CefEngineClient> self(this);
@@ -5336,16 +5365,15 @@ namespace eden::engine::cef {
             }
             dispatch([id](CefEngineView::Private &state) { state.closeDisplayCaptureRequest(id); });
         }
-        std::unordered_map<int, std::shared_ptr<CefPopupTransfer>> popups;
-        popups.swap(m_pendingPopups);
-        for (auto &[popupId, transfer] : popups) {
-            if (transfer && transfer->client) {
-                if (transfer->adopted.load(std::memory_order_acquire)) {
-                    transfer->client->detachPopupSource();
-                } else {
-                    transfer->canceled.store(true, std::memory_order_release);
-                    transfer->client->abortPopupCreation();
-                }
+        for (auto iterator = m_pendingPopups.begin(); iterator != m_pendingPopups.end();) {
+            const std::shared_ptr<CefPopupTransfer> transfer = iterator->second;
+            if (transfer->adopted.load(std::memory_order_acquire)) {
+                transfer->client->detachPopupSource();
+                iterator = m_pendingPopups.erase(iterator);
+            } else {
+                transfer->canceled.store(true, std::memory_order_release);
+                transfer->client->requestClose();
+                ++iterator;
             }
         }
         m_downloads.clear();
