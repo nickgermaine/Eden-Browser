@@ -94,7 +94,26 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/form-events") {
+                    if (path == "/paint-burst") {
+                        responseBody = R"HTML(<!doctype html><title>Paint ready</title>
+<body style="margin:0;background:#dd2222">
+<div id="left" style="position:fixed;left:0;top:0;width:50vw;height:100vh;background:#dd2222"></div>
+<div id="right" style="position:fixed;left:50vw;top:0;width:50vw;height:100vh;background:#dd2222"></div>
+<button style="position:relative;width:180px;height:70px">Paint burst</button>
+<script>
+document.querySelector('button').onclick = () => {
+    let frames = 0;
+    function paint() {
+        frames++;
+        const panel = document.querySelector(frames % 2 ? '#left' : '#right');
+        panel.style.background = frames >= 11 ? '#2255dd' : (frames % 3 ? '#22dd55' : '#dd5522');
+        if (frames === 12) { document.title = 'Final paint'; }
+        else { requestAnimationFrame(paint); }
+    }
+    requestAnimationFrame(paint);
+};
+</script>)HTML";
+                    } else if (path == "/form-events") {
                         responseBody = R"HTML(<!doctype html><title>Form events</title>
 <input id="todo" name="todo" style="position:absolute;left:20px;top:20px;width:300px;height:48px">
 <input id="email" name="email" type="email" style="position:absolute;left:20px;top:90px;width:300px;height:48px">
@@ -308,6 +327,8 @@ class CefHandlersTest final : public QObject {
     void browserVisibility();
     void formEvents();
     void credentialTargets();
+    void preservesFinalPaint_data();
+    void preservesFinalPaint();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -402,6 +423,63 @@ void CefHandlersTest::credentialTargets() {
         QTRY_VERIFY_WITH_TIMEOUT(result->load() != 0, 5000);
         QCOMPARE(result->load(), 1);
     });
+}
+
+void CefHandlersTest::preservesFinalPaint_data() {
+    QTest::addColumn<bool>("stallRendering");
+    QTest::newRow("qt-delivery") << false;
+    QTest::newRow("scene-graph") << true;
+}
+
+void CefHandlersTest::preservesFinalPaint() {
+    QFETCH(bool, stallRendering);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    std::atomic_bool stallNextFrame = false;
+    std::atomic_bool threadedRendering = false;
+    QThread *qtThread = QThread::currentThread();
+    QQuickWindow window;
+    connect(
+        &window,
+        &QQuickWindow::beforeRendering,
+        &window,
+        [&] {
+            threadedRendering.store(QThread::currentThread() != qtThread);
+            if (stallNextFrame.exchange(false)) {
+                QThread::msleep(800);
+            }
+        },
+        Qt::DirectConnection
+    );
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/paint-burst").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Paint ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    const auto colorAt = [&window](int quarter) {
+        const QImage frame = window.grabWindow();
+        return frame.isNull() ? QColor() : frame.pixelColor(frame.width() * quarter / 4, frame.height() / 2);
+    };
+    QTRY_COMPARE_WITH_TIMEOUT(colorAt(1), QColor("#dd2222"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(colorAt(3), QColor("#dd2222"), 5000);
+    if (stallRendering && !threadedRendering.load()) {
+        QSKIP("The scene graph test requires threaded rendering");
+    }
+    stallNextFrame.store(stallRendering);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(90, 35));
+    if (!stallRendering) {
+        QThread::msleep(800);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Final paint"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(colorAt(1), QColor("#2255dd"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(colorAt(3), QColor("#2255dd"), 3000);
 }
 
 static bool hasColorVariation(const QImage &image, const QRect &region, int minimumColors) {

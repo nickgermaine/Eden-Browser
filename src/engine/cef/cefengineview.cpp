@@ -300,6 +300,24 @@ namespace eden::engine::cef {
         return frame;
     }
 
+    static void updateCefFrame(QImage &target, const void *buffer, const QRegion &dirtyRegion) {
+        const auto *source = static_cast<const uchar *>(buffer);
+        const qsizetype sourceStride = static_cast<qsizetype>(target.width()) * 4;
+        uchar *targetBits = target.bits();
+        const qsizetype targetStride = target.bytesPerLine();
+        for (const QRect &rect : dirtyRegion.rects()) {
+            const qsizetype rowBytes = static_cast<qsizetype>(rect.width()) * 4;
+            const qsizetype columnOffset = static_cast<qsizetype>(rect.x()) * 4;
+            for (int row = rect.top(); row <= rect.bottom(); ++row) {
+                std::memcpy(
+                    targetBits + static_cast<qsizetype>(row) * targetStride + columnOffset,
+                    source + static_cast<qsizetype>(row) * sourceStride + columnOffset,
+                    static_cast<std::size_t>(rowBytes)
+                );
+            }
+        }
+    }
+
     static QString contextMenuIcon(int commandId, const QString &title) {
         switch (commandId) {
         case MENU_ID_UNDO:
@@ -1399,6 +1417,8 @@ namespace eden::engine::cef {
         DownloadRecord &downloadRecord(CefRefPtr<CefDownloadItem> downloadItem, const QString &suggestedName = {});
         void publishDownload(uint32_t id, DownloadRecord &download);
         void enqueueFrame(CefOsrFrame frame);
+        void enqueueCopiedFrame(const void *buffer, const QSize &size, const QRegion &dirtyRegion);
+        void dispatchPendingFrame();
         void releaseStagingFrame(int index);
         void requestFaviconCandidate(CefRefPtr<CefBrowser> browser, quint64 serial);
         void publishNavigationState();
@@ -4702,10 +4722,18 @@ namespace eden::engine::cef {
         }
         const QSize frameSize(width, height);
         const QRect frameBounds(QPoint(), frameSize);
+        CefOsrFrame supersededFrame;
+        {
+            const std::lock_guard lock(m_frameMutex);
+            if (m_pendingFrame.owner) {
+                supersededFrame = std::move(m_pendingFrame);
+            }
+        }
+        supersededFrame.reset();
         int stagingIndex = -1;
         QImage stagedFrame;
         {
-            const std::lock_guard lock(m_stagingMutex);
+            std::unique_lock lock(m_stagingMutex);
             QRegion incomingDirtyRegion;
             for (const CefRect &dirtyRect : dirtyRects) {
                 incomingDirtyRegion += QRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height) & frameBounds;
@@ -4731,6 +4759,8 @@ namespace eden::engine::cef {
                 }
             }
             if (stagingIndex < 0) {
+                lock.unlock();
+                enqueueCopiedFrame(buffer, frameSize, incomingDirtyRegion);
                 return;
             }
             QImage &target = m_stagingFrames[stagingIndex];
@@ -4741,21 +4771,8 @@ namespace eden::engine::cef {
             if (target.isNull()) {
                 return;
             }
-            const auto *source = static_cast<const uchar *>(buffer);
-            const qsizetype sourceStride = static_cast<qsizetype>(width) * 4;
             const QRegion copyRegion = m_stagingDirtyRegions[stagingIndex] & frameBounds;
-            const QSpan<const QRect> copyRects = copyRegion.rects();
-            for (const QRect &copyRect : copyRects) {
-                const qsizetype rowBytes = static_cast<qsizetype>(copyRect.width()) * 4;
-                const qsizetype columnOffset = static_cast<qsizetype>(copyRect.x()) * 4;
-                for (int row = copyRect.top(); row <= copyRect.bottom(); ++row) {
-                    std::memcpy(
-                        target.scanLine(row) + columnOffset,
-                        source + static_cast<qsizetype>(row) * sourceStride + columnOffset,
-                        static_cast<std::size_t>(rowBytes)
-                    );
-                }
-            }
+            updateCefFrame(target, buffer, copyRegion);
             m_stagingDirtyRegions[stagingIndex] = {};
             m_stagingFrameAvailable[stagingIndex] = false;
             m_nextStagingFrame = (stagingIndex + 1) % static_cast<int>(m_stagingFrames.size());
@@ -4778,6 +4795,36 @@ namespace eden::engine::cef {
             }
             m_frameDeliveryQueued = true;
         }
+        dispatchPendingFrame();
+    }
+
+    void CefEngineClient::enqueueCopiedFrame(const void *buffer, const QSize &size, const QRegion &dirtyRegion) {
+        CefOsrFrame replacedFrame;
+        bool queueDelivery = false;
+        {
+            const std::lock_guard lock(m_frameMutex);
+            if (m_pendingFrame.owner || m_pendingFrame.image.size() != size) {
+                QImage image = copyCefFrame(buffer, size.width(), size.height());
+                if (image.isNull()) {
+                    return;
+                }
+                replacedFrame = std::move(m_pendingFrame);
+                m_pendingFrame = CefOsrFrame(std::move(image), nullptr, -1);
+            } else {
+                updateCefFrame(m_pendingFrame.image, buffer, dirtyRegion);
+            }
+            queueDelivery = !m_frameDeliveryQueued;
+            m_frameDeliveryQueued = true;
+        }
+#if EDEN_ENABLE_AUTOMATION
+        eden::core::PerformanceMetrics::markReady("scroll.input_to_frame_ms");
+#endif
+        if (queueDelivery) {
+            dispatchPendingFrame();
+        }
+    }
+
+    void CefEngineClient::dispatchPendingFrame() {
         const CefRefPtr<CefEngineClient> self(this);
         if (!dispatch([self](CefEngineView::Private &state) {
                 CefOsrFrame frame;
