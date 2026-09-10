@@ -45,8 +45,8 @@ namespace eden::core {
         Q_PROPERTY(TabModel *tabs READ tabs NOTIFY tabsChanged)
         Q_PROPERTY(int activeIndex READ activeIndex WRITE setActiveIndex NOTIFY activeIndexChanged)
         Q_PROPERTY(QObject *currentEngine READ currentEngine NOTIFY currentEngineChanged)
-        Q_PROPERTY(QUrl currentUrl READ currentUrl NOTIFY currentEngineChanged)
-        Q_PROPERTY(QString displayUrl READ displayUrl NOTIFY currentEngineChanged)
+        Q_PROPERTY(QUrl currentUrl READ currentUrl NOTIFY currentUrlChanged)
+        Q_PROPERTY(QString displayUrl READ displayUrl NOTIFY currentUrlChanged)
         Q_PROPERTY(QString mode READ mode NOTIFY modeChanged)
         Q_PROPERTY(OmniboxController *omnibox READ omnibox NOTIFY tabsChanged)
         Q_PROPERTY(ShortcutRegistry *shortcuts READ shortcuts CONSTANT)
@@ -226,6 +226,7 @@ namespace eden::core {
         void tabsChanged();
         void activeIndexChanged();
         void currentEngineChanged();
+        void currentUrlChanged();
         void modeChanged();
         void profileChanged();
         void profileIdentityChanged();

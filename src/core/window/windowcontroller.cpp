@@ -278,6 +278,7 @@ namespace eden::core {
     WindowController::WindowController(QObject *parent)
         : QObject(parent),
           m_shortcuts(std::make_unique<ShortcutRegistry>()) {
+        connect(this, &WindowController::currentEngineChanged, this, &WindowController::currentUrlChanged);
         connect(m_shortcuts.get(), &ShortcutRegistry::commandTriggered, this, [this](const QString &command) {
             executeCommand(command);
         });
@@ -1662,7 +1663,7 @@ namespace eden::core {
         if (!m_privateWindow && history()) {
             history()->recordVisit(url, m_tabs->data(m_tabs->index(m_activeIndex), TabModel::TitleRole).toString());
         }
-        emit currentEngineChanged();
+        emit currentUrlChanged();
         scheduleSessionSave();
     }
 
@@ -1712,7 +1713,7 @@ namespace eden::core {
             if (rowUrl == url || (!page.isEmpty() && TabModel::internalPageForUrl(rowUrl) == page)) {
                 setActiveIndex(row);
                 if (rowUrl != url && m_tabs->setInternalPageUrl(row, url)) {
-                    emit currentEngineChanged();
+                    emit currentUrlChanged();
                     scheduleSessionSave();
                 }
                 return;
@@ -2287,7 +2288,7 @@ namespace eden::core {
             }
             if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
                 m_autofillField.clear();
-                emit currentEngineChanged();
+                emit currentUrlChanged();
                 emit currentBookmarkedChanged();
                 refreshAutofillSuggestions();
                 if (!view->isLoading()) {
@@ -2362,11 +2363,6 @@ namespace eden::core {
             refreshAutofillSuggestions();
             if (!m_autofillSuggestions.isEmpty()) {
                 emit autofillRequested();
-            }
-        });
-        connect(view, &engine::EngineView::titleChanged, this, [this, view] {
-            if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
-                emit currentEngineChanged();
             }
         });
         connect(view, &engine::EngineView::shortcutRequested, this, [this](const QString &command) {

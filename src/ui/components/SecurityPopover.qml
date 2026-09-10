@@ -35,8 +35,10 @@ Popup {
     onClosed: dismissedAt = Date.now()
 
     Connections {
-        function onCurrentEngineChanged() {
-            popover.refreshPermissions();
+        function onCurrentUrlChanged() {
+            if (popover.opened)
+                popover.refreshPermissions();
+
         }
 
         target: popover.controller
@@ -44,7 +46,9 @@ Popup {
 
     Connections {
         function onPermissionsChanged(origin) {
-            popover.refreshPermissions();
+            if (popover.opened)
+                popover.refreshPermissions();
+
         }
 
         target: popover.store

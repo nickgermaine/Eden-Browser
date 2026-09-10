@@ -16,6 +16,48 @@
 #include <QtQml>
 #include <QtTest>
 
+class SecurityPopoverController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QObject *currentEngine READ currentEngine CONSTANT)
+    Q_PROPERTY(QUrl currentUrl READ currentUrl NOTIFY currentUrlChanged)
+    Q_PROPERTY(QObject *permissionStore READ permissionStore CONSTANT)
+
+  public:
+    QObject *currentEngine() const {
+        return nullptr;
+    }
+
+    QUrl currentUrl() const {
+        return m_url;
+    }
+
+    QObject *permissionStore() {
+        return this;
+    }
+
+    void navigate(const QUrl &url) {
+        m_url = url;
+        emit currentUrlChanged();
+    }
+
+    Q_INVOKABLE QVariantList permissionsForOrigin(const QUrl &url, bool) {
+        ++queryCount;
+        queriedUrl = url;
+        return {};
+    }
+
+    int queryCount = 0;
+    QUrl queriedUrl;
+
+  signals:
+    void currentEngineChanged();
+    void currentUrlChanged();
+    void permissionsChanged(const QUrl &origin);
+
+  private:
+    QUrl m_url = QUrl(QStringLiteral("https://first.example/page"));
+};
+
 class ThemeManagerTest final : public QObject {
     Q_OBJECT
 
@@ -30,26 +72,77 @@ class ThemeManagerTest final : public QObject {
     void searchEngineSelectionLivesInProfileSettings();
     void startupPagesLiveInProfileSettings();
     void draftPreviewsSavesAndExports();
+    void currentUrlHasDedicatedNotification();
+    void securityPopoverQueriesOnlyWhileOpen();
 
   private:
-    void registerUiSingletons();
+    QQmlEngine &uiEngine();
     bool loadPage(const char *typeName);
+    std::unique_ptr<QQmlEngine> m_uiEngine;
 };
 
-void ThemeManagerTest::registerUiSingletons() {
-    static bool registered = false;
-    if (registered) {
-        return;
+void ThemeManagerTest::currentUrlHasDedicatedNotification() {
+    eden::core::WindowController controller;
+    const QMetaObject *meta = controller.metaObject();
+    for (const char *name : {"currentUrl", "displayUrl"}) {
+        const QMetaProperty property = meta->property(meta->indexOfProperty(name));
+        QCOMPARE(property.notifySignal().name(), QByteArray("currentUrlChanged"));
     }
-    registered = true;
-    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
-    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
+    QSignalSpy urlChanged(&controller, SIGNAL(currentUrlChanged()));
+    QVERIFY(urlChanged.isValid());
+    emit controller.currentEngineChanged();
+    QCOMPARE(urlChanged.size(), 1);
+}
+
+void ThemeManagerTest::securityPopoverQueriesOnlyWhileOpen() {
+    QQmlEngine &engine = uiEngine();
+    QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+    SecurityPopoverController controller;
+    QQuickWindow window;
+    window.resize(800, 600);
+    QQmlComponent component(&engine);
+    component.loadFromModule("Eden.Ui", "SecurityPopover");
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    std::unique_ptr<QObject> popover(component.createWithInitialProperties(
+        {{"controller", QVariant::fromValue(&controller)}, {"parent", QVariant::fromValue(window.contentItem())}}
+    ));
+    QVERIFY2(popover, qPrintable(component.errorString()));
+    window.show();
+    QCOMPARE(controller.queryCount, 0);
+    QVERIFY(QMetaObject::invokeMethod(popover.get(), "open"));
+    QTRY_VERIFY(popover->property("opened").toBool());
+    QCOMPARE(controller.queryCount, 1);
+    QCOMPARE(controller.queriedUrl, controller.currentUrl());
+    QVERIFY(QMetaObject::invokeMethod(popover.get(), "close"));
+    QTRY_VERIFY(!popover->property("visible").toBool());
+    controller.navigate(QUrl("https://second.example/page"));
+    emit controller.currentEngineChanged();
+    emit controller.permissionsChanged(controller.currentUrl());
+    QCOMPARE(controller.queryCount, 1);
+    QVERIFY(QMetaObject::invokeMethod(popover.get(), "open"));
+    QTRY_VERIFY(popover->property("opened").toBool());
+    QCOMPARE(controller.queryCount, 2);
+    QCOMPARE(controller.queriedUrl, controller.currentUrl());
+    controller.navigate(QUrl("https://third.example/page"));
+    QCOMPARE(controller.queryCount, 3);
+    QCOMPARE(controller.queriedUrl, controller.currentUrl());
+    emit controller.permissionsChanged(controller.currentUrl());
+    QCOMPARE(controller.queryCount, 4);
+    QCOMPARE(warnings.size(), 0);
+}
+
+QQmlEngine &ThemeManagerTest::uiEngine() {
+    if (!m_uiEngine) {
+        qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
+        qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
+        m_uiEngine = std::make_unique<QQmlEngine>();
+        m_uiEngine->addImportPath(QCoreApplication::applicationDirPath());
+    }
+    return *m_uiEngine;
 }
 
 bool ThemeManagerTest::loadPage(const char *typeName) {
-    registerUiSingletons();
-    QQmlEngine engine;
-    engine.addImportPath(QCoreApplication::applicationDirPath());
+    QQmlEngine &engine = uiEngine();
     QSignalSpy warnings(&engine, &QQmlEngine::warnings);
     QQmlComponent component(&engine);
     component.loadFromModule("Eden.Ui", typeName);
@@ -226,11 +319,9 @@ void ThemeManagerTest::settingsPageLoads() {
 }
 
 void ThemeManagerTest::settingsSubpagesLoad() {
-    registerUiSingletons();
+    QQmlEngine &engine = uiEngine();
     for (const QUrl &url :
          {QUrl("eden://settings/autofill/passwords"), QUrl("eden://settings/privacy/site-settings")}) {
-        QQmlEngine engine;
-        engine.addImportPath(QCoreApplication::applicationDirPath());
         QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         QQmlComponent component(&engine);
         component.loadFromModule("Eden.Ui", "SettingsPage");

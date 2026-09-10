@@ -130,7 +130,7 @@ Rectangle {
     }
 
     Connections {
-        function onCurrentEngineChanged() {
+        function onCurrentUrlChanged() {
             if (!field.activeFocus) {
                 field.text = omnibox.controller.displayUrl;
                 field.cursorPosition = 0;
