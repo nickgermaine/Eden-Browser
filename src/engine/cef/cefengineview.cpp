@@ -660,6 +660,73 @@ namespace eden::engine::cef {
         }
     };
 
+    struct CefOsrPopupFrame {
+        QRect bounds;
+        QImage image;
+        bool visible = false;
+    };
+
+    class CefOsrPopupQueue final {
+      public:
+        bool setVisible(bool visible) {
+            const std::lock_guard lock(m_mutex);
+            if (m_frame.visible == visible) {
+                return false;
+            }
+            m_frame.visible = visible;
+            if (!visible) {
+                m_frame.bounds = {};
+                m_frame.image = {};
+            }
+            return schedule();
+        }
+
+        bool setBounds(const CefRect &bounds) {
+            const QRect next(bounds.x, bounds.y, bounds.width, bounds.height);
+            const std::lock_guard lock(m_mutex);
+            if (m_frame.bounds == next) {
+                return false;
+            }
+            if (m_frame.bounds.size() != next.size()) {
+                m_frame.image = {};
+            }
+            m_frame.bounds = next;
+            return schedule();
+        }
+
+        bool paint(const void *buffer, int width, int height) {
+            {
+                const std::lock_guard lock(m_mutex);
+                if (!m_frame.visible) {
+                    return false;
+                }
+            }
+            QImage image = copyCefFrame(buffer, width, height);
+            if (image.isNull()) {
+                return false;
+            }
+            image.reinterpretAsFormat(QImage::Format_ARGB32_Premultiplied);
+            const std::lock_guard lock(m_mutex);
+            m_frame.image = std::move(image);
+            return schedule();
+        }
+
+        CefOsrPopupFrame take() {
+            const std::lock_guard lock(m_mutex);
+            m_queued = false;
+            return m_frame;
+        }
+
+      private:
+        bool schedule() {
+            return !std::exchange(m_queued, true);
+        }
+
+        std::mutex m_mutex;
+        CefOsrPopupFrame m_frame;
+        bool m_queued = false;
+    };
+
     class CefOsrItem final : public QQuickItem {
       public:
         explicit CefOsrItem(QQuickItem *parent)
@@ -683,6 +750,20 @@ namespace eden::engine::cef {
         void presentFrame(QImage frame) {
             m_pendingFrame = CefOsrFrame(std::move(frame), nullptr, -1);
             update();
+        }
+
+        void presentPopup(CefOsrPopupFrame frame) {
+            m_popupFrame = std::move(frame);
+            m_popupChanged = true;
+            update();
+        }
+
+        QPoint browserPosition(const QPointF &position) const {
+            const QRectF displayedBounds = popupBounds();
+            if (m_popupFrame.visible && displayedBounds.contains(position)) {
+                return (position + m_popupFrame.bounds.topLeft() - displayedBounds.topLeft()).toPoint();
+            }
+            return position.toPoint();
         }
 
       protected:
@@ -742,13 +823,46 @@ namespace eden::engine::cef {
             } else if (!node->texture()) {
                 node->replaceTexture(window()->createTextureFromImage(m_displayedFrame.image));
             }
+            auto *popup = static_cast<CefOsrTextureNode *>(node->firstChild());
+            if (!m_popupFrame.visible || m_popupFrame.image.isNull() || m_popupFrame.bounds.isEmpty()) {
+                delete popup;
+            } else {
+                if (!popup) {
+                    popup = new CefOsrTextureNode;
+                    popup->setFiltering(QSGTexture::Linear);
+                    node->appendChildNode(popup);
+                    m_popupChanged = true;
+                }
+                if (m_popupChanged) {
+                    popup->replaceTexture(window()->createTextureFromImage(m_popupFrame.image));
+                }
+                const QRectF bounds = popupBounds();
+                const QRectF visibleBounds = bounds.intersected(boundingRect());
+                popup->setRect(visibleBounds);
+                popup->setSourceRect(QRectF(
+                    0,
+                    0,
+                    m_popupFrame.image.width() * visibleBounds.width() / bounds.width(),
+                    m_popupFrame.image.height() * visibleBounds.height() / bounds.height()
+                ));
+            }
+            m_popupChanged = false;
             return node;
         }
 
       private:
+        QRectF popupBounds() const {
+            QRectF bounds(m_popupFrame.bounds);
+            bounds.moveLeft(std::clamp(bounds.left(), 0.0, std::max(0.0, width() - bounds.width())));
+            bounds.moveTop(std::clamp(bounds.top(), 0.0, std::max(0.0, height() - bounds.height())));
+            return bounds;
+        }
+
         std::function<bool(QEvent *)> m_eventHandler;
         CefOsrFrame m_pendingFrame;
         CefOsrFrame m_displayedFrame;
+        CefOsrPopupFrame m_popupFrame;
+        bool m_popupChanged = false;
     };
 
     class CefDevToolsProtocolSession;
@@ -1024,6 +1138,9 @@ namespace eden::engine::cef {
             return this;
         }
 
+        void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+        void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect &rect) override;
+        void publishPopup();
         void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
         void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
         bool OnCursorChange(
@@ -1117,6 +1234,7 @@ namespace eden::engine::cef {
         QVariantList contextMenuActions(CefRefPtr<CefMenuModel> model);
 
         std::shared_ptr<CefViewLifetime> m_lifetime;
+        std::shared_ptr<CefOsrPopupQueue> m_popup = std::make_shared<CefOsrPopupQueue>();
         CefRefPtr<CefEngineClient> m_owner;
         mutable std::mutex m_browserMutex;
         CefRefPtr<CefBrowser> m_browser;
@@ -1209,6 +1327,9 @@ namespace eden::engine::cef {
             return this;
         }
 
+        void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+        void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect &rect) override;
+        void publishPopup();
         void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
         void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
         void OnAddressChange(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString &url) override;
@@ -1436,6 +1557,7 @@ namespace eden::engine::cef {
         QString m_publishedTitle;
 
         std::shared_ptr<CefViewLifetime> m_lifetime;
+        std::shared_ptr<CefOsrPopupQueue> m_popup = std::make_shared<CefOsrPopupQueue>();
         std::function<void()> m_windowCleanup;
         bool m_nativeClosePending = false;
         mutable std::mutex m_browserMutex;
@@ -2411,6 +2533,20 @@ namespace eden::engine::cef {
             }
         }
 
+        void presentPopup(CefOsrPopupFrame frame) {
+            CefUiBridge::assertOnUiThread(q);
+            if (osrItem) {
+                osrItem->presentPopup(std::move(frame));
+            }
+        }
+
+        void presentDevToolsPopup(CefOsrPopupFrame frame) {
+            CefUiBridge::assertOnUiThread(q);
+            if (devToolsOsrItem) {
+                devToolsOsrItem->presentPopup(std::move(frame));
+            }
+        }
+
         void presentDevToolsFrame(QImage frame) {
             CefUiBridge::assertOnUiThread(q);
             if (q->devToolsOpen() && devToolsOsrItem) {
@@ -2916,8 +3052,9 @@ namespace eden::engine::cef {
             if (event->type() == QEvent::MouseMove) {
                 auto *mouse = static_cast<QMouseEvent *>(event);
                 CefMouseEvent cefEvent;
-                cefEvent.x = qRound(mouse->position().x());
-                cefEvent.y = qRound(mouse->position().y());
+                const QPoint position = targetItem->browserPosition(mouse->position());
+                cefEvent.x = position.x();
+                cefEvent.y = position.y();
                 cefEvent.modifiers = cefMouseModifiers(mouse->modifiers(), mouse->buttons());
                 postToCefUi([currentBrowser, cefEvent] {
                     currentBrowser->GetHost()->SendMouseMoveEvent(cefEvent, false);
@@ -2927,8 +3064,9 @@ namespace eden::engine::cef {
             if (event->type() == QEvent::HoverMove) {
                 auto *hover = static_cast<QHoverEvent *>(event);
                 CefMouseEvent cefEvent;
-                cefEvent.x = qRound(hover->position().x());
-                cefEvent.y = qRound(hover->position().y());
+                const QPoint position = targetItem->browserPosition(hover->position());
+                cefEvent.x = position.x();
+                cefEvent.y = position.y();
                 cefEvent.modifiers =
                     cefMouseModifiers(QGuiApplication::keyboardModifiers(), QGuiApplication::mouseButtons());
                 postToCefUi([currentBrowser, cefEvent] {
@@ -2954,8 +3092,9 @@ namespace eden::engine::cef {
                     buttonType = MBT_RIGHT;
                 }
                 CefMouseEvent cefEvent;
-                cefEvent.x = qRound(mouse->position().x());
-                cefEvent.y = qRound(mouse->position().y());
+                const QPoint position = targetItem->browserPosition(mouse->position());
+                cefEvent.x = position.x();
+                cefEvent.y = position.y();
                 cefEvent.modifiers = cefMouseModifiers(mouse->modifiers(), mouse->buttons());
                 const bool released = event->type() == QEvent::MouseButtonRelease;
                 const int clickCount = event->type() == QEvent::MouseButtonDblClick ? 2 : 1;
@@ -2975,8 +3114,9 @@ namespace eden::engine::cef {
             if (event->type() == QEvent::Wheel) {
                 auto *wheel = static_cast<QWheelEvent *>(event);
                 CefMouseEvent cefEvent;
-                cefEvent.x = qRound(wheel->position().x());
-                cefEvent.y = qRound(wheel->position().y());
+                const QPoint position = targetItem->browserPosition(wheel->position());
+                cefEvent.x = position.x();
+                cefEvent.y = position.y();
                 cefEvent.modifiers = cefMouseModifiers(wheel->modifiers(), wheel->buttons());
                 const QPoint delta = wheel->angleDelta();
                 postToCefUi([currentBrowser, cefEvent, delta] {
@@ -3189,6 +3329,7 @@ namespace eden::engine::cef {
     }
 
     void CefDevToolsClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+        OnPopupShow(browser, false);
         const int identifier = browser->GetIdentifier();
         dismissContextMenu();
         {
@@ -3546,6 +3687,25 @@ namespace eden::engine::cef {
         return true;
     }
 
+    void CefDevToolsClient::OnPopupShow(CefRefPtr<CefBrowser>, bool show) {
+        if (m_popup->setVisible(show)) {
+            publishPopup();
+        }
+    }
+
+    void CefDevToolsClient::OnPopupSize(CefRefPtr<CefBrowser>, const CefRect &rect) {
+        if (m_popup->setBounds(rect)) {
+            publishPopup();
+        }
+    }
+
+    void CefDevToolsClient::publishPopup() {
+        const auto popup = m_popup;
+        if (!dispatch([popup](CefEngineView::Private &state) { state.presentDevToolsPopup(popup->take()); })) {
+            popup->take();
+        }
+    }
+
     void CefDevToolsClient::OnPaint(
         CefRefPtr<CefBrowser>,
         PaintElementType type,
@@ -3554,6 +3714,12 @@ namespace eden::engine::cef {
         int width,
         int height
     ) {
+        if (type == PET_POPUP) {
+            if (m_popup->paint(buffer, width, height)) {
+                publishPopup();
+            }
+            return;
+        }
         if (type != PET_VIEW) {
             return;
         }
@@ -3705,6 +3871,7 @@ namespace eden::engine::cef {
     }
 
     void CefEngineClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+        OnPopupShow(browser, false);
         const int identifier = browser->GetIdentifier();
 #if EDEN_ENABLE_AUTOMATION
         if (qEnvironmentVariableIsSet("EDEN_IDLE_DIAGNOSTICS")) {
@@ -4149,6 +4316,7 @@ namespace eden::engine::cef {
         if (!isCurrentMainFrame(browser, frame)) {
             return;
         }
+        OnPopupShow(browser, false);
         m_mainDocumentLoading = true;
         m_mainDocumentCommitted = true;
         ++m_navigationGeneration;
@@ -4688,6 +4856,25 @@ namespace eden::engine::cef {
         return true;
     }
 
+    void CefEngineClient::OnPopupShow(CefRefPtr<CefBrowser>, bool show) {
+        if (m_popup->setVisible(show)) {
+            publishPopup();
+        }
+    }
+
+    void CefEngineClient::OnPopupSize(CefRefPtr<CefBrowser>, const CefRect &rect) {
+        if (m_popup->setBounds(rect)) {
+            publishPopup();
+        }
+    }
+
+    void CefEngineClient::publishPopup() {
+        const auto popup = m_popup;
+        if (!dispatch([popup](CefEngineView::Private &state) { state.presentPopup(popup->take()); })) {
+            popup->take();
+        }
+    }
+
     void CefEngineClient::OnPaint(
         CefRefPtr<CefBrowser>,
         PaintElementType type,
@@ -4696,6 +4883,12 @@ namespace eden::engine::cef {
         int width,
         int height
     ) {
+        if (type == PET_POPUP) {
+            if (m_popup->paint(buffer, width, height)) {
+                publishPopup();
+            }
+            return;
+        }
         if (type != PET_VIEW || !buffer || !validCefFrameDimensions(width, height)) {
             return;
         }

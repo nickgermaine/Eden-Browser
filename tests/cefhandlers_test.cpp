@@ -96,7 +96,27 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/paint-burst") {
+                    if (path.startsWith("/select-popup")) {
+                        const QByteArray placement =
+                            path.contains("edge=1") ? "right:4px;bottom:4px" : "left:40px;top:40px";
+                        responseBody = R"HTML(<!doctype html><title>Select ready</title>
+<body style="margin:0;background:#214365">
+<select style="position:absolute;width:180px;height:40px;font:20px sans-serif;EDEN_POSITION">
+<option>First option</option>
+<option style="background:#e1a023;color:#102030">Second option with enough text to widen the menu</option>
+<option style="background:#29b372;color:#102030">Third option</option>
+<option>Fourth option</option><option>Fifth option</option><option>Sixth option</option>
+</select><script>
+document.querySelector('select').onchange=event=>{
+    document.title='selection:'+event.target.selectedIndex;
+    fetch('/select-result?index='+event.target.selectedIndex);
+};
+</script>)HTML";
+                        responseBody.replace("EDEN_POSITION", placement);
+                    } else if (path.startsWith("/select-result")) {
+                        m_selectedOptions.append(path.sliced(path.indexOf('=') + 1).toInt());
+                        responseBody = "selected";
+                    } else if (path == "/paint-burst") {
                         responseBody = R"HTML(<!doctype html><title>Paint ready</title>
 <body style="margin:0;background:#dd2222">
 <div id="left" style="position:fixed;left:0;top:0;width:50vw;height:100vh;background:#dd2222"></div>
@@ -310,10 +330,15 @@ document.getElementById('display').onclick=()=>{
         return m_pendingNavigations;
     }
 
+    const QList<int> &selectedOptions() const {
+        return m_selectedOptions;
+    }
+
   private:
     int m_rootRequests = 0;
     int m_completedFrameRuns = 0;
     int m_pendingNavigations = 0;
+    QList<int> m_selectedOptions;
     QHash<QTcpSocket *, QByteArray> m_requests;
 };
 
@@ -335,6 +360,8 @@ class CefHandlersTest final : public QObject {
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
+    void popupMenus_data();
+    void popupMenus();
     void asynchronousClose_data();
     void asynchronousClose();
     void shutdownWaitsForPendingCreation();
@@ -346,6 +373,132 @@ class CefHandlersTest final : public QObject {
     LocalPageServer m_server;
     std::unique_ptr<eden::core::ApplicationContext> m_applicationContext;
 };
+
+class CefNavigateDevTools final : public CefTask {
+  public:
+    CefNavigateDevTools(QUrl url, std::shared_ptr<std::atomic_bool> requested)
+        : m_url(std::move(url)),
+          m_requested(std::move(requested)) {}
+
+    void Execute() override {
+        for (int id = 1; id < 1000; ++id) {
+            const CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
+            const CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
+            if (frame && (frame->GetURL().ToString().starts_with("devtools://") ||
+                          frame->GetURL() == m_url.toString().toStdString())) {
+                frame->LoadURL(m_url.toString().toStdString());
+                m_requested->store(true);
+                return;
+            }
+        }
+    }
+
+  private:
+    QUrl m_url;
+    std::shared_ptr<std::atomic_bool> m_requested;
+
+    IMPLEMENT_REFCOUNTING(CefNavigateDevTools);
+};
+
+void CefHandlersTest::popupMenus_data() {
+    QTest::addColumn<bool>("edge");
+    QTest::addColumn<bool>("devTools");
+    QTest::newRow("page-center") << false << false;
+    QTest::newRow("page-bottom-right") << true << false;
+    QTest::newRow("devtools-center") << false << true;
+    QTest::newRow("devtools-bottom-right") << true << true;
+}
+
+void CefHandlersTest::popupMenus() {
+    QFETCH(bool, edge);
+    QFETCH(bool, devTools);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11);
+    Display *display = x11->display();
+    QVERIFY(display);
+    XSetInputFocus(display, static_cast<Window>(window.winId()), RevertToParent, CurrentTime);
+    XSync(display, False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(100, 100));
+    viewport.setSize(QSizeF(700, 500));
+    QQuickItem inspectedPage(window.contentItem());
+    inspectedPage.setSize(QSizeF(40, 40));
+    eden::engine::cef::CefEngineView view(&profile);
+    const QUrl fixture(
+        QString("http://127.0.0.1:%1/select-popup?edge=%2").arg(m_server.serverPort()).arg(edge ? 1 : 0)
+    );
+    if (devTools) {
+        view.attach(&inspectedPage);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Select ready"), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    }
+    const QPoint button = edge ? QPoint(100 + 700 - 94, 100 + 500 - 24) : QPoint(230, 160);
+    const qreal scale = window.devicePixelRatio();
+    const auto coloredBounds = [](const QImage &image, const QColor &color) {
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (image.pixelColor(x, y) == color) {
+                    bounds |= QRect(x, y, 1, 1);
+                }
+            }
+        }
+        return bounds;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(!coloredBounds(window.grabWindow(), QColor("#214365")).isEmpty(), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, button);
+    QRect option;
+    QImage popupImage;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            popupImage = window.grabWindow();
+            option = coloredBounds(popupImage, QColor("#e1a023"));
+            return option.width() > 100 * scale && option.height() > 10 * scale;
+        })(),
+        5000
+    );
+    const QRect viewportPixels(qRound(100 * scale), qRound(100 * scale), qRound(700 * scale), qRound(500 * scale));
+    QVERIFY(viewportPixels.contains(option));
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(coloredBounds(window.grabWindow(), QColor("#e1a023")).isEmpty(), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, button);
+    QTRY_VERIFY_WITH_TIMEOUT(!coloredBounds(window.grabWindow(), QColor("#e1a023")).isEmpty(), 5000);
+    const qsizetype previousSelections = m_server.selectedOptions().size();
+    QTest::mouseClick(&window, Qt::LeftButton, {}, (QPointF(option.center()) / scale).toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.selectedOptions().size(), previousSelections + 1, 5000);
+    QCOMPARE(m_server.selectedOptions().constLast(), 1);
+    QTRY_VERIFY_WITH_TIMEOUT(coloredBounds(window.grabWindow(), QColor("#e1a023")).isEmpty(), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, button);
+    QTRY_VERIFY_WITH_TIMEOUT(!coloredBounds(window.grabWindow(), QColor("#29b372")).isEmpty(), 5000);
+    if (devTools) {
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.reload();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(coloredBounds(window.grabWindow(), QColor("#29b372")).isEmpty(), 5000);
+}
 
 class CefUiPause final : public CefTask {
   public:
