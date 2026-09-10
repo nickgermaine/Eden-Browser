@@ -1,3 +1,4 @@
+#include "autofilltargetchecks.h"
 #include "core/profiles/applicationcontext.h"
 #include "core/profiles/profileeditorcontroller.h"
 #include "core/profiles/profilelistmodel.h"
@@ -14,6 +15,8 @@
 #include "engine/cef/devtoolssocketserver.h"
 #include "engine/enginefactory.h"
 #include "engine/engineregistry.h"
+#include "include/cef_browser.h"
+#include "include/cef_task.h"
 #include "profiletesthelpers.h"
 
 #include <QBuffer>
@@ -24,6 +27,8 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -45,6 +50,7 @@
 #undef KeyRelease
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -301,6 +307,7 @@ class CefHandlersTest final : public QObject {
     void addressAutofill();
     void browserVisibility();
     void formEvents();
+    void credentialTargets();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -312,6 +319,90 @@ class CefHandlersTest final : public QObject {
     LocalPageServer m_server;
     std::unique_ptr<eden::core::ApplicationContext> m_applicationContext;
 };
+
+class CefIsolatedWorldProbe final : public CefTask, public CefDevToolsMessageObserver {
+  public:
+    CefIsolatedWorldProbe(QString url, std::shared_ptr<std::atomic_int> result)
+        : m_url(std::move(url)),
+          m_result(std::move(result)) {}
+
+    void Execute() override {
+        for (int id = 1; id < 1000; ++id) {
+            CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
+            if (browser && browser->GetMainFrame() && browser->GetMainFrame()->GetURL() == m_url.toStdString()) {
+                m_registration = browser->GetHost()->AddDevToolsMessageObserver(this);
+                const QByteArray message = R"({"id":900001,"method":"Page.getFrameTree"})";
+                browser->GetHost()->SendDevToolsMessage(message.constData(), message.size());
+                return;
+            }
+        }
+        m_result->store(-1);
+    }
+
+    void OnDevToolsMethodResult(
+        CefRefPtr<CefBrowser> browser,
+        int messageId,
+        bool success,
+        const void *result,
+        size_t size
+    ) override {
+        if (messageId != 900001 && messageId != 900002) {
+            return;
+        }
+        if (!success || !result) {
+            m_result->store(-1);
+            m_registration = nullptr;
+            return;
+        }
+        if (messageId == 900002) {
+            m_result->store(1);
+            m_registration = nullptr;
+            return;
+        }
+        const QJsonObject object =
+            QJsonDocument::fromJson(QByteArray(static_cast<const char *>(result), size)).object();
+        const QString frameId = object.value("frameTree").toObject().value("frame").toObject().value("id").toString();
+        const QByteArray message =
+            QJsonDocument(
+                QJsonObject{
+                    {"id", 900002},
+                    {"method", "Page.createIsolatedWorld"},
+                    {"params", QJsonObject{{"frameId", frameId}, {"worldName", "autofill-isolated-world-regression"}}}
+                }
+            ).toJson(QJsonDocument::Compact);
+        browser->GetHost()->SendDevToolsMessage(message.constData(), message.size());
+    }
+
+  private:
+    QString m_url;
+    std::shared_ptr<std::atomic_int> m_result;
+    CefRefPtr<CefRegistration> m_registration;
+
+    IMPLEMENT_REFCOUNTING(CefIsolatedWorldProbe);
+};
+
+void CefHandlersTest::credentialTargets() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    verifyAutofillTargets(view, server.serverPort(), [&view] {
+        auto result = std::make_shared<std::atomic_int>(0);
+        QVERIFY(CefPostTask(TID_UI, new CefIsolatedWorldProbe(view.url().toString(), result)));
+        QTRY_VERIFY_WITH_TIMEOUT(result->load() != 0, 5000);
+        QCOMPARE(result->load(), 1);
+    });
+}
 
 static bool hasColorVariation(const QImage &image, const QRect &region, int minimumColors) {
     QSet<QRgb> colors;

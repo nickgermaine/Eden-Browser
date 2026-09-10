@@ -1,9 +1,14 @@
+#include "autofilltargetchecks.h"
 #include "engine/engineplugin.h"
 #include "engine/engineprofile.h"
+#include "engine/qtwebengine/qtwebengineview.h"
 
 #include <QGuiApplication>
+#include <QQmlComponent>
 #include <QQmlEngine>
+#include <QQuickItem>
 #include <QQuickWebEngineProfile>
+#include <QQuickWindow>
 #include <QtTest>
 
 #include <memory>
@@ -15,7 +20,34 @@ class QtWebEngineUserAgentTest final : public QObject {
 
   private slots:
     void identityIsAppliedToEveryProfile();
+    void credentialTargets();
 };
+
+void QtWebEngineUserAgentTest::credentialTargets() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QQmlEngine engine;
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::QtWebEngine;
+    parameters.privateProfile = true;
+    std::unique_ptr<eden::engine::EngineProfile> profile(
+        eden_engine_plugin()->createProfile(&parameters, &engine, nullptr)
+    );
+    QVERIFY(profile);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQmlComponent component(&engine);
+    component.setData("import QtQuick; Item { width:1000; height:700 }", QUrl());
+    std::unique_ptr<QObject> viewport(component.create());
+    auto *item = qobject_cast<QQuickItem *>(viewport.get());
+    QVERIFY(item);
+    item->setParentItem(window.contentItem());
+    eden::engine::QtWebEngineView view(profile.get());
+    view.attach(item);
+    verifyAutofillTargets(view, server.serverPort());
+}
 
 void QtWebEngineUserAgentTest::identityIsAppliedToEveryProfile() {
     const eden::engine::EnginePluginApi *api = eden_engine_plugin();

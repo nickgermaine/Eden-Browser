@@ -16,6 +16,16 @@ class QQuickItem;
 
 namespace eden::engine {
 
+    QUrl autofillOrigin(const QUrl &url);
+
+    struct AutofillTarget {
+        QUrl url;
+        QUrl origin;
+        QString documentId;
+
+        bool isValid() const;
+    };
+
     class ContextMenuInfo {
         Q_GADGET
         Q_PROPERTY(QPoint position MEMBER position)
@@ -190,7 +200,9 @@ namespace eden::engine {
         Q_INVOKABLE virtual void resolvePermissionRequest(quint64 id, bool allowed);
         Q_INVOKABLE virtual void resolveDisplayCaptureRequest(quint64 id, const QString &source);
         Q_INVOKABLE virtual void resolveFileDialog(quint64 id, bool accepted, const QList<QUrl> &files);
-        Q_INVOKABLE virtual void fillCredential(const QString &username, const QString &password);
+        using AutofillTargetCallback = std::function<void(AutofillTarget)>;
+        virtual void requestAutofillTarget(AutofillTargetCallback callback);
+        virtual void fillCredential(const AutofillTarget &target, const QString &username, const QString &password);
         Q_INVOKABLE virtual void fillForm(const QVariantMap &fields);
         void setDevToolsPlacement(DevToolsPlacement placement);
         virtual QUrl internalUrlFor(const QUrl &url) const;

@@ -393,6 +393,15 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
         if (!frame || !context) {
             return;
         }
+        if (frame->IsMain() && context->IsSame(frame->GetV8Context())) {
+            const std::string frameId = frame->GetIdentifier().ToString();
+            const CefRefPtr<CefV8Value> origin = context->GetGlobal()->GetValue("origin");
+            m_autofillDocuments[frameId] = {
+                context,
+                frameId + ":" + std::to_string(++m_nextAutofillDocumentId),
+                origin && origin->IsString() ? origin->GetStringValue().ToString() : std::string()
+            };
+        }
         CefRefPtr<CefCommandLine> commandLine = CefCommandLine::GetGlobalCommandLine();
         const std::string clientId =
             commandLine ? commandLine->GetSwitchValue("renderer-client-id").ToString() : std::string();
@@ -427,8 +436,17 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
         frame->ExecuteJavaScript(kDisplayCaptureHookScript, frame->GetURL(), 0);
     }
 
-    void
-    CefRendererApp::OnContextReleased(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefV8Context> context) {
+    void CefRendererApp::OnContextReleased(
+        CefRefPtr<CefBrowser>,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefV8Context> context
+    ) {
+        if (frame) {
+            const auto document = m_autofillDocuments.find(frame->GetIdentifier().ToString());
+            if (document != m_autofillDocuments.end() && document->second.context->IsSame(context)) {
+                m_autofillDocuments.erase(document);
+            }
+        }
         for (auto iterator = m_displayCapturePromises.begin(); iterator != m_displayCapturePromises.end();) {
             if (iterator->second.context && iterator->second.context->IsSame(context)) {
                 iterator = m_displayCapturePromises.erase(iterator);
@@ -440,10 +458,39 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
 
     bool CefRendererApp::OnProcessMessageReceived(
         CefRefPtr<CefBrowser> browser,
-        CefRefPtr<CefFrame>,
-        CefProcessId,
+        CefRefPtr<CefFrame> frame,
+        CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
+        if (browser && frame && message && sourceProcess == PID_BROWSER &&
+            (message->GetName() == "eden_get_autofill_target" || message->GetName() == "eden_fill_credential")) {
+            const auto document = m_autofillDocuments.find(frame->GetIdentifier().ToString());
+            const CefRefPtr<CefV8Context> current = frame->GetV8Context();
+            const bool valid = frame->IsMain() && document != m_autofillDocuments.end() && current &&
+                               current->IsValid() && document->second.context->IsSame(current) &&
+                               !document->second.origin.empty() && document->second.origin != "null";
+            const CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+            if (message->GetName() == "eden_get_autofill_target") {
+                const CefRefPtr<CefProcessMessage> response = CefProcessMessage::Create("eden_autofill_target");
+                const CefRefPtr<CefListValue> values = response->GetArgumentList();
+                values->SetString(0, arguments->GetString(0));
+                if (valid) {
+                    values->SetString(1, document->second.id);
+                    values->SetString(2, document->second.origin);
+                    values->SetString(3, frame->GetURL());
+                }
+                frame->SendProcessMessage(PID_BROWSER, response);
+            } else if (
+                valid && arguments->GetSize() == 3 && arguments->GetString(0) == document->second.id &&
+                arguments->GetString(1) == document->second.origin && current->Enter()
+            ) {
+                CefRefPtr<CefV8Value> result;
+                CefRefPtr<CefV8Exception> exception;
+                current->Eval(arguments->GetString(2), frame->GetURL(), 0, result, exception);
+                current->Exit();
+            }
+            return true;
+        }
         if (!browser || !message || message->GetName() != "eden_display_capture_response") {
             return false;
         }

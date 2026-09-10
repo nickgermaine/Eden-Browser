@@ -60,6 +60,7 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrlQuery>
+#include <QUuid>
 #include <QWheelEvent>
 #include <QWindow>
 #include <QtGui/qguiapplication_platform.h>
@@ -2032,6 +2033,7 @@ namespace eden::engine::cef {
                 browser = nullptr;
                 fileChooserRegistration = nullptr;
                 fileChooserNodes.clear();
+                cancelAutofillTargets();
             }
         }
 
@@ -2197,6 +2199,9 @@ namespace eden::engine::cef {
             CefUiBridge::assertOnUiThread(q);
             if (loading != nextLoading) {
                 loading = nextLoading;
+                if (loading) {
+                    cancelAutofillTargets();
+                }
                 updateProgress(loading ? 0 : 100);
                 emit q->loadingChanged();
             }
@@ -2217,6 +2222,25 @@ namespace eden::engine::cef {
                 emit q->loadProgressChanged();
             }
             refreshNavigationHistory();
+        }
+
+        void resolveAutofillTarget(const QString &id, AutofillTarget target) {
+            CefUiBridge::assertOnUiThread(q);
+            const auto found = autofillRequests.find(id);
+            if (found == autofillRequests.end()) {
+                return;
+            }
+            AutofillTargetCallback callback = std::move(found.value());
+            autofillRequests.erase(found);
+            callback(std::move(target));
+        }
+
+        void cancelAutofillTargets() {
+            QHash<QString, AutofillTargetCallback> callbacks;
+            callbacks.swap(autofillRequests);
+            for (auto &callback : callbacks) {
+                callback({});
+            }
         }
 
         void credentialSubmitted(const QUrl &origin, const QString &username, const QString &password) {
@@ -2272,6 +2296,7 @@ namespace eden::engine::cef {
 
         void renderProcessTerminated(const QUrl &failedUrl, const QString &details, const QString &errorPageUrl) {
             CefUiBridge::assertOnUiThread(q);
+            cancelAutofillTargets();
             updateTitle("Tab crashed");
             updateLoading(false, canGoBack, canGoForward);
             pendingUrl = failedUrl;
@@ -3006,6 +3031,7 @@ namespace eden::engine::cef {
         DevToolsSocketServer::Session devToolsSocketSession;
         QUrl pendingUrl = QUrl("about:blank");
         QUrl url;
+        QHash<QString, AutofillTargetCallback> autofillRequests;
         QUrl faviconUrl;
         QString title;
         ContextMenuInfo lastContextMenu;
@@ -4152,15 +4178,36 @@ namespace eden::engine::cef {
     }
 
     bool CefEngineClient::OnProcessMessageReceived(
-        CefRefPtr<CefBrowser>,
+        CefRefPtr<CefBrowser> browser,
         CefRefPtr<CefFrame> frame,
-        CefProcessId,
+        CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
         if (!message) {
             return false;
         }
         const std::string name = message->GetName().ToString();
+        if (name == "eden_autofill_target") {
+            if (sourceProcess != PID_RENDERER) {
+                return true;
+            }
+            const CefRefPtr<CefListValue> values = message->GetArgumentList();
+            const QString id = QString::fromStdString(values->GetString(0).ToString());
+            AutofillTarget target;
+            if (isCurrentMainFrame(browser, frame) && values->GetSize() == 4) {
+                target = {
+                    QUrl(QString::fromStdString(values->GetString(3).ToString())),
+                    QUrl(QString::fromStdString(values->GetString(2).ToString())),
+                    QString::fromStdString(values->GetString(1).ToString())
+                };
+                if (!target.isValid() ||
+                    target.origin != autofillOrigin(QUrl(QString::fromStdString(frame->GetURL().ToString())))) {
+                    target = {};
+                }
+            }
+            dispatch([id, target](CefEngineView::Private &state) { state.resolveAutofillTarget(id, target); });
+            return true;
+        }
         if (name == "eden_renderer_client_id") {
             if (frame && frame->IsMain()) {
                 const std::string frameId = frame->GetIdentifier().ToString();
@@ -5498,8 +5545,38 @@ namespace eden::engine::cef {
         }
     }
 
-    void CefEngineView::fillCredential(const QString &username, const QString &password) {
+    void CefEngineView::requestAutofillTarget(AutofillTargetCallback callback) {
+        if (!callback) {
+            return;
+        }
         if (!d->browser) {
+            callback({});
+            return;
+        }
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        d->autofillRequests.insert(id, std::move(callback));
+        const CefRefPtr<CefBrowser> browser = d->browser;
+        const std::shared_ptr<CefViewLifetime> lifetime = d->lifetime;
+        if (!postToCefUi([browser, lifetime, id] {
+                const CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+                if (frame && frame->IsValid()) {
+                    const CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_get_autofill_target");
+                    message->GetArgumentList()->SetString(0, id.toStdString());
+                    frame->SendProcessMessage(PID_RENDERER, message);
+                } else {
+                    CefUiBridge::runOnUiThread([lifetime, id] {
+                        lifetime->runOrQueue([id](void *state) {
+                            static_cast<Private *>(state)->resolveAutofillTarget(id, {});
+                        });
+                    });
+                }
+            })) {
+            d->resolveAutofillTarget(id, {});
+        }
+    }
+
+    void CefEngineView::fillCredential(const AutofillTarget &target, const QString &username, const QString &password) {
+        if (!d->browser || !target.isValid()) {
             return;
         }
         const QByteArray values = QJsonDocument(QJsonArray{username, password}).toJson(QJsonDocument::Compact);
@@ -5524,7 +5601,20 @@ namespace eden::engine::cef {
                 "set(username,values[0]);set(secret,values[1]);})(%1)"
             )
                 .arg(QString::fromUtf8(values));
-        d->browser->GetMainFrame()->ExecuteJavaScript(script.toStdString(), d->url.toString().toStdString(), 0);
+        const CefRefPtr<CefBrowser> browser = d->browser;
+        postToCefUi([browser, target, script] {
+            const CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+            if (!frame || !frame->IsValid() ||
+                autofillOrigin(QUrl(QString::fromStdString(frame->GetURL().ToString()))) != target.origin) {
+                return;
+            }
+            const CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_fill_credential");
+            const CefRefPtr<CefListValue> values = message->GetArgumentList();
+            values->SetString(0, target.documentId.toStdString());
+            values->SetString(1, target.origin.toString(QUrl::FullyEncoded).toStdString());
+            values->SetString(2, script.toStdString());
+            frame->SendProcessMessage(PID_RENDERER, message);
+        });
     }
 
     void CefEngineView::fillForm(const QVariantMap &fields) {

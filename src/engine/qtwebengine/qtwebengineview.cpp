@@ -10,6 +10,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
+#include <QUuid>
 #include <QWebEngineHistory>
 #include <QWebEngineNewWindowRequest>
 #include <QWebEnginePermission>
@@ -73,7 +74,11 @@ document.addEventListener('input',function(event){reportField(event.target);},tr
         return url;
     }
 
-    QtWebEngineView::~QtWebEngineView() = default;
+    QtWebEngineView::~QtWebEngineView() {
+        if (m_view) {
+            m_view->setProperty("edenBridge", QVariant::fromValue<QObject *>(nullptr));
+        }
+    }
 
     QUrl QtWebEngineView::url() const {
         return aliasEngineInternalUrl(m_view ? m_url : m_pendingUrl);
@@ -356,6 +361,12 @@ WebEngineView {
     function edenRunJavaScript(script) {
         runJavaScript(script)
     }
+    function edenProbeAutofill(id, script) {
+        runJavaScript(script, 1, result => { if (edenBridge) edenBridge.handleAutofillTarget(id, result) })
+    }
+    function edenFillCredential(script) {
+        runJavaScript(script, 1)
+    }
     onNewWindowRequested: request => { if (edenBridge) edenBridge.handleNewWindow(request) }
     onFullScreenRequested: request => {
         request.accept()
@@ -489,11 +500,61 @@ WebEngineView {
         });
     }
 
-    void QtWebEngineView::fillCredential(const QString &username, const QString &password) {
-        const QByteArray values = QJsonDocument(QJsonArray{username, password}).toJson(QJsonDocument::Compact);
-        runJavaScript(
+    void QtWebEngineView::requestAutofillTarget(AutofillTargetCallback callback) {
+        if (!callback) {
+            return;
+        }
+        if (!m_view) {
+            callback({});
+            return;
+        }
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QByteArray encoded = QJsonDocument(QJsonArray{id}).toJson(QJsonDocument::Compact);
+        const QString script =
             QStringLiteral(
-                "(function(values){var fields=Array.from(document.querySelectorAll('input,textarea'));var tokens="
+                "(function(values){if(!Object.hasOwn(globalThis,'__edenAutofillDocument')){"
+                "Object.defineProperty(globalThis,'__edenAutofillDocument',{value:values[0]});}"
+                "return "
+                "{documentId:globalThis.__edenAutofillDocument,origin:globalThis.origin,url:location.href};})(%1)"
+            )
+                .arg(QString::fromUtf8(encoded));
+        m_autofillRequests.insert(id, std::move(callback));
+        if (!QMetaObject::invokeMethod(m_view, "edenProbeAutofill", Q_ARG(QVariant, id), Q_ARG(QVariant, script))) {
+            handleAutofillTarget(id, {});
+        }
+    }
+
+    void QtWebEngineView::handleAutofillTarget(const QString &requestId, const QVariant &result) {
+        const auto found = m_autofillRequests.find(requestId);
+        if (found == m_autofillRequests.end()) {
+            return;
+        }
+        AutofillTargetCallback callback = std::move(found.value());
+        m_autofillRequests.erase(found);
+        const QVariantMap values = result.toMap();
+        AutofillTarget target{
+            QUrl(values.value("url").toString()),
+            QUrl(values.value("origin").toString()),
+            values.value("documentId").toString()
+        };
+        if (!target.isValid() || target.origin != autofillOrigin(value("url").toUrl())) {
+            target = {};
+        }
+        callback(std::move(target));
+    }
+
+    void
+    QtWebEngineView::fillCredential(const AutofillTarget &target, const QString &username, const QString &password) {
+        if (!m_view || !target.isValid()) {
+            return;
+        }
+        const QByteArray values =
+            QJsonDocument(QJsonArray{username, password, target.documentId, target.origin.toString(QUrl::FullyEncoded)})
+                .toJson(QJsonDocument::Compact);
+        const QString script =
+            QStringLiteral(
+                "(function(values){if(globalThis.__edenAutofillDocument!==values[2]||globalThis.origin!==values[3])"
+                "return;var fields=Array.from(document.querySelectorAll('input,textarea'));var tokens="
                 "function(f){return String(f.autocomplete||'').toLowerCase().split(/\\s+/);};var has=function(f,v)"
                 "{return tokens(f).indexOf(v)>=0;};var identity=function(f){return[f.name,f.id,f.placeholder,f."
                 "getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();};var secret=fields.find(function"
@@ -508,8 +569,8 @@ WebEngineView {
                 "field.dispatchEvent(new Event('input',{bubbles:true}));field.dispatchEvent(new Event('change',"
                 "{bubbles:true}));};set(username,values[0]);set(secret,values[1]);})(%1)"
             )
-                .arg(QString::fromUtf8(values))
-        );
+                .arg(QString::fromUtf8(values));
+        QMetaObject::invokeMethod(m_view, "edenFillCredential", Q_ARG(QVariant, script));
     }
 
     void QtWebEngineView::fillForm(const QVariantMap &fields) {
@@ -579,6 +640,13 @@ WebEngineView {
         const bool finishedLoading = m_loading && !nextLoading;
         if (m_loading != nextLoading) {
             m_loading = nextLoading;
+            if (m_loading) {
+                QHash<QString, AutofillTargetCallback> callbacks;
+                callbacks.swap(m_autofillRequests);
+                for (auto &callback : callbacks) {
+                    callback({});
+                }
+            }
             emit loadingChanged();
         }
         if (finishedLoading) {

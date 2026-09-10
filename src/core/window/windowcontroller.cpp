@@ -1910,21 +1910,8 @@ namespace eden::core {
     }
 
     void WindowController::fillSavedCredential(qint64 id) {
-        auto *vault = qobject_cast<passwords::CredentialVault *>(credentialVault());
-        auto *view = qobject_cast<engine::EngineView *>(currentEngine());
-        if (!vault || !view || id <= 0) {
-            return;
-        }
-        const QVariantList credentials = vault->credentialsForUrl(currentUrl());
-        for (const QVariant &item : credentials) {
-            const QVariantMap credential = item.toMap();
-            if (credential.value("id").toLongLong() != id) {
-                continue;
-            }
-            QString password = vault->revealPassword(id);
-            view->fillCredential(credential.value("username").toString(), password);
-            password.fill(QChar(0));
-            return;
+        if (id > 0) {
+            requestCredentialFill(qobject_cast<engine::EngineView *>(currentEngine()), id);
         }
     }
 
@@ -1961,22 +1948,50 @@ namespace eden::core {
     }
 
     void WindowController::fillDefaultCredential(engine::EngineView *view) {
+        if (!m_privateWindow) {
+            requestCredentialFill(view, 0);
+        }
+    }
+
+    void WindowController::requestCredentialFill(engine::EngineView *view, qint64 credentialId) {
+        if (!view || view != qobject_cast<engine::EngineView *>(currentEngine()) || view->isLoading()) {
+            return;
+        }
+        const QUrl expectedOrigin = engine::autofillOrigin(view->url());
+        if (expectedOrigin.isEmpty()) {
+            return;
+        }
         auto *vault = qobject_cast<passwords::CredentialVault *>(credentialVault());
-        if (m_privateWindow || !view || view != qobject_cast<engine::EngineView *>(currentEngine()) || !vault ||
-            !vault->available()) {
+        if (!vault || !vault->available() || vault->credentialsForUrl(expectedOrigin).isEmpty()) {
             return;
         }
-        const QVariantList credentials = vault->credentialsForUrl(view->url());
-        if (credentials.isEmpty()) {
-            return;
-        }
-        const QVariantMap credential = credentials.constFirst().toMap();
-        const qint64 id = credential.value("id").toLongLong();
-        QString password = vault->revealPassword(id);
-        if (!password.isEmpty()) {
-            view->fillCredential(credential.value("username").toString(), password);
-            password.fill(QChar(0));
-        }
+        const QPointer<WindowController> guard(this);
+        const QPointer<engine::EngineView> targetView(view);
+        view->requestAutofillTarget([guard, targetView, expectedOrigin, credentialId](engine::AutofillTarget target) {
+            if (!guard || !targetView || targetView != guard->currentEngine() || targetView->isLoading() ||
+                !target.isValid() || target.origin != expectedOrigin ||
+                engine::autofillOrigin(targetView->url()) != expectedOrigin ||
+                (credentialId == 0 && guard->m_privateWindow)) {
+                return;
+            }
+            auto *vault = qobject_cast<passwords::CredentialVault *>(guard->credentialVault());
+            if (!vault || !vault->available()) {
+                return;
+            }
+            for (const QVariant &item : vault->credentialsForUrl(target.origin)) {
+                const QVariantMap credential = item.toMap();
+                const qint64 id = credential.value("id").toLongLong();
+                if (credentialId > 0 && id != credentialId) {
+                    continue;
+                }
+                QString password = vault->revealPassword(id);
+                if (!password.isEmpty()) {
+                    targetView->fillCredential(target, credential.value("username").toString(), password);
+                    password.fill(QChar(0));
+                }
+                return;
+            }
+        });
     }
 
     void WindowController::refreshAutofillSuggestions() {

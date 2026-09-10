@@ -42,8 +42,16 @@ namespace eden::engine::cef {
             CefRefPtr<CefV8Value> promise;
         };
 
+        struct AutofillDocument {
+            CefRefPtr<CefV8Context> context;
+            std::string id;
+            std::string origin;
+        };
+
         int m_nextDisplayCaptureRequestId = 1;
         std::map<std::pair<int, int>, DisplayCapturePromise> m_displayCapturePromises;
+        uint64_t m_nextAutofillDocumentId = 0;
+        std::map<std::string, AutofillDocument> m_autofillDocuments;
 
         IMPLEMENT_REFCOUNTING(CefRendererApp);
     };

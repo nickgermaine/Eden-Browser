@@ -263,6 +263,7 @@ namespace eden::core {
         void connectPrivateProfile(engine::EngineProfile *profile);
         void connectEngine(engine::EngineView *view);
         void fillDefaultCredential(engine::EngineView *view);
+        void requestCredentialFill(engine::EngineView *view, qint64 credentialId);
         void captureTabPreview(int index);
         void captureInternalPagePreview(int index);
         QVariantMap tabPreviewMetadata(int index, bool sampleMemory) const;

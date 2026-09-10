@@ -65,7 +65,8 @@ namespace eden::engine::cef {
         void resolvePermissionRequest(quint64 id, bool allowed) override;
         void resolveDisplayCaptureRequest(quint64 id, const QString &source) override;
         void resolveFileDialog(quint64 id, bool accepted, const QList<QUrl> &files) override;
-        void fillCredential(const QString &username, const QString &password) override;
+        void requestAutofillTarget(AutofillTargetCallback callback) override;
+        void fillCredential(const AutofillTarget &target, const QString &username, const QString &password) override;
         void fillForm(const QVariantMap &fields) override;
         void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
 

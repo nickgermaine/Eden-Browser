@@ -2,6 +2,26 @@
 
 namespace eden::engine {
 
+    QUrl autofillOrigin(const QUrl &url) {
+        if (!url.isValid() || url.host().isEmpty() || (url.scheme() != "https" && url.scheme() != "http")) {
+            return {};
+        }
+        QUrl origin = url;
+        origin.setUserInfo({});
+        origin.setPath({});
+        origin.setQuery({});
+        origin.setFragment({});
+        if (origin.port() == (origin.scheme() == "https" ? 443 : 80)) {
+            origin.setPort(-1);
+        }
+        return origin;
+    }
+
+    bool AutofillTarget::isValid() const {
+        return !documentId.isEmpty() && !origin.isEmpty() && origin == autofillOrigin(origin) &&
+               origin == autofillOrigin(url);
+    }
+
     EngineView::EngineView(QObject *parent)
         : QObject(parent) {}
 
@@ -85,7 +105,13 @@ namespace eden::engine {
 
     void EngineView::resolveFileDialog(quint64, bool, const QList<QUrl> &) {}
 
-    void EngineView::fillCredential(const QString &, const QString &) {}
+    void EngineView::requestAutofillTarget(AutofillTargetCallback callback) {
+        if (callback) {
+            callback({});
+        }
+    }
+
+    void EngineView::fillCredential(const AutofillTarget &, const QString &, const QString &) {}
 
     void EngineView::fillForm(const QVariantMap &) {}
 

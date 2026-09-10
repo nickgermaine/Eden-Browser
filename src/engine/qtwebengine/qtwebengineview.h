@@ -54,7 +54,8 @@ namespace eden::engine {
         void setMuted(bool muted) override;
         void executeContextMenuCommand(const QString &command) override;
         void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
-        void fillCredential(const QString &username, const QString &password) override;
+        void requestAutofillTarget(AutofillTargetCallback callback) override;
+        void fillCredential(const AutofillTarget &target, const QString &username, const QString &password) override;
         void fillForm(const QVariantMap &fields) override;
         void resolvePermissionRequest(quint64 id, bool allowed) override;
 
@@ -70,6 +71,7 @@ namespace eden::engine {
         Q_INVOKABLE void handleCertificateError();
         Q_INVOKABLE void handlePermission(const QVariant &permissionValue);
         Q_INVOKABLE void handleJavaScriptConsoleMessage(const QString &message);
+        Q_INVOKABLE void handleAutofillTarget(const QString &requestId, const QVariant &result);
 
       private slots:
         void syncState();
@@ -103,6 +105,7 @@ namespace eden::engine {
         bool m_certificateError = false;
         quint64 m_nextPermissionId = 1;
         QHash<quint64, QVariant> m_permissions;
+        QHash<QString, AutofillTargetCallback> m_autofillRequests;
     };
 
 }
