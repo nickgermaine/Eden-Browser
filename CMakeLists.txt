@@ -802,7 +802,16 @@ if(EDEN_ENGINE_CEF)
 
     qt_add_executable(eden-cef-handlers-tests tests/cefhandlers_test.cpp)
     target_include_directories(eden-cef-handlers-tests PRIVATE ${CEF_INCLUDE_PATH})
-    target_link_libraries(eden-cef-handlers-tests PRIVATE eden-core eden-ui eden-engine-cef eden-cef-process Qt6::Test)
+    target_link_libraries(eden-cef-handlers-tests
+        PRIVATE
+        eden-core
+        eden-ui
+        eden-engine-cef
+        eden-cef-process
+        Qt6::Test
+        ${CMAKE_DL_LIBS}
+    )
+    target_link_options(eden-cef-handlers-tests PRIVATE -Wl,--export-dynamic)
     SET_EXECUTABLE_TARGET_PROPERTIES(eden-cef-handlers-tests)
     set_target_properties(eden-cef-handlers-tests PROPERTIES BUILD_RPATH "$ORIGIN")
     add_dependencies(eden-cef-handlers-tests eden-helper)

@@ -15,6 +15,7 @@
 #include "engine/cef/devtoolssocketserver.h"
 #include "engine/enginefactory.h"
 #include "engine/engineregistry.h"
+#include "include/capi/cef_task_capi.h"
 #include "include/cef_browser.h"
 #include "include/cef_task.h"
 #include "profiletesthelpers.h"
@@ -52,9 +53,27 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <dlfcn.h>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
+
+static thread_local bool rejectNextCefTask = false;
+
+extern "C" int cef_post_task(cef_thread_id_t threadId, cef_task_t *task) {
+    if (std::exchange(rejectNextCefTask, false)) {
+        if (task) {
+            task->base.release(&task->base);
+        }
+        return false;
+    }
+    static const auto post = reinterpret_cast<decltype(&cef_post_task)>(dlsym(RTLD_NEXT, "cef_post_task"));
+    if (!post) {
+        qFatal("CEF task posting is unavailable");
+    }
+    return post(threadId, task);
+}
 
 class LocalPageServer final : public QTcpServer {
     Q_OBJECT
@@ -362,6 +381,7 @@ class CefHandlersTest final : public QObject {
     void resizeStress();
     void popupMenus_data();
     void popupMenus();
+    void thumbnailPostFailure();
     void asynchronousClose_data();
     void asynchronousClose();
     void shutdownWaitsForPendingCreation();
@@ -498,6 +518,38 @@ void CefHandlersTest::popupMenus() {
         view.reload();
     }
     QTRY_VERIFY_WITH_TIMEOUT(coloredBounds(window.grabWindow(), QColor("#29b372")).isEmpty(), 5000);
+}
+
+void CefHandlersTest::thumbnailPostFailure() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(640, 480);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(QSizeF(640, 480));
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    int completions = 0;
+    QImage captured;
+    const auto completed = [&](const QImage &image) {
+        ++completions;
+        captured = image;
+    };
+    rejectNextCefTask = true;
+    view.requestThumbnail(QSize(64, 48), completed);
+    QVERIFY(!std::exchange(rejectNextCefTask, false));
+    QCOMPARE(completions, 1);
+    QVERIFY(captured.isNull());
+    view.requestThumbnail(QSize(64, 48), completed);
+    QTRY_COMPARE_WITH_TIMEOUT(completions, 2, 10000);
+    QCOMPARE(captured.size(), QSize(64, 48));
 }
 
 class CefUiPause final : public CefTask {

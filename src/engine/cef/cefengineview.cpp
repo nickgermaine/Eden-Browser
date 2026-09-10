@@ -2562,7 +2562,7 @@ namespace eden::engine::cef {
                 }
                 return;
             }
-            if (!postToCefUi([currentBrowser, size, callback = std::move(callback)]() mutable {
+            if (!postToCefUi([currentBrowser, size, callback]() mutable {
                     CefThumbnailObserver::capture(currentBrowser, size, std::move(callback));
                 })) {
                 callback({});
