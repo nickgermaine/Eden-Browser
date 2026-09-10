@@ -185,6 +185,7 @@ try {
 })();)JS";
 
         constexpr const char *kFormHookScript = R"JS((function(){
+'use strict';
 var reportCredential = window.__edenReportCredential;
 var reportFormField = window.__edenReportFormField;
 delete window.__edenReportCredential;
@@ -197,17 +198,18 @@ var fieldIdentity = function(field){
     return [field.name, field.id, field.placeholder, field.getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();
 };
 var usernameField = function(field){
-    return visible(field) && field.value &&
+    return field && field.value &&
         (autocompleteHas(field, 'username') || autocompleteHas(field, 'email') || field.type === 'email' ||
-         /user|email|login|identifier/.test(fieldIdentity(field)));
+         /user|email|login|identifier/.test(fieldIdentity(field))) && visible(field);
 };
-var secretField = function(field){
-    if (!visible(field) || !field.value || autocompleteHas(field, 'one-time-code')) { return false; }
+var secretType = function(field){
+    if (!field || autocompleteHas(field, 'one-time-code')) { return false; }
     if (field.type === 'password' || autocompleteHas(field, 'current-password') || autocompleteHas(field, 'new-password')) {
         return true;
     }
     return /password|passwd|passphrase|token|api[ _-]*key|secret|access[ _-]*key/.test(fieldIdentity(field));
 };
+var secretField = function(field){ return field && field.value && secretType(field) && visible(field); };
 var usernameCandidate = function(root){
     var field = fieldsFor(root).find(usernameField);
     return field ? field.value || '' : '';
@@ -229,8 +231,9 @@ var capture = function(root){
     var username = secret ? usernameFor(secret) : usernameCandidate(root);
     if (username || secret) { try { reportCredential(username, secret ? secret.value : ''); } catch (error) {} }
 };
-document.addEventListener('submit', function(event){ capture(event.target); }, true);
+document.addEventListener('submit', function(event){ if (event.isTrusted) { capture(event.target); } }, true);
 document.addEventListener('click', function(event){
+    if (!event.isTrusted) { return; }
     var target = event.target && event.target.closest ? event.target.closest('button,input,[role="button"],a') : null;
     if (!target) { return; }
     var label = [target.textContent, target.value, target.getAttribute('aria-label')].filter(Boolean).join(' ');
@@ -243,37 +246,74 @@ document.addEventListener('click', function(event){
     }
 }, true);
 document.addEventListener('change', function(event){
+    if (!event.isTrusted) { return; }
     var field = event.target;
     if (field && /^(INPUT|TEXTAREA)$/.test(field.tagName) && usernameField(field)) {
         try { reportCredential(field.value || '', ''); } catch (error) {}
     }
 }, true);
 document.addEventListener('keydown', function(event){
-    if (event.key === 'Enter') { capture(event.target.form || document); }
+    if (event.isTrusted && event.key === 'Enter') { capture(event.target.form || document); }
 }, true);
-var reportField = function(field){
-    if (!field || !/^(INPUT|TEXTAREA)$/.test(field.tagName)) { return; }
+var relevantField = function(field){
+    if (!field || !/^(INPUT|TEXTAREA)$/.test(field.tagName) || field.disabled || field.readOnly) { return false; }
+    if (/^(password|email|tel)$/.test(field.type)) { return true; }
+    var identity = fieldIdentity(field) + ' ' + String(field.autocomplete || '').toLowerCase();
+    return /name|email|user|login|identifier|pass|token|secret|access|phone|address|city|state|province|postal|zip|country/
+        .test(identity);
+};
+var requestFrame = window.requestAnimationFrame.bind(window);
+var cancelFrame = window.cancelAnimationFrame.bind(window);
+var pendingFrame = null;
+var pendingField = null;
+var lastReport = null;
+var clearField = function(){
+    if (pendingFrame !== null) { cancelFrame(pendingFrame); }
+    pendingFrame = null;
+    pendingField = null;
+    if (lastReport) {
+        lastReport = null;
+        try { reportFormField('', '', '', '', 0, 0, 0, 0); } catch (error) {}
+    }
+};
+var flushField = function(){
+    pendingFrame = null;
+    var field = pendingField;
+    pendingField = null;
+    if (!relevantField(field) || document.activeElement !== field) { clearField(); return; }
     var rect = field.getBoundingClientRect();
-    var value = secretField(field) ? '' : field.value || '';
+    if (rect.width <= 0 || rect.height <= 0) { clearField(); return; }
+    var value = secretType(field) ? '' : field.value || '';
+    var type = field.type || 'text';
+    var name = field.name || field.id || '';
+    var autocomplete = field.autocomplete || '';
+    var values = [type, name, autocomplete, value, rect.x, rect.y, rect.width, rect.height];
+    if (lastReport) {
+        var changed = false;
+        for (var index = 0; index < values.length; ++index) {
+            if (values[index] !== lastReport[index]) { changed = true; break; }
+        }
+        if (!changed) { return; }
+    }
+    lastReport = values;
     try {
-        reportFormField(
-            field.type || 'text',
-            field.name || field.id || '',
-            field.autocomplete || '',
-            value,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height
-        );
+        reportFormField(type, name, autocomplete, value, rect.x, rect.y, rect.width, rect.height);
     } catch (error) {}
 };
+var queueField = function(event){
+    if (!event.isTrusted) { return; }
+    if (!relevantField(event.target)) { clearField(); return; }
+    pendingField = event.target;
+    if (pendingFrame === null) { pendingFrame = requestFrame(flushField); }
+};
 document.addEventListener('focusin', function(event){
-    reportField(event.target);
+    queueField(event);
 }, true);
+document.addEventListener('focusout', function(event){ if (event.isTrusted) { clearField(); } }, true);
 document.addEventListener('input', function(event){
-    reportField(event.target);
+    queueField(event);
 }, true);
+window.addEventListener('blur', clearField);
 })();)JS";
 
         constexpr const char *kDisplayCaptureHookScript = R"JS((function(){
@@ -356,7 +396,7 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
         CefRefPtr<CefCommandLine> commandLine = CefCommandLine::GetGlobalCommandLine();
         const std::string clientId =
             commandLine ? commandLine->GetSwitchValue("renderer-client-id").ToString() : std::string();
-        if (!clientId.empty()) {
+        if (frame->IsMain() && !clientId.empty()) {
             CefRefPtr<CefProcessMessage> clientMessage = CefProcessMessage::Create("eden_renderer_client_id");
             clientMessage->GetArgumentList()->SetInt(0, std::atoi(clientId.c_str()));
             frame->SendProcessMessage(PID_BROWSER, clientMessage);

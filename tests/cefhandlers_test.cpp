@@ -88,7 +88,25 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/visibility") {
+                    if (path == "/form-events") {
+                        responseBody = R"HTML(<!doctype html><title>Form events</title>
+<input id="todo" name="todo" style="position:absolute;left:20px;top:20px;width:300px;height:48px">
+<input id="email" name="email" type="email" style="position:absolute;left:20px;top:90px;width:300px;height:48px">
+<script>
+const fields = Array.from(document.querySelectorAll('input'));
+for (let index = 0; index < 1000; ++index) {
+    for (const field of fields) {
+        field.value = String(index);
+        field.dispatchEvent(new Event('input', {bubbles:true}));
+    }
+}
+for (const field of fields) {
+    field.value = '';
+    field.addEventListener('input', () => document.title = field.name + ':' + field.value);
+}
+document.title = 'Synthetic inputs complete';
+</script>)HTML";
+                    } else if (path == "/visibility") {
                         responseBody = R"HTML(<!doctype html><title>Visibility pending</title>
 <script>
 let frames = 0;
@@ -282,6 +300,7 @@ class CefHandlersTest final : public QObject {
     void clipboardPermissions();
     void addressAutofill();
     void browserVisibility();
+    void formEvents();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -639,6 +658,47 @@ void CefHandlersTest::handlerSuite() {
         pendingContextView.reset();
         QTest::qWait(100);
     }
+}
+
+void CefHandlersTest::formEvents() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11Application = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11Application);
+    Display *display = x11Application->display();
+    QVERIFY(display);
+    XSetInputFocus(display, static_cast<Window>(window.winId()), RevertToParent, CurrentTime);
+    XSync(display, False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    QSignalSpy reports(&view, &eden::engine::EngineView::formFieldFocused);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/form-events").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Synthetic inputs complete"), 15000);
+    QTest::qWait(100);
+    QCOMPARE(reports.size(), 0);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 44));
+    QVERIFY(!viewport.childItems().isEmpty());
+    viewport.childItems().constFirst()->forceActiveFocus(Qt::MouseFocusReason);
+    QTest::keyClick(&window, Qt::Key_A);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("todo:a"), 5000);
+    QCOMPARE(reports.size(), 0);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 114));
+    QTRY_VERIFY_WITH_TIMEOUT(!reports.isEmpty(), 5000);
+    QCOMPARE(reports.constLast().constFirst().toMap().value("type").toString(), QString("email"));
+    QTest::keyClick(&window, Qt::Key_A);
+    QTest::keyClick(&window, Qt::Key_B);
+    QTRY_COMPARE_WITH_TIMEOUT(reports.constLast().constFirst().toMap().value("value").toString(), QString("ab"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(reports.constLast().constFirst().toMap().value("type").toString(), QString(), 5000);
 }
 
 void CefHandlersTest::browserVisibility() {
