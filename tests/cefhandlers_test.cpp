@@ -88,7 +88,21 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path == "/address-form") {
+                    if (path == "/visibility") {
+                        responseBody = R"HTML(<!doctype html><title>Visibility pending</title>
+<script>
+let frames = 0;
+const report = () => document.title = document.visibilityState + ':' + frames;
+document.addEventListener('visibilitychange', report);
+function tick() {
+    frames++;
+    report();
+    requestAnimationFrame(tick);
+}
+report();
+requestAnimationFrame(tick);
+</script>)HTML";
+                    } else if (path == "/address-form") {
                         responseBody = R"HTML(<!doctype html><title>Address form</title>
 <input autocomplete="email"><textarea autocomplete="street-address"></textarea>
 <input autocomplete="address-level2">
@@ -267,6 +281,7 @@ class CefHandlersTest final : public QObject {
     void navigationEvents();
     void clipboardPermissions();
     void addressAutofill();
+    void browserVisibility();
     void devToolsSuite();
     void shellDevToolsSuite();
     void resizeStress();
@@ -624,6 +639,57 @@ void CefHandlersTest::handlerSuite() {
         pendingContextView.reset();
         QTest::qWait(100);
     }
+}
+
+void CefHandlersTest::browserVisibility() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem container(window.contentItem());
+    QQuickItem viewport(&container);
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/visibility").arg(m_server.serverPort())));
+    QTRY_VERIFY_WITH_TIMEOUT(view.title().startsWith("visible:"), 15000);
+    QTRY_VERIFY(view.title().section(':', 1).toInt() > 2);
+
+    const auto verifyHidden = [&view] {
+        QTRY_VERIFY_WITH_TIMEOUT(view.title().startsWith("hidden:"), 5000);
+        const QString stopped = view.title();
+        QTest::qWait(250);
+        QCOMPARE(view.title(), stopped);
+    };
+    container.setVisible(false);
+    verifyHidden();
+    container.setVisible(true);
+    QTRY_VERIFY_WITH_TIMEOUT(view.title().startsWith("visible:"), 5000);
+    window.setVisibility(QWindow::Minimized);
+    verifyHidden();
+    window.showNormal();
+    QTRY_VERIFY_WITH_TIMEOUT(view.title().startsWith("visible:"), 5000);
+    view.attach(nullptr);
+    verifyHidden();
+    view.attach(&viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(view.title().startsWith("visible:"), 5000);
+
+    QQuickItem backgroundViewport(window.contentItem());
+    backgroundViewport.setSize(window.size());
+    backgroundViewport.setVisible(false);
+    eden::engine::cef::CefEngineView background(&profile);
+    background.attach(&backgroundViewport);
+    background.load(QUrl(QString("http://127.0.0.1:%1/visibility").arg(m_server.serverPort())));
+    QTRY_VERIFY_WITH_TIMEOUT(background.title().startsWith("hidden:"), 15000);
+    const QString stopped = background.title();
+    QTest::qWait(250);
+    QCOMPARE(background.title(), stopped);
+    backgroundViewport.setVisible(true);
+    QTRY_VERIFY_WITH_TIMEOUT(background.title().startsWith("visible:"), 5000);
 }
 
 void CefHandlersTest::addressAutofill() {

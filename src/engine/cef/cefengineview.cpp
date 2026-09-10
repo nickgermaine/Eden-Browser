@@ -1615,6 +1615,7 @@ namespace eden::engine::cef {
                     devToolsOsrItem->setParentItem(nullptr);
                     devToolsOsrItem->setVisible(false);
                 }
+                syncDevToolsVisibility();
                 return;
             }
             devToolsViewportConnections.append(
@@ -1623,6 +1624,7 @@ namespace eden::engine::cef {
                 })
             );
             if (!devToolsViewport->window()) {
+                syncDevToolsVisibility();
                 return;
             }
             QQuickWindow *shellWindow = devToolsViewport->window();
@@ -1662,9 +1664,7 @@ namespace eden::engine::cef {
                 updateDevToolsGeometry();
             }));
             devToolsViewportConnections.append(
-                QObject::connect(shellWindow, &QQuickWindow::visibleChanged, q, [this](bool) {
-                    syncDevToolsVisibility();
-                })
+                QObject::connect(shellWindow, &QQuickWindow::visibilityChanged, q, [this] { syncDevToolsVisibility(); })
             );
             devToolsViewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::activeChanged, q, [this] {
                 syncDevToolsFocus();
@@ -1683,12 +1683,14 @@ namespace eden::engine::cef {
         void attachViewport() {
             disconnectViewport();
             if (!viewport) {
+                syncVisibility();
                 return;
             }
             viewportConnections.append(
                 QObject::connect(viewport, &QQuickItem::windowChanged, q, [this](QQuickWindow *) { attachViewport(); })
             );
             if (!viewport->window()) {
+                syncVisibility();
                 return;
             }
             QQuickWindow *shellWindow = viewport->window();
@@ -1743,7 +1745,7 @@ namespace eden::engine::cef {
             viewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::heightChanged, q, [this] {
                 updateGeometry();
             }));
-            viewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::visibleChanged, q, [this](bool) {
+            viewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::visibilityChanged, q, [this] {
                 syncVisibility();
             }));
             viewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::activeChanged, q, [this] {
@@ -1851,6 +1853,7 @@ namespace eden::engine::cef {
         void browserCreated(CefRefPtr<CefBrowser> createdBrowser) {
             CefUiBridge::assertOnUiThread(q);
             browser = createdBrowser;
+            browserVisible.reset();
             browserCreationStarted = true;
             browser->GetHost()->SetAudioMuted(muted);
             installFileChooserInterception();
@@ -1943,6 +1946,7 @@ namespace eden::engine::cef {
                 return;
             }
             devToolsBrowser = createdBrowser;
+            devToolsBrowserVisible.reset();
             devToolsBrowserCreationStarted = true;
             updateDevToolsGeometry();
             syncDevToolsVisibility();
@@ -2734,32 +2738,59 @@ namespace eden::engine::cef {
         }
 
         void syncVisibility() {
-            if (!hostWindow && !osrItem) {
-                return;
-            }
             const bool visible = viewport && viewport->window() && viewport->window()->isVisible() &&
-                                 viewport->isVisible() && viewport->width() > 0 && viewport->height() > 0;
+                                 viewport->window()->visibility() != QWindow::Minimized && viewport->isVisible() &&
+                                 viewport->width() > 0 && viewport->height() > 0;
             if (osrItem) {
                 osrItem->setVisible(visible);
                 if (!visible) {
                     osrPageFocused = false;
                 }
-            } else {
+            } else if (hostWindow) {
                 hostWindow->setVisible(visible);
+            }
+            if (osr) {
+                const bool showing = visible && browserVisible != visible;
+                syncBrowserVisibility(browser, visible, browserVisible);
+                if (showing) {
+                    syncFocus();
+                }
             }
         }
 
         void syncDevToolsVisibility() {
-            if (!devToolsOsrItem) {
-                return;
-            }
             const bool visible = q->devToolsOpen() && devToolsViewport && devToolsViewport->window() &&
-                                 devToolsViewport->window()->isVisible() && devToolsViewport->isVisible() &&
-                                 devToolsViewport->width() > 0 && devToolsViewport->height() > 0;
-            devToolsOsrItem->setVisible(visible);
+                                 devToolsViewport->window()->isVisible() &&
+                                 devToolsViewport->window()->visibility() != QWindow::Minimized &&
+                                 devToolsViewport->isVisible() && devToolsViewport->width() > 0 &&
+                                 devToolsViewport->height() > 0;
+            if (devToolsOsrItem) {
+                devToolsOsrItem->setVisible(visible);
+            }
             if (!visible) {
                 devToolsPageFocused = false;
             }
+            const bool showing = visible && devToolsBrowserVisible != visible;
+            syncBrowserVisibility(devToolsBrowser, visible, devToolsBrowserVisible);
+            if (showing) {
+                syncDevToolsFocus();
+            }
+        }
+
+        static void
+        syncBrowserVisibility(CefRefPtr<CefBrowser> target, bool visible, std::optional<bool> &lastVisible) {
+            if (!target || lastVisible == visible) {
+                return;
+            }
+            lastVisible = visible;
+            postToCefUi([target, visible] {
+                target->GetHost()->WasHidden(!visible);
+                if (visible) {
+                    target->GetHost()->Invalidate(PET_VIEW);
+                } else {
+                    target->GetHost()->SetFocus(false);
+                }
+            });
         }
 
         void syncFocus() {
@@ -2966,9 +2997,11 @@ namespace eden::engine::cef {
         CefRefPtr<CefEngineClient> client;
         QList<CefRefPtr<CefEngineClient>> retiredClients;
         CefRefPtr<CefBrowser> browser;
+        std::optional<bool> browserVisible;
         std::shared_ptr<CefViewLifetime> devToolsLifetime;
         CefRefPtr<CefDevToolsClient> devToolsClient;
         CefRefPtr<CefBrowser> devToolsBrowser;
+        std::optional<bool> devToolsBrowserVisible;
         std::shared_ptr<CefDevToolsProtocolSession> devToolsProtocolSession;
         DevToolsSocketServer::Session devToolsSocketSession;
         QUrl pendingUrl = QUrl("about:blank");
