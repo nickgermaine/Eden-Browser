@@ -43,6 +43,21 @@ document.title = 'ready:' + location.pathname;
                     if (path == "/iframe") {
                         page = "<!doctype html><title>ready:/iframe</title><iframe src=/child></iframe>"
                                "<script>onmessage=event=>document.title=event.data;</script>";
+                    } else if (path == "/form-events") {
+                        page = R"HTML(<!doctype html><title>form-events</title>
+<style>input,button{position:absolute;left:10px;width:200px;height:30px;box-sizing:border-box}</style>
+<input id="ordinary" name="todo" style="top:10px">
+<form onsubmit="event.preventDefault()">
+<input id="username" autocomplete="username" style="top:60px">
+<input id="password" type="password" style="top:110px">
+<button type="submit" style="top:160px">Sign in</button>
+</form>
+<button type="button" style="top:210px" onclick="
+for(let index=0;index<1000;index++){
+ordinary.value=String(index);
+ordinary.dispatchEvent(new Event('input',{bubbles:true}));
+}
+document.title='burst-complete';">Input burst</button>)HTML";
                     }
                     QByteArray response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n";
                     if (path == "/sandbox") {

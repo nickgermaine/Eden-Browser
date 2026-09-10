@@ -11,14 +11,19 @@ class TestClipboardItem {
     async getType() { return new Blob([this.text], {type: 'text/plain'}); }
 }
 
-function hookScript(name) {
-    const prefix = 'constexpr const char *' + name + ' = R"JS(';
-    const offset = source.indexOf(prefix);
+function hookScript(name, backend = 'cef') {
+    const sourceText = backend === 'qt'
+        ? fs.readFileSync(path.join(__dirname, '../src/engine/qtwebengine/qtwebengineview.cpp'), 'utf8')
+        : source;
+    const prefix = backend === 'qt'
+        ? 'static const QString formHookScript = QStringLiteral(R"JS('
+        : 'constexpr const char *' + name + ' = R"JS(';
+    const offset = sourceText.indexOf(prefix);
     assert.notEqual(offset, -1);
     const begin = offset + prefix.length;
-    const end = source.indexOf(')JS";', begin);
+    const end = sourceText.indexOf(')JS"', begin);
     assert.notEqual(end, -1);
-    return source.slice(begin, end);
+    return sourceText.slice(begin, end);
 }
 
 function clipboardEnvironment(clipboard) {
@@ -141,7 +146,7 @@ test('page callbacks cannot recover and replay the trusted event listener', () =
     assert.deepEqual(reports, ['user selection']);
 });
 
-function formEnvironment(definitions) {
+function formEnvironment(definitions, backend) {
     const reports = [];
     const credentials = [];
     const listeners = {};
@@ -164,6 +169,14 @@ function formEnvironment(definitions) {
     };
     const context = vm.createContext({
         document,
+        console: {
+            info(message) {
+                const separator = message.indexOf(':');
+                const values = JSON.parse(message.slice(separator + 1));
+                if (message.startsWith('EDEN_CREDENTIAL:')) { credentials.push(values); }
+                if (message.startsWith('EDEN_FIELD:')) { reports.push(values); }
+            }
+        },
         window: {
             __edenReportCredential: (...args) => credentials.push(args),
             __edenReportFormField: (...args) => reports.push(args),
@@ -172,7 +185,7 @@ function formEnvironment(definitions) {
             cancelAnimationFrame: id => frames.delete(id)
         }
     });
-    vm.runInContext(hookScript('kFormHookScript'), context);
+    vm.runInContext(hookScript('kFormHookScript', backend), context);
     return {
         fields, document, reports, credentials, listeners, windowListeners,
         geometryReads: () => geometryReads,
@@ -185,74 +198,76 @@ function formEnvironment(definitions) {
     };
 }
 
-test('synthetic inputs and clicks perform no form work', () => {
-    const env = formEnvironment([{type: 'password', value: 'test-value'}]);
-    const button = {
-        tagName: 'BUTTON', type: 'submit',
-        closest(selector) { return selector === 'form' ? null : this; }, getAttribute: () => null
-    };
-    for (let index = 0; index < 1000; index++) {
-        env.listeners.input({isTrusted: false, target: env.fields[0]});
-        env.listeners.click({isTrusted: false, target: button});
-    }
-    env.flush();
-    assert.equal(env.geometryReads(), 0);
-    assert.deepEqual(env.reports, []);
-    assert.deepEqual(env.credentials, []);
-    assert.equal(env.scheduledFrames(), 0);
-});
+for (const backend of ['cef', 'qt']) {
+    test(backend + ': synthetic inputs and clicks perform no form work', () => {
+        const env = formEnvironment([{type: 'password', value: 'test-value'}], backend);
+        const button = {
+            tagName: 'BUTTON', type: 'submit',
+            closest(selector) { return selector === 'form' ? null : this; }, getAttribute: () => null
+        };
+        for (let index = 0; index < 1000; index++) {
+            env.listeners.input({isTrusted: false, target: env.fields[0]});
+            env.listeners.click({isTrusted: false, target: button});
+        }
+        env.flush();
+        assert.equal(env.geometryReads(), 0);
+        assert.deepEqual(env.reports, []);
+        assert.deepEqual(env.credentials, []);
+        assert.equal(env.scheduledFrames(), 0);
+    });
 
-test('ordinary text editing skips geometry reads and bridge calls', () => {
-    const env = formEnvironment([{name: 'todo', value: 'item'}]);
-    for (let index = 0; index < 1000; index++) {
+    test(backend + ': ordinary text editing skips geometry reads and bridge calls', () => {
+        const env = formEnvironment([{name: 'todo', value: 'item'}], backend);
+        for (let index = 0; index < 1000; index++) {
+            env.listeners.input({isTrusted: true, target: env.fields[0]});
+        }
+        env.flush();
+        assert.equal(env.geometryReads(), 0);
+        assert.deepEqual(env.reports, []);
+    });
+
+    test(backend + ': relevant input bursts report their final value once per frame', () => {
+        const env = formEnvironment([{type: 'email', name: 'email'}], backend);
+        for (let index = 0; index < 1000; index++) {
+            env.fields[0].value = String(index);
+            env.listeners.input({isTrusted: true, target: env.fields[0]});
+        }
+        assert.equal(env.scheduledFrames(), 1);
+        assert.equal(env.geometryReads(), 0);
+        env.flush();
+        assert.equal(env.geometryReads(), 1);
+        assert.equal(env.reports.length, 1);
+        assert.equal(env.reports[0][3], '999');
         env.listeners.input({isTrusted: true, target: env.fields[0]});
-    }
-    env.flush();
-    assert.equal(env.geometryReads(), 0);
-    assert.deepEqual(env.reports, []);
-});
+        env.flush();
+        assert.equal(env.reports.length, 1);
+    });
 
-test('relevant input bursts report their final value once per frame', () => {
-    const env = formEnvironment([{type: 'email', name: 'email'}]);
-    for (let index = 0; index < 1000; index++) {
-        env.fields[0].value = String(index);
+    test(backend + ': leaving an autofill field clears suggestions and cancels pending reports', () => {
+        const env = formEnvironment([{type: 'email', value: 'person'}, {name: 'todo'}], backend);
+        env.listeners.focusin({isTrusted: true, target: env.fields[0]});
+        env.flush();
         env.listeners.input({isTrusted: true, target: env.fields[0]});
-    }
-    assert.equal(env.scheduledFrames(), 1);
-    assert.equal(env.geometryReads(), 0);
-    env.flush();
-    assert.equal(env.geometryReads(), 1);
-    assert.equal(env.reports.length, 1);
-    assert.equal(env.reports[0][3], '999');
-    env.listeners.input({isTrusted: true, target: env.fields[0]});
-    env.flush();
-    assert.equal(env.reports.length, 1);
-});
+        env.document.activeElement = env.fields[1];
+        env.listeners.focusin({isTrusted: true, target: env.fields[1]});
+        env.flush();
+        assert.equal(env.reports.length, 2);
+        assert.deepEqual(env.reports[1], ['', '', '', '', 0, 0, 0, 0]);
+        assert.equal(env.geometryReads(), 1);
+        env.windowListeners.blur();
+        assert.equal(env.reports.length, 2);
+    });
 
-test('leaving an autofill field clears suggestions and cancels pending reports', () => {
-    const env = formEnvironment([{type: 'email', value: 'person'}, {name: 'todo'}]);
-    env.listeners.focusin({isTrusted: true, target: env.fields[0]});
-    env.flush();
-    env.listeners.input({isTrusted: true, target: env.fields[0]});
-    env.document.activeElement = env.fields[1];
-    env.listeners.focusin({isTrusted: true, target: env.fields[1]});
-    env.flush();
-    assert.equal(env.reports.length, 2);
-    assert.deepEqual(env.reports[1], ['', '', '', '', 0, 0, 0, 0]);
-    assert.equal(env.geometryReads(), 1);
-    env.windowListeners.blur();
-    assert.equal(env.reports.length, 2);
-});
-
-test('password reports stay redacted and trusted submission still captures credentials', () => {
-    const env = formEnvironment([
-        {type: 'email', value: 'person@example.test'},
-        {type: 'password', value: 'test-value'}
-    ]);
-    env.document.activeElement = env.fields[1];
-    env.listeners.focusin({isTrusted: true, target: env.fields[1]});
-    env.flush();
-    assert.equal(env.reports[0][3], '');
-    env.listeners.submit({isTrusted: true, target: env.document});
-    assert.deepEqual(env.credentials, [['person@example.test', 'test-value']]);
-});
+    test(backend + ': password reports stay redacted and trusted submission still captures credentials', () => {
+        const env = formEnvironment([
+            {type: 'email', value: 'person@example.test'},
+            {type: 'password', value: 'test-value'}
+        ], backend);
+        env.document.activeElement = env.fields[1];
+        env.listeners.focusin({isTrusted: true, target: env.fields[1]});
+        env.flush();
+        assert.equal(env.reports[0][3], '');
+        env.listeners.submit({isTrusted: true, target: env.document});
+        assert.deepEqual(env.credentials, [['person@example.test', 'test-value']]);
+    });
+}
