@@ -675,7 +675,7 @@ namespace eden::core {
                 resolveJavaScriptDialog(false);
             }
             if (m_permissionRequestEngine == view) {
-                resolvePermissionRequest(false);
+                dismissPermissionRequest();
             }
             if (m_displayCaptureRequestEngine == view) {
                 resolveDisplayCaptureRequest();
@@ -808,7 +808,7 @@ namespace eden::core {
         }
         dismissPageContextMenu();
         resolveJavaScriptDialog(false);
-        resolvePermissionRequest(false);
+        dismissPermissionRequest();
         resolveDisplayCaptureRequest();
         resolveFileDialog(false);
         if (qEnvironmentVariableIsSet("EDEN_PERF") && m_window) {
@@ -1732,6 +1732,7 @@ namespace eden::core {
         if (!m_registeredAsWindow) {
             return;
         }
+        dismissPermissionRequest();
         dismissCredentialPrompt();
         WindowRegistry *registry = WindowRegistry::instance();
         const bool signingOut = m_context && m_context->signOutInProgress();
@@ -2101,24 +2102,36 @@ namespace eden::core {
     }
 
     void WindowController::resolvePermissionRequest(bool allowed) {
+        finishPermissionRequest(allowed, true);
+    }
+
+    void WindowController::dismissPermissionRequest() {
+        finishPermissionRequest(false, false);
+    }
+
+    void WindowController::finishPermissionRequest(bool allowed, bool persistDecision) {
         if (m_permissionRequest.isEmpty() && !m_permissionRequestEngine) {
             return;
         }
         QPointer<engine::EngineView> engine = m_permissionRequestEngine;
         const quint64 id = m_permissionRequest.value("id").toULongLong();
         const QVariantMap request = m_permissionRequest;
-        if (!m_privateWindow && m_context && m_context->permissions()) {
+        m_permissionRequest.clear();
+        m_permissionRequestEngine.clear();
+        if (persistDecision && !m_privateWindow && m_context && m_context->permissions()) {
             const QUrl origin = request.value("origin").toUrl();
             const QStringList permissions = request.value("permissions").toStringList();
             for (const QString &permission : permissions) {
                 m_context->permissions()->setPermission(origin, permission, allowed);
             }
         }
-        m_permissionRequest.clear();
-        m_permissionRequestEngine.clear();
         emit permissionRequestChanged();
         if (engine) {
-            engine->resolvePermissionRequest(id, allowed);
+            if (persistDecision) {
+                engine->resolvePermissionRequest(id, allowed);
+            } else {
+                engine->dismissPermissionRequest(id);
+            }
         }
     }
 
@@ -2491,10 +2504,10 @@ namespace eden::core {
             this,
             [this, view](const engine::PermissionRequestInfo &info) {
                 if (view != qobject_cast<engine::EngineView *>(currentEngine())) {
-                    view->resolvePermissionRequest(info.id, false);
+                    view->dismissPermissionRequest(info.id);
                     return;
                 }
-                resolvePermissionRequest(false);
+                dismissPermissionRequest();
                 PermissionStore *store = !m_privateWindow && m_context ? m_context->permissions() : nullptr;
                 bool allGranted = store && !info.permissions.isEmpty();
                 bool anyDenied = false;

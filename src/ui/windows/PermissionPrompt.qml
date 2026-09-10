@@ -22,7 +22,7 @@ Popup {
     z: 24
     onClosed: {
         if (controller.permissionRequest.id !== undefined)
-            controller.resolvePermissionRequest(false);
+            controller.dismissPermissionRequest();
 
     }
 

@@ -22,7 +22,48 @@ class QtWebEngineUserAgentTest final : public QObject {
     void identityIsAppliedToEveryProfile();
     void credentialTargets();
     void formReports();
+    void permissionDismissal();
 };
+
+void QtWebEngineUserAgentTest::permissionDismissal() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QQmlEngine engine;
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::QtWebEngine;
+    parameters.privateProfile = true;
+    std::unique_ptr<eden::engine::EngineProfile> profile(
+        eden_engine_plugin()->createProfile(&parameters, &engine, nullptr)
+    );
+    QVERIFY(profile);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQmlComponent component(&engine);
+    component.setData("import QtQuick; Item { width:1000; height:700 }", QUrl());
+    std::unique_ptr<QObject> viewport(component.create());
+    auto *item = qobject_cast<QQuickItem *>(viewport.get());
+    QVERIFY(item);
+    item->setParentItem(window.contentItem());
+    eden::engine::QtWebEngineView view(profile.get());
+    view.attach(item);
+    QSignalSpy requests(&view, &eden::engine::EngineView::permissionRequested);
+    view.load(QUrl(QString("http://127.0.0.1:%1/permission-dismissal").arg(server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("permission-ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(100, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(requests.size(), 1, 10000);
+    const auto first = requests.constFirst().at(0).value<eden::engine::PermissionRequestInfo>();
+    QVERIFY(first.permissions.contains("location"));
+    view.dismissPermissionRequest(first.id);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("prompt:1"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(100, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(requests.size(), 2, 10000);
+    const auto second = requests.constLast().at(0).value<eden::engine::PermissionRequestInfo>();
+    view.resolvePermissionRequest(second.id, false);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("denied:2"), 5000);
+}
 
 void QtWebEngineUserAgentTest::formReports() {
     AutofillPageServer server;

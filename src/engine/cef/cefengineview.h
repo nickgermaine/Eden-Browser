@@ -63,6 +63,7 @@ namespace eden::engine::cef {
         void dismissContextMenu() override;
         void resolveJavaScriptDialog(quint64 id, bool accepted, const QString &text) override;
         void resolvePermissionRequest(quint64 id, bool allowed) override;
+        void dismissPermissionRequest(quint64 id) override;
         void resolveDisplayCaptureRequest(quint64 id, const QString &source) override;
         void resolveFileDialog(quint64 id, bool accepted, const QList<QUrl> &files) override;
         void requestAutofillTarget(AutofillTargetCallback callback) override;

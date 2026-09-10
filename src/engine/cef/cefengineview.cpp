@@ -1378,7 +1378,7 @@ namespace eden::engine::cef {
         void executeContextMenuCommand(const QString &command);
         void dismissContextMenu();
         void resolveJavaScriptDialog(quint64 id, bool accepted, const QString &text);
-        void resolvePermissionRequest(quint64 id, bool allowed);
+        void resolvePermissionRequest(quint64 id, cef_permission_request_result_t result);
         void resolveDisplayCaptureRequest(quint64 id, const QString &source);
         void resolveFileDialog(quint64 id, bool accepted, const std::vector<CefString> &files);
         void faviconDownloaded(CefRefPtr<CefBrowser> browser, quint64 serial, CefRefPtr<CefImage> image);
@@ -5214,7 +5214,7 @@ namespace eden::engine::cef {
         callback->Continue(accepted, text.toStdString());
     }
 
-    void CefEngineClient::resolvePermissionRequest(quint64 id, bool allowed) {
+    void CefEngineClient::resolvePermissionRequest(quint64 id, cef_permission_request_result_t result) {
         const auto found = m_permissionCallbacks.find(id);
         if (found == m_permissionCallbacks.end()) {
             return;
@@ -5222,13 +5222,13 @@ namespace eden::engine::cef {
         PermissionCallback callback = found->second;
         m_permissionCallbacks.erase(found);
         if (callback.media) {
-            if (allowed) {
+            if (result == CEF_PERMISSION_RESULT_ACCEPT) {
                 callback.media->Continue(callback.requestedPermissions);
             } else {
                 callback.media->Cancel();
             }
         } else if (callback.prompt) {
-            callback.prompt->Continue(allowed ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY);
+            callback.prompt->Continue(result);
         }
     }
 
@@ -5799,7 +5799,13 @@ namespace eden::engine::cef {
 
     void CefEngineView::resolvePermissionRequest(quint64 id, bool allowed) {
         const CefRefPtr<CefEngineClient> client = d->client;
-        postToCefUi([client, id, allowed] { client->resolvePermissionRequest(id, allowed); });
+        const auto result = allowed ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY;
+        postToCefUi([client, id, result] { client->resolvePermissionRequest(id, result); });
+    }
+
+    void CefEngineView::dismissPermissionRequest(quint64 id) {
+        const CefRefPtr<CefEngineClient> client = d->client;
+        postToCefUi([client, id] { client->resolvePermissionRequest(id, CEF_PERMISSION_RESULT_DISMISS); });
     }
 
     void CefEngineView::resolveDisplayCaptureRequest(quint64 id, const QString &source) {

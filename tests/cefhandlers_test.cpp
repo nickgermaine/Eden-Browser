@@ -323,6 +323,7 @@ class CefHandlersTest final : public QObject {
     void handlerSuite();
     void navigationEvents();
     void clipboardPermissions();
+    void permissionDismissal();
     void addressAutofill();
     void browserVisibility();
     void formEvents();
@@ -978,6 +979,38 @@ void CefHandlersTest::clipboardPermissions() {
     QTest::qWait(100);
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(QGuiApplication::clipboard()->text(), QString("Copied by user"), 5000);
+}
+
+void CefHandlersTest::permissionDismissal() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    QSignalSpy requests(&view, &eden::engine::EngineView::permissionRequested);
+    view.load(QUrl(QString("http://127.0.0.1:%1/permission-dismissal").arg(server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("permission-ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(100, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(requests.size(), 1, 10000);
+    const auto first = requests.constFirst().at(0).value<eden::engine::PermissionRequestInfo>();
+    QVERIFY(first.permissions.contains("location"));
+    view.dismissPermissionRequest(first.id);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("prompt:1"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(100, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(requests.size(), 2, 10000);
+    const auto second = requests.constLast().at(0).value<eden::engine::PermissionRequestInfo>();
+    view.resolvePermissionRequest(second.id, false);
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("denied:2"), 5000);
 }
 
 void CefHandlersTest::navigationEvents() {

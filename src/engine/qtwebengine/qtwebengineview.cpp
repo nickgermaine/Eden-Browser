@@ -724,6 +724,17 @@ WebEngineView {
         }
     }
 
+    void QtWebEngineView::dismissPermissionRequest(quint64 id) {
+        const auto found = m_permissions.find(id);
+        if (found == m_permissions.end()) {
+            return;
+        }
+        const QWebEnginePermission permission = found.value().value<QWebEnginePermission>();
+        m_permissions.erase(found);
+        permission.deny();
+        permission.reset();
+    }
+
     void QtWebEngineView::syncState() {
         const QUrl nextUrl = value("url").toUrl();
         const QString nextTitle = value("title").toString();

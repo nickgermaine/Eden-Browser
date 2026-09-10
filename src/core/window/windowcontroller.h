@@ -198,6 +198,7 @@ namespace eden::core {
         Q_INVOKABLE void dismissPageContextMenu();
         Q_INVOKABLE void resolveJavaScriptDialog(bool accepted, const QString &text = {});
         Q_INVOKABLE void resolvePermissionRequest(bool allowed);
+        Q_INVOKABLE void dismissPermissionRequest();
         Q_INVOKABLE void resolveDisplayCaptureRequest(const QString &source = {});
         Q_INVOKABLE void resolveFileDialog(bool accepted, const QList<QUrl> &files = {});
         Q_INVOKABLE void acceptCredentialPrompt();
@@ -263,6 +264,7 @@ namespace eden::core {
       private:
         void connectPrivateProfile(engine::EngineProfile *profile);
         void connectEngine(engine::EngineView *view);
+        void finishPermissionRequest(bool allowed, bool persistDecision);
         void fillDefaultCredential(engine::EngineView *view);
         void requestCredentialFill(engine::EngineView *view, qint64 credentialId);
         void captureTabPreview(int index);

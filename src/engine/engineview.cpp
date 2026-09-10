@@ -101,6 +101,10 @@ namespace eden::engine {
 
     void EngineView::resolvePermissionRequest(quint64, bool) {}
 
+    void EngineView::dismissPermissionRequest(quint64 id) {
+        resolvePermissionRequest(id, false);
+    }
+
     void EngineView::resolveDisplayCaptureRequest(quint64, const QString &) {}
 
     void EngineView::resolveFileDialog(quint64, bool, const QList<QUrl> &) {}

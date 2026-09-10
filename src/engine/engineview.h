@@ -198,6 +198,7 @@ namespace eden::engine {
         Q_INVOKABLE virtual void dismissContextMenu();
         Q_INVOKABLE virtual void resolveJavaScriptDialog(quint64 id, bool accepted, const QString &text);
         Q_INVOKABLE virtual void resolvePermissionRequest(quint64 id, bool allowed);
+        Q_INVOKABLE virtual void dismissPermissionRequest(quint64 id);
         Q_INVOKABLE virtual void resolveDisplayCaptureRequest(quint64 id, const QString &source);
         Q_INVOKABLE virtual void resolveFileDialog(quint64 id, bool accepted, const QList<QUrl> &files);
         using AutofillTargetCallback = std::function<void(AutofillTarget)>;

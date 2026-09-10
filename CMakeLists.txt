@@ -745,6 +745,12 @@ target_link_libraries(eden-theme-tests PRIVATE eden-core eden-ui Qt6::Test)
 add_test(NAME eden-theme-tests COMMAND eden-theme-tests)
 set_tests_properties(eden-theme-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config")
 
+qt_add_executable(eden-window-controller-tests tests/windowcontroller_test.cpp)
+target_link_libraries(eden-window-controller-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-window-controller-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-window-controller-tests COMMAND eden-window-controller-tests)
+set_tests_properties(eden-window-controller-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config")
+
 qt_add_executable(eden-window-frame-tests tests/windowframe_test.cpp)
 target_link_libraries(eden-window-frame-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-window-frame-tests COMMAND eden-window-frame-tests)

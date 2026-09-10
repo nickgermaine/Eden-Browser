@@ -58,6 +58,7 @@ namespace eden::engine {
         void fillCredential(const AutofillTarget &target, const QString &username, const QString &password) override;
         void fillForm(const QVariantMap &fields) override;
         void resolvePermissionRequest(quint64 id, bool allowed) override;
+        void dismissPermissionRequest(quint64 id) override;
 
         Q_INVOKABLE void handleNewWindow(QObject *requestObject);
         Q_INVOKABLE void handleFullScreen(bool fullscreen);

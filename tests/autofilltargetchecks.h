@@ -43,6 +43,19 @@ document.title = 'ready:' + location.pathname;
                     if (path == "/iframe") {
                         page = "<!doctype html><title>ready:/iframe</title><iframe src=/child></iframe>"
                                "<script>onmessage=event=>document.title=event.data;</script>";
+                    } else if (path == "/permission-dismissal") {
+                        page = R"HTML(<!doctype html><title>permission-ready</title>
+<button style="position:absolute;left:20px;top:20px;width:180px;height:48px">Location</button>
+<script>
+let attempt=0;
+document.querySelector('button').onclick=()=>{
+    const current=++attempt;
+    const finish=()=>navigator.permissions.query({name:'geolocation'}).then(permission=>{
+        document.title=permission.state+':'+current;
+    });
+    navigator.geolocation.getCurrentPosition(finish,finish);
+};
+</script>)HTML";
                     } else if (path == "/form-events") {
                         page = R"HTML(<!doctype html><title>form-events</title>
 <style>input,button{position:absolute;left:10px;width:200px;height:30px;box-sizing:border-box}</style>
