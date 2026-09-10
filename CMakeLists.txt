@@ -707,6 +707,10 @@ target_link_libraries(eden-profile-core-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-profile-core-tests COMMAND eden-profile-core-tests)
 set_tests_properties(eden-profile-core-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+qt_add_executable(eden-download-manager-tests tests/downloadmanager_test.cpp)
+target_link_libraries(eden-download-manager-tests PRIVATE eden-core Qt6::Test)
+add_test(NAME eden-download-manager-tests COMMAND eden-download-manager-tests)
+
 qt_add_executable(eden-profile-registry-tests tests/profileregistry_test.cpp)
 target_link_libraries(eden-profile-registry-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-profile-registry-tests COMMAND eden-profile-registry-tests)

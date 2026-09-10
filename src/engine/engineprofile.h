@@ -22,6 +22,7 @@ namespace eden::engine {
         const QString &profileId() const;
         Backend backend() const;
         const EngineProfileParameters &parameters() const;
+        quint64 downloadIdentifier(quint32 nativeId) const;
 
         virtual QObject *nativeProfile() const = 0;
         virtual void clearData() = 0;
@@ -33,16 +34,17 @@ namespace eden::engine {
 
       signals:
         void downloadStarted(
-            int id,
+            quint64 id,
             const QString &fileName,
             const QUrl &sourceUrl,
             const QString &targetPath,
             qint64 totalBytes
         );
-        void downloadUpdated(int id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
+        void downloadUpdated(quint64 id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
 
       private:
         EngineProfileParameters m_parameters;
+        const quint64 m_downloadPrefix;
     };
 
 }

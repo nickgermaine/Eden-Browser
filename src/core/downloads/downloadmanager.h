@@ -31,13 +31,13 @@ namespace eden::core {
         QHash<int, QByteArray> roleNames() const override;
 
         void beginDownload(
-            int id,
+            quint64 id,
             const QString &fileName,
             const QUrl &sourceUrl,
             const QString &targetPath,
             qint64 totalBytes
         );
-        void updateDownload(int id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
+        void updateDownload(quint64 id, qint64 receivedBytes, qint64 totalBytes, const QString &state);
         int activeCount() const;
         Q_INVOKABLE void clearFinished();
         Q_INVOKABLE void openDownload(const QString &targetPath) const;
@@ -46,7 +46,7 @@ namespace eden::core {
       private:
         struct Download {
             qint64 persistentId = 0;
-            int runtimeId = 0;
+            quint64 runtimeId = 0;
             QString fileName;
             QUrl sourceUrl;
             QString targetPath;

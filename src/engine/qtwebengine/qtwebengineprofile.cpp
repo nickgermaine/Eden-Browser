@@ -163,7 +163,7 @@ namespace eden::engine {
             [this](QQuickWebEngineDownloadRequest *download) {
                 const QString directory = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
                 download->setDownloadDirectory(directory);
-                const int id = static_cast<int>(download->id());
+                const quint64 id = downloadIdentifier(download->id());
                 emit downloadStarted(
                     id,
                     download->suggestedFileName(),

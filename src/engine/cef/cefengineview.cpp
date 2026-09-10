@@ -2383,9 +2383,10 @@ namespace eden::engine::cef {
                 return;
             }
             if (firstUpdate) {
-                emit profile->downloadStarted(static_cast<int>(id), fileName, sourceUrl, targetPath, totalBytes);
+                emit profile
+                    ->downloadStarted(profile->downloadIdentifier(id), fileName, sourceUrl, targetPath, totalBytes);
             }
-            emit profile->downloadUpdated(static_cast<int>(id), receivedBytes, totalBytes, state);
+            emit profile->downloadUpdated(profile->downloadIdentifier(id), receivedBytes, totalBytes, state);
         }
 
         void presentFrame(CefOsrFrame frame) {

@@ -1,10 +1,23 @@
 #include "engine/engineprofile.h"
 
+#include <atomic>
+#include <limits>
+
 namespace eden::engine {
+
+    static quint64 nextDownloadPrefix() {
+        static std::atomic<quint64> next{1};
+        const quint64 prefix = next.fetch_add(1, std::memory_order_relaxed);
+        if (prefix > std::numeric_limits<quint32>::max()) {
+            qFatal("Too many engine profiles were created");
+        }
+        return prefix << 32;
+    }
 
     EngineProfile::EngineProfile(const EngineProfileParameters &parameters, QObject *parent)
         : QObject(parent),
-          m_parameters(parameters) {}
+          m_parameters(parameters),
+          m_downloadPrefix(nextDownloadPrefix()) {}
 
     EngineProfile::~EngineProfile() = default;
 
@@ -22,6 +35,10 @@ namespace eden::engine {
 
     const EngineProfileParameters &EngineProfile::parameters() const {
         return m_parameters;
+    }
+
+    quint64 EngineProfile::downloadIdentifier(quint32 nativeId) const {
+        return m_downloadPrefix | nativeId;
     }
 
     bool EngineProfile::supportsPortableCookies() const {

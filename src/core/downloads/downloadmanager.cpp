@@ -132,7 +132,7 @@ namespace eden::core {
     }
 
     void DownloadManager::beginDownload(
-        int id,
+        quint64 id,
         const QString &fileName,
         const QUrl &sourceUrl,
         const QString &targetPath,
@@ -187,7 +187,7 @@ namespace eden::core {
         endInsertRows();
     }
 
-    void DownloadManager::updateDownload(int id, qint64 receivedBytes, qint64 totalBytes, const QString &state) {
+    void DownloadManager::updateDownload(quint64 id, qint64 receivedBytes, qint64 totalBytes, const QString &state) {
         for (int row = 0; row < m_downloads.size(); ++row) {
             Download &download = m_downloads[row];
             if (download.runtimeId != id || download.state != "downloading") {
