@@ -24,8 +24,8 @@ Item {
     readonly property real renderedTabWidth: Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, fittedTabWidth))
     readonly property real renderedTabsContentWidth: pinnedTabCount * Theme.pinnedTabWidth + normalTabCount * renderedTabWidth + Math.max(0, tabCount - 1) * dropSpacing
 
-    signal systemMoveRequested()
-    signal toggleMaximizedRequested()
+    signal systemMoveRequested
+    signal toggleMaximizedRequested
 
     onRenderedTabsContentWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     onWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
@@ -57,7 +57,6 @@ Item {
             repeat: true
             onTriggered: navigator.slide(-14)
         }
-
     }
 
     ListView {
@@ -89,7 +88,6 @@ Item {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutCubic
             }
-
         }
 
         remove: Transition {
@@ -99,7 +97,6 @@ Item {
                 duration: 0
                 easing.type: Easing.OutCubic
             }
-
         }
 
         removeDisplaced: Transition {
@@ -107,7 +104,6 @@ Item {
                 properties: "x,y"
                 duration: 0
             }
-
         }
 
         move: Transition {
@@ -122,7 +118,6 @@ Item {
                 to: 1
                 duration: Theme.shortDuration
             }
-
         }
 
         displaced: Transition {
@@ -137,7 +132,6 @@ Item {
                 to: 1
                 duration: Theme.shortDuration
             }
-
         }
 
         delegate: Rectangle {
@@ -150,6 +144,7 @@ Item {
             required property bool isLoading
             required property int progress
             required property bool isPinned
+            required property var activityIndicators
             required property bool isAudible
             required property bool isMuted
             required property var engineView
@@ -161,7 +156,7 @@ Item {
             readonly property bool dragging: strip.controller.tabDragIndex === index
             property bool previewSuppressed: false
 
-            width: isPinned ? Theme.pinnedTabWidth : Math.max(Theme.tabMinimumWidth, Math.min(Theme.tabMaximumWidth, strip.fittedTabWidth))
+            width: isPinned ? Theme.pinnedTabWidth : strip.renderedTabWidth
             height: 36
             anchors.verticalCenter: parent ? parent.verticalCenter : undefined
             radius: Theme.cardRadius
@@ -171,7 +166,6 @@ Item {
             onActiveTabChanged: {
                 if (activeTab)
                     opacity = 1;
-
             }
 
             Rectangle {
@@ -185,9 +179,7 @@ Item {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -201,9 +193,7 @@ Item {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Row {
@@ -224,24 +214,44 @@ Item {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     visible: !tab.isPinned
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - tabIcon.width - 44)
+                    width: Math.max(0, parent.width - tabIcon.width - activity.width - 52)
                     text: tab.title.length > 0 ? tab.title : tab.url.toString()
                     color: Theme.surfaceText
                     font: Theme.bodyFont
                     elide: Text.ElideRight
                 }
 
+                TabActivity {
+                    id: activity
+                    anchors.verticalCenter: parent.verticalCenter
+                    indicators: tab.activityIndicators
+                    compact: tab.width < indicators.length * 20 + 104
+                    visible: !tab.isPinned && tab.width >= 108 && indicators.length > 0
+                    width: visible ? implicitWidth : 0
+                }
+
                 EdenButton {
-                    visible: !tab.isPinned && (pointer.hovered || tab.activeTab)
+                    visible: !tab.isPinned && tab.width >= 80 && (pointer.hovered || tab.activeTab)
                     anchors.verticalCenter: parent.verticalCenter
                     width: 28
                     height: 28
                     iconName: "close"
                     onClicked: strip.controller.closeTab(tab.index)
                 }
+            }
 
+            TabActivity {
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 2
+                indicators: tab.activityIndicators
+                compact: true
+                iconSize: 12
+                spacing: 1
+                visible: (tab.isPinned || tab.width < 108) && indicators.length > 0
             }
 
             HoverHandler {
@@ -250,7 +260,6 @@ Item {
                 onHoveredChanged: {
                     if (!hovered)
                         tab.previewSuppressed = false;
-
                 }
             }
 
@@ -259,7 +268,6 @@ Item {
                 onPressedChanged: {
                     if (pressed)
                         tab.previewSuppressed = true;
-
                 }
                 onTapped: (_, button) => {
                     if (button === Qt.MiddleButton)
@@ -278,7 +286,6 @@ Item {
                 onActiveChanged: {
                     if (active)
                         strip.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
-
                 }
             }
 
@@ -287,7 +294,6 @@ Item {
                 onPressedChanged: {
                     if (pressed)
                         tab.previewSuppressed = true;
-
                 }
                 onTapped: tabMenu.toggle()
             }
@@ -297,7 +303,7 @@ Item {
 
                 y: tab.height
                 onAboutToShow: actions = strip.controller.tabContextMenuActions(tab.index)
-                onTriggered: (actionId) => {
+                onTriggered: actionId => {
                     return strip.controller.executeTabContextMenuCommand(tab.index, actionId);
                 }
             }
@@ -321,9 +327,7 @@ Item {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Behavior on scale {
@@ -331,11 +335,8 @@ Item {
                     duration: Theme.shortDuration
                     easing.type: Easing.OutCubic
                 }
-
             }
-
         }
-
     }
 
     EdenButton {
@@ -356,7 +357,6 @@ Item {
             repeat: true
             onTriggered: navigator.slide(14)
         }
-
     }
 
     EdenButton {
@@ -382,31 +382,27 @@ Item {
             onActiveChanged: {
                 if (active)
                     strip.systemMoveRequested();
-
             }
         }
 
         TapHandler {
             onDoubleTapped: strip.toggleMaximizedRequested()
         }
-
     }
 
     DropArea {
         anchors.fill: parent
         keys: ["application/x-eden-tab"]
-        onEntered: (drag) => {
+        onEntered: drag => {
             return strip.controller.tabDragEntered(strip, drag.x, drag.y);
         }
-        onPositionChanged: (drag) => {
+        onPositionChanged: drag => {
             return strip.controller.tabDragMoved(strip, drag.x, drag.y);
         }
         onExited: strip.controller.tabDragLeft()
-        onDropped: (drop) => {
+        onDropped: drop => {
             if (strip.controller.tabDragDropped(strip, drop.x, drop.y))
                 drop.acceptProposedAction();
-
         }
     }
-
 }

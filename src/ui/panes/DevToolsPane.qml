@@ -17,16 +17,14 @@ Rectangle {
         attachedEngine = engineView;
         if (attachedEngine)
             attachedEngine.attachDevTools(devToolsHost);
-
     }
     Component.onDestruction: {
         if (attachedEngine)
             attachedEngine.detachDevTools(devToolsHost);
-
     }
     onEngineViewChanged: {
         if (attachedEngine === engineView)
-            return ;
+            return;
 
         if (attachedEngine)
             attachedEngine.detachDevTools(devToolsHost);
@@ -34,7 +32,6 @@ Rectangle {
         attachedEngine = engineView;
         if (attachedEngine)
             attachedEngine.attachDevTools(devToolsHost);
-
     }
 
     Item {
@@ -48,6 +45,7 @@ Rectangle {
         height: 52
 
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.right: controls.left
             anchors.verticalCenter: parent.verticalCenter
@@ -69,7 +67,6 @@ Rectangle {
                 onClicked: {
                     if (pane.engineView)
                         pane.engineView.toggleDevToolsOrientation();
-
                 }
             }
 
@@ -78,7 +75,6 @@ Rectangle {
                 onClicked: {
                     if (pane.engineView)
                         pane.engineView.toggleDevToolsSeparate();
-
                 }
             }
 
@@ -87,12 +83,9 @@ Rectangle {
                 onClicked: {
                     if (pane.engineView)
                         pane.engineView.closeDevTools();
-
                 }
             }
-
         }
-
     }
 
     Item {
@@ -107,5 +100,4 @@ Rectangle {
         focusPolicy: Qt.StrongFocus
         clip: true
     }
-
 }

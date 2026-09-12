@@ -1,4 +1,5 @@
 #include "engine/enginefactory.h"
+#include "core/profiles/enginestorage.h"
 #include "core/profiles/profilepaths.h"
 #include "engine/engineplugin.h"
 #include "engine/engineprofile.h"
@@ -120,6 +121,11 @@ namespace eden::engine {
     }
 
     bool EngineFactory::initialize(Backend backend) {
+        if (!core::EngineStorage::instance()->protects(
+                core::ProfilePaths::engineDataDirectory(core::ProfilePaths::standardRoots())
+            )) {
+            return false;
+        }
         if (!prepareApplication(backend)) {
             return false;
         }
@@ -180,6 +186,10 @@ namespace eden::engine {
 
     std::shared_ptr<EngineProfile>
     EngineFactory::create(const EngineProfileParameters &parameters, QQmlEngine *engine) {
+        if (!parameters.privateProfile && (!core::EngineStorage::instance()->protects(parameters.dataPath) ||
+                                           !core::EngineStorage::instance()->protects(parameters.cachePath))) {
+            return nullptr;
+        }
         if (!initialize(parameters.backend)) {
             return nullptr;
         }

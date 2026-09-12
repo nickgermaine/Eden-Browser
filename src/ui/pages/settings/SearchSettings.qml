@@ -22,6 +22,7 @@ Item {
             spacing: 20
 
             Text {
+                textFormat: Text.PlainText
                 text: "Search"
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
@@ -43,12 +44,14 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Search engine"
                         color: Theme.surfaceText
                         font: Theme.titleFont
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "Used by the address bar whenever the input is not a URL."
                         color: Theme.surfaceVariantText
@@ -67,6 +70,7 @@ Item {
                         border.color: Theme.focusBorder
 
                         Text {
+                            textFormat: Text.PlainText
                             anchors.left: parent.left
                             anchors.leftMargin: 16
                             anchors.right: dropdownChevron.left
@@ -104,10 +108,9 @@ Item {
                             preferredWidth: parent.width
                             maximumHeight: 380
                             actions: page.profileSettings ? page.profileSettings.searchEngineActions : []
-                            onTriggered: (actionId) => {
+                            onTriggered: actionId => {
                                 if (page.profileSettings)
                                     page.profileSettings.selectSearchEngine(actionId);
-
                             }
                         }
 
@@ -115,12 +118,11 @@ Item {
                             ColorAnimation {
                                 duration: Theme.shortDuration
                             }
-
                         }
-
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         text: "Search engine name"
                         color: Theme.surfaceVariantText
@@ -134,11 +136,11 @@ Item {
                         onEditingFinished: {
                             if (page.profileSettings)
                                 page.profileSettings.searchEngine = text;
-
                         }
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         visible: page.profileSettings ? page.profileSettings.customSearchEngine : false
                         text: "Search URL, use %1 for the query"
                         color: Theme.surfaceVariantText
@@ -152,12 +154,9 @@ Item {
                         onEditingFinished: {
                             if (page.profileSettings)
                                 page.profileSettings.searchUrl = text;
-
                         }
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -174,6 +173,7 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Suggestions"
                         color: Theme.surfaceText
                         font: Theme.titleFont
@@ -185,24 +185,19 @@ Item {
                         onClicked: {
                             if (page.profileSettings)
                                 page.profileSettings.searchSuggestions = !page.profileSettings.searchSuggestions;
-
                         }
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "Remote suggestions are available with DuckDuckGo and Google. Typed search text is sent to the selected provider after a short delay."
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }

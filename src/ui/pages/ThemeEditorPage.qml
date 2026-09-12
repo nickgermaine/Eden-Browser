@@ -8,13 +8,13 @@ Rectangle {
 
     required property var controller
     readonly property var emptyGradient: ({
-        "mode": "solid",
-        "angle": 90,
-        "startColor": "transparent",
-        "middleColor": "transparent",
-        "endColor": "transparent",
-        "middlePosition": 0.5
-    })
+            "mode": "solid",
+            "angle": 90,
+            "startColor": "transparent",
+            "middleColor": "transparent",
+            "endColor": "transparent",
+            "middlePosition": 0.5
+        })
 
     color: Theme.surface
     Component.onCompleted: Themes.beginEditing(Themes.activeThemeId)
@@ -51,6 +51,7 @@ Rectangle {
             spacing: 8
 
             Text {
+                textFormat: Text.PlainText
                 text: "Theme Designer"
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
@@ -59,13 +60,13 @@ Rectangle {
             }
 
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: "Shared values and both appearance modes live together. Every valid edit previews immediately."
                 color: Theme.surfaceVariantText
                 font: Theme.bodyFont
                 wrapMode: Text.Wrap
             }
-
         }
 
         ListView {
@@ -93,6 +94,7 @@ Rectangle {
                 color: tokenList.visibleSection === modelData.title ? Theme.surfaceContainerHighest : navigationHover.hovered ? Theme.surfaceContainerHigh : "transparent"
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.leftMargin: 14
@@ -118,9 +120,7 @@ Rectangle {
                             tokenList.positionViewAtIndex(targetIndex, ListView.Beginning);
                     }
                 }
-
             }
-
         }
 
         Column {
@@ -133,12 +133,14 @@ Rectangle {
             spacing: 5
 
             Text {
+                textFormat: Text.PlainText
                 text: Themes.editorDirty ? "Unsaved changes" : "All changes saved"
                 color: Themes.editorDirty ? Theme.primary : Theme.surfaceVariantText
                 font: Theme.labelFont
             }
 
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: "Alpha is supported by every color picker."
                 color: Theme.surfaceVariantText
@@ -146,9 +148,7 @@ Rectangle {
                 font.family: Themes.fontFamily
                 wrapMode: Text.Wrap
             }
-
         }
-
     }
 
     Item {
@@ -175,6 +175,7 @@ Rectangle {
                 spacing: 2
 
                 Text {
+                    textFormat: Text.PlainText
                     text: tokenList.visibleSection
                     color: Theme.surfaceText
                     font.family: Themes.fontFamily
@@ -183,13 +184,13 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: Themes.editorName.length > 0 ? Themes.editorName : "Untitled theme"
                     color: Theme.surfaceVariantText
                     font: Theme.bodyFont
                     elide: Text.ElideRight
                 }
-
             }
 
             Row {
@@ -221,9 +222,7 @@ Rectangle {
                     text: "Export"
                     onClicked: exportDialog.open()
                 }
-
             }
-
         }
 
         ListView {
@@ -254,6 +253,7 @@ Rectangle {
                     spacing: 14
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Overview"
                         color: Theme.surfaceText
                         font.family: Themes.fontFamily
@@ -262,6 +262,7 @@ Rectangle {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: Themes.editorTokens.sectionDescription("Overview")
                         color: Theme.surfaceVariantText
@@ -287,7 +288,7 @@ Rectangle {
                                 label: "Theme ID"
                                 detail: "Lowercase sharing identifier."
                                 value: Themes.editorId
-                                onEdited: (value) => {
+                                onEdited: value => {
                                     return Themes.editorId = value;
                                 }
                             }
@@ -297,7 +298,7 @@ Rectangle {
                                 label: "Display name"
                                 detail: "Name shown in Settings."
                                 value: Themes.editorName
-                                onEdited: (value) => {
+                                onEdited: value => {
                                     return Themes.editorName = value;
                                 }
                             }
@@ -307,16 +308,15 @@ Rectangle {
                                 label: "Author"
                                 detail: "Creator included in exports."
                                 value: Themes.editorAuthor
-                                onEdited: (value) => {
+                                onEdited: value => {
                                     return Themes.editorAuthor = value;
                                 }
                             }
-
                         }
-
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: Themes.lastError.length > 0
                         text: Themes.lastError
@@ -324,9 +324,7 @@ Rectangle {
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
 
             section.delegate: Item {
@@ -344,6 +342,7 @@ Rectangle {
                     spacing: 4
 
                     Text {
+                        textFormat: Text.PlainText
                         text: sectionHeading.parent.section
                         color: Theme.surfaceText
                         font.family: Themes.fontFamily
@@ -352,15 +351,14 @@ Rectangle {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: Themes.editorTokens.sectionDescription(sectionHeading.parent.section)
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
 
             delegate: Item {
@@ -409,19 +407,20 @@ Rectangle {
                             spacing: 4
 
                             Text {
+                                textFormat: Text.PlainText
                                 text: tokenEditor.tokenLabel
                                 color: Theme.surfaceText
                                 font: Theme.labelFont
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 text: tokenEditor.tokenDescription
                                 color: Theme.surfaceVariantText
                                 font: Theme.bodyFont
                                 wrapMode: Text.Wrap
                             }
-
                         }
 
                         Row {
@@ -466,17 +465,11 @@ Rectangle {
                                 unit: tokenEditor.tokenUnit
                                 options: tokenEditor.tokenOptions
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
 
     component IdentityField: Column {
@@ -489,12 +482,14 @@ Rectangle {
         spacing: 5
 
         Text {
+            textFormat: Text.PlainText
             text: parent.label
             color: Theme.surfaceText
             font: Theme.labelFont
         }
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: parent.detail
             color: Theme.surfaceVariantText
@@ -508,7 +503,6 @@ Rectangle {
             text: parent.value
             onTextEdited: parent.edited(text)
         }
-
     }
 
     component TokenControl: Column {
@@ -527,6 +521,7 @@ Rectangle {
         spacing: 6
 
         Text {
+            textFormat: Text.PlainText
             text: control.appearanceLabel
             color: Theme.primary
             font.pixelSize: 11
@@ -585,7 +580,6 @@ Rectangle {
                 text: control.value
                 onEditingFinished: Themes.setEditorToken(control.path, text)
             }
-
         }
 
         Row {
@@ -616,6 +610,7 @@ Rectangle {
             Text {
                 id: numericUnit
 
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 width: control.unit.length > 0 ? 24 : 0
                 visible: width > 0
@@ -623,7 +618,6 @@ Rectangle {
                 color: Theme.surfaceVariantText
                 font: Theme.bodyFont
             }
-
         }
 
         EdenTextField {
@@ -648,9 +642,7 @@ Rectangle {
                     iconName: control.value === modelData ? "check" : ""
                     onClicked: Themes.setEditorToken(control.path, modelData)
                 }
-
             }
-
         }
 
         Column {
@@ -675,7 +667,6 @@ Rectangle {
                     iconName: control.gradientValue.mode === "linear" ? "check" : ""
                     onClicked: Themes.setEditorGradientValue(control.path, "mode", "linear")
                 }
-
             }
 
             Row {
@@ -701,7 +692,6 @@ Rectangle {
                     colorValue: control.gradientValue.endColor
                     onActivated: gradientEndDialog.open()
                 }
-
             }
 
             Row {
@@ -710,6 +700,7 @@ Rectangle {
                 spacing: 7
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     width: 44
                     text: "Angle"
@@ -728,13 +719,13 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     width: 44
                     text: Math.round(Number(control.gradientValue.angle)) + "°"
                     color: Theme.surfaceText
                     font: Theme.bodyFont
                 }
-
             }
 
             Row {
@@ -743,6 +734,7 @@ Rectangle {
                 spacing: 7
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     width: 44
                     text: "Middle"
@@ -761,23 +753,21 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     width: 44
                     text: Math.round(Number(control.gradientValue.middlePosition) * 100) + "%"
                     color: Theme.surfaceText
                     font: Theme.bodyFont
                 }
-
             }
-
         }
-
     }
 
     component ColorSwatch: Rectangle {
         required property color colorValue
 
-        signal activated()
+        signal activated
 
         width: 44
         height: 42
@@ -802,7 +792,5 @@ Rectangle {
         TapHandler {
             onTapped: parent.activated()
         }
-
     }
-
 }

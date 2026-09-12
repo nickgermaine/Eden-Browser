@@ -11,7 +11,7 @@ Rectangle {
     readonly property var preview: Themes.themePreview(themeId, Theme.dark)
     readonly property real miniScale: 0.55
 
-    signal activated()
+    signal activated
 
     implicitHeight: cardColumn.implicitHeight + 24
     radius: Theme.cardRadius
@@ -106,13 +106,9 @@ Rectangle {
                                     color: miniTab.activeTab ? card.preview.surfaceText : card.preview.surfaceVariantText
                                     opacity: miniTab.activeTab ? 0.9 : 0.6
                                 }
-
                             }
-
                         }
-
                     }
-
                 }
 
                 Rectangle {
@@ -144,9 +140,7 @@ Rectangle {
                             color: card.preview.surfaceVariantText
                             opacity: 0.7
                         }
-
                     }
-
                 }
 
                 Rectangle {
@@ -199,15 +193,10 @@ Rectangle {
                                 color: card.preview.primaryText
                                 opacity: 0.9
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
 
         Row {
@@ -219,6 +208,7 @@ Rectangle {
                 spacing: 2
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: card.themeName
                     color: Theme.surfaceText
@@ -227,6 +217,7 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     visible: card.themeAuthor.length > 0
                     text: card.themeAuthor
@@ -235,7 +226,6 @@ Rectangle {
                     font.pixelSize: 11
                     elide: Text.ElideRight
                 }
-
             }
 
             Icon {
@@ -247,9 +237,7 @@ Rectangle {
                 filled: true
                 color: Theme.primary
             }
-
         }
-
     }
 
     HoverHandler {
@@ -261,5 +249,4 @@ Rectangle {
     TapHandler {
         onTapped: card.activated()
     }
-
 }

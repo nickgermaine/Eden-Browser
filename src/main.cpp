@@ -1,3 +1,4 @@
+#include "core/profiles/enginestorage.h"
 #if EDEN_ENABLE_AUTOMATION
 #include "core/automation/automationserver.h"
 #include "core/automation/performancemetrics.h"
@@ -378,5 +379,6 @@ int main(int argc, char *argv[]) {
     engine.collectGarbage();
     engine.clearComponentCache();
     eden::engine::EngineFactory::shutdown();
+    eden::core::EngineStorage::instance()->shutdown();
     return exitCode;
 }

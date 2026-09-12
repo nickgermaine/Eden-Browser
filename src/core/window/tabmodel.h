@@ -34,6 +34,8 @@ namespace eden::core {
             ProgressRole,
             PinnedRole,
             AudibleRole,
+            CaptureDescriptionRole,
+            ActivityIndicatorsRole,
             MutedRole,
             PrivateRole,
             EngineViewRole,

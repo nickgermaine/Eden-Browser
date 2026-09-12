@@ -7,39 +7,48 @@ Rectangle {
     required property var controller
     property url pageUrl
     property string currentSection: "appearance"
-    readonly property var sections: [{
-        "id": "appearance",
-        "title": "Appearance",
-        "icon": "tuning"
-    }, {
-        "id": "autofill",
-        "title": "Passwords & Auto-fill",
-        "icon": "password"
-    }, {
-        "id": "search",
-        "title": "Search",
-        "icon": "search"
-    }, {
-        "id": "privacy",
-        "title": "Privacy",
-        "icon": "lock"
-    }, {
-        "id": "engine",
-        "title": "Engine",
-        "icon": "cpu-bolt"
-    }, {
-        "id": "ai",
-        "title": "AI Providers",
-        "icon": "soundwave"
-    }, {
-        "id": "extensions",
-        "title": "Extensions",
-        "icon": "code"
-    }, {
-        "id": "about",
-        "title": "About",
-        "icon": "info-circle"
-    }]
+    readonly property var sections: [
+        {
+            "id": "appearance",
+            "title": "Appearance",
+            "icon": "tuning"
+        },
+        {
+            "id": "autofill",
+            "title": "Passwords & Auto-fill",
+            "icon": "password"
+        },
+        {
+            "id": "search",
+            "title": "Search",
+            "icon": "search"
+        },
+        {
+            "id": "privacy",
+            "title": "Privacy",
+            "icon": "lock"
+        },
+        {
+            "id": "engine",
+            "title": "Engine",
+            "icon": "cpu-bolt"
+        },
+        {
+            "id": "ai",
+            "title": "AI Providers",
+            "icon": "soundwave"
+        },
+        {
+            "id": "extensions",
+            "title": "Extensions",
+            "icon": "code"
+        },
+        {
+            "id": "about",
+            "title": "About",
+            "icon": "info-circle"
+        }
+    ]
 
     function sectionFromUrl(value) {
         const match = value.toString().match(/^eden:\/\/settings(?:\/([a-z-]+))?/);
@@ -49,7 +58,6 @@ Rectangle {
         for (const section of sections) {
             if (section.id === match[1])
                 return section.id;
-
         }
         return "appearance";
     }
@@ -84,13 +92,13 @@ Rectangle {
             spacing: 8
 
             Text {
+                textFormat: Text.PlainText
                 text: "Settings"
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
                 font.pixelSize: 22
                 font.weight: Font.DemiBold
             }
-
         }
 
         ListView {
@@ -132,12 +140,12 @@ Rectangle {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         anchors.verticalCenter: parent.verticalCenter
                         text: navigationItem.modelData.title
                         color: Theme.surfaceText
                         font: Theme.labelFont
                     }
-
                 }
 
                 HoverHandler {
@@ -147,11 +155,8 @@ Rectangle {
                 TapHandler {
                     onTapped: settingsPage.activateSection(navigationItem.modelData.id)
                 }
-
             }
-
         }
-
     }
 
     Item {
@@ -188,7 +193,6 @@ Rectangle {
                 return aboutPage;
             }
         }
-
     }
 
     Component {
@@ -197,7 +201,6 @@ Rectangle {
         AppearanceSettings {
             controller: settingsPage.controller
         }
-
     }
 
     Component {
@@ -206,7 +209,6 @@ Rectangle {
         EngineSettings {
             controller: settingsPage.controller
         }
-
     }
 
     Component {
@@ -215,7 +217,6 @@ Rectangle {
         SearchSettings {
             controller: settingsPage.controller
         }
-
     }
 
     Component {
@@ -225,7 +226,6 @@ Rectangle {
             controller: settingsPage.controller
             pageUrl: settingsPage.pageUrl
         }
-
     }
 
     Component {
@@ -235,7 +235,6 @@ Rectangle {
             controller: settingsPage.controller
             pageUrl: settingsPage.pageUrl
         }
-
     }
 
     Component {
@@ -245,7 +244,6 @@ Rectangle {
             title: "AI"
             body: "AI providers arrive at some point in time that is not before now."
         }
-
     }
 
     Component {
@@ -255,15 +253,11 @@ Rectangle {
             title: "Extensions"
             body: "Extension support arrives after the engine migration."
         }
-
     }
 
     Component {
         id: aboutPage
 
-        AboutSettings {
-        }
-
+        AboutSettings {}
     }
-
 }

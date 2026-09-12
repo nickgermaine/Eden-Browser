@@ -58,6 +58,7 @@ namespace eden::engine::cef {
         void findInPage(const QString &text, FindFlags flags) override;
         void attach(QQuickItem *viewport) override;
         void releaseFocus() override;
+        void exitFullscreen() override;
         void setMuted(bool muted) override;
         void executeContextMenuCommand(const QString &command) override;
         void dismissContextMenu() override;
@@ -68,7 +69,7 @@ namespace eden::engine::cef {
         void resolveFileDialog(quint64 id, bool accepted, const QList<QUrl> &files) override;
         void requestAutofillTarget(AutofillTargetCallback callback) override;
         void fillCredential(const AutofillTarget &target, const QString &username, const QString &password) override;
-        void fillForm(const QVariantMap &fields) override;
+        void fillForm(const AutofillTarget &target, const QVariantMap &fields) override;
         void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
 
       protected:

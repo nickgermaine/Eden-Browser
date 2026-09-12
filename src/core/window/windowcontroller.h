@@ -5,6 +5,7 @@
 #include "core/history/historystore.h"
 #include "core/profiles/profilesettings.h"
 #include "engine/enginefactory.h"
+#include "engine/engineview.h"
 
 #include <QColor>
 #include <QElapsedTimer>
@@ -13,6 +14,7 @@
 #include <QObject>
 #include <QPoint>
 #include <QPointer>
+#include <QSet>
 #include <QSize>
 #include <QTimer>
 #include <QUrl>
@@ -71,6 +73,7 @@ namespace eden::core {
                 commandPaletteVisibleChanged
         )
         Q_PROPERTY(bool contentFullscreen READ contentFullscreen NOTIFY contentFullscreenChanged)
+        Q_PROPERTY(QString fullscreenOrigin READ fullscreenOrigin NOTIFY contentFullscreenChanged)
         Q_PROPERTY(bool currentBookmarked READ currentBookmarked NOTIFY currentBookmarkedChanged)
         Q_PROPERTY(QVariantList pageContextMenuActions READ pageContextMenuActions NOTIFY pageContextMenuChanged)
         Q_PROPERTY(QPoint pageContextMenuPosition READ pageContextMenuPosition NOTIFY pageContextMenuChanged)
@@ -125,6 +128,8 @@ namespace eden::core {
         bool findVisible() const;
         bool commandPaletteVisible() const;
         bool contentFullscreen() const;
+        QString fullscreenOrigin() const;
+        Q_INVOKABLE void exitContentFullscreen();
         QVariantList pageContextMenuActions() const;
         QPoint pageContextMenuPosition() const;
         QString pageContextMenuSurface() const;
@@ -268,7 +273,7 @@ namespace eden::core {
         void fillDefaultCredential(engine::EngineView *view);
         void requestCredentialFill(engine::EngineView *view, qint64 credentialId);
         void captureTabPreview(int index);
-        void captureInternalPagePreview(int index);
+        void captureInternalPagePreview(int index, engine::EngineView::ThumbnailCallback callback);
         QVariantMap tabPreviewMetadata(int index, bool sampleMemory) const;
         QQuickItem *visibleDropArea() const;
         void updateTabDrag(const QPointF &windowPosition);
@@ -308,6 +313,8 @@ namespace eden::core {
         bool m_findVisible = false;
         bool m_commandPaletteVisible = false;
         bool m_contentFullscreen = false;
+        QPointer<engine::EngineView> m_fullscreenEngine;
+        QString m_fullscreenOrigin;
         int m_visibilityBeforeContentFullscreen = 0;
         int m_visibilityBeforeWindowFullscreen = 0;
         QVariantList m_pageContextMenuActions;
@@ -340,7 +347,8 @@ namespace eden::core {
         QElapsedTimer m_previewCaptureClock;
         QHash<quint64, qint64> m_previewCaptureTimes;
         QTimer m_previewCaptureTimer;
-        quint64 m_pendingPreviewTabId = 0;
+        QSet<quint64> m_pendingPreviewTabIds;
+        QSet<quint64> m_previewCapturesInFlight;
         QSize m_windowedSize;
         QTimer m_geometryPersistTimer;
     };

@@ -22,7 +22,6 @@ Popup {
     onClosed: {
         if (controller.javaScriptDialog.id !== undefined)
             controller.resolveJavaScriptDialog(false, "");
-
     }
 
     background: OverlaySurface {
@@ -33,6 +32,7 @@ Popup {
         spacing: 16
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: javaScriptDialog.dialog.kind === "beforeUnload" ? "Leave this page?" : javaScriptDialog.dialog.originLabel || "Page message"
             color: Theme.surfaceText
@@ -41,6 +41,7 @@ Popup {
         }
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: javaScriptDialog.dialog.message || ""
             color: Theme.surfaceVariantText
@@ -69,9 +70,6 @@ Popup {
                 text: javaScriptDialog.dialog.kind === "beforeUnload" ? "Leave" : "OK"
                 onClicked: javaScriptDialog.controller.resolveJavaScriptDialog(true, promptInput.text)
             }
-
         }
-
     }
-
 }

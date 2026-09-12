@@ -20,6 +20,7 @@ Item {
             spacing: 20
 
             Text {
+                textFormat: Text.PlainText
                 text: "Engine"
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
@@ -41,12 +42,14 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Default rendering engine"
                         color: Theme.surfaceText
                         font: Theme.titleFont
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "New tabs use this engine. Existing tabs switch now, while background tabs wait until you open them."
                         color: Theme.surfaceVariantText
@@ -63,6 +66,7 @@ Item {
                         border.color: Theme.focusBorder
 
                         Text {
+                            textFormat: Text.PlainText
                             anchors.left: parent.left
                             anchors.leftMargin: 16
                             anchors.right: engineChevron.left
@@ -99,21 +103,14 @@ Item {
                             y: parent.height + 4
                             preferredWidth: parent.width
                             actions: page.profileSettings ? page.profileSettings.engineActions : []
-                            onTriggered: (actionId) => {
+                            onTriggered: actionId => {
                                 if (page.profileSettings)
                                     page.profileSettings.selectDefaultEngine(actionId);
-
                             }
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }

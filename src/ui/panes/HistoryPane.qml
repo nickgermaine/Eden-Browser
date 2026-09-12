@@ -22,6 +22,7 @@ Rectangle {
         height: 52
 
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: "History"
@@ -42,9 +43,7 @@ Rectangle {
                 iconName: "close"
                 onClicked: pane.controller.openPane = ""
             }
-
         }
-
     }
 
     ListView {
@@ -74,15 +73,14 @@ Rectangle {
                 pane.controller.openPane = "";
             }
         }
-
     }
 
     Text {
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         visible: historyView.count === 0
         text: "No history yet"
         color: Theme.surfaceVariantText
         font: Theme.bodyFont
     }
-
 }

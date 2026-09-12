@@ -23,7 +23,11 @@ namespace eden::engine {
     }
 
     EngineView::EngineView(QObject *parent)
-        : QObject(parent) {}
+        : QObject(parent) {
+        connect(this, &EngineView::captureChanged, this, &EngineView::activityIndicatorsChanged);
+        connect(this, &EngineView::audibleChanged, this, &EngineView::activityIndicatorsChanged);
+        connect(this, &EngineView::mutedChanged, this, &EngineView::activityIndicatorsChanged);
+    }
 
     EngineView::~EngineView() = default;
 
@@ -117,9 +121,99 @@ namespace eden::engine {
 
     void EngineView::fillCredential(const AutofillTarget &, const QString &, const QString &) {}
 
-    void EngineView::fillForm(const QVariantMap &) {}
+    void EngineView::fillForm(const AutofillTarget &, const QVariantMap &) {}
+
+    bool EngineView::isCapturing() const {
+        return m_capturingVideo || m_capturingAudio || !m_captureDetails.isEmpty();
+    }
+
+    QVariantList EngineView::activityIndicators() const {
+        int activities = 0;
+        for (int value : m_captureDetails) {
+            activities |= value;
+        }
+        QVariantList indicators;
+        const auto append = [&indicators](const QString &icon, const QString &description, bool capture) {
+            indicators.append(QVariantMap{{"icon", icon}, {"description", description}, {"capture", capture}});
+        };
+        if (activities & 1) {
+            append("camera", "Camera in use", true);
+        }
+        if (activities & 2) {
+            append("microphone", "Microphone in use", true);
+        }
+        if (activities & 4) {
+            append("monitor", "Sharing your screen or an application", true);
+        }
+        if (activities & 8) {
+            append("volume", "Sharing audio", true);
+        }
+        if (m_capturingVideo && !(activities & 5)) {
+            append("camera", "Camera or screen capture in use", true);
+        }
+        if (m_capturingAudio && !(activities & 10)) {
+            append("microphone", "Microphone or shared audio in use", true);
+        }
+        if (isMuted()) {
+            append("muted", "Tab audio muted", false);
+        } else if (isAudible()) {
+            append("volume", "Playing audio", false);
+        }
+        QStringList descriptions;
+        for (const QVariant &indicator : indicators) {
+            descriptions.append(indicator.toMap().value("description").toString());
+        }
+        for (QVariant &indicator : indicators) {
+            QVariantMap value = indicator.toMap();
+            value.insert("summary", descriptions.join(QStringLiteral(". ")));
+            indicator = value;
+        }
+        return indicators;
+    }
+
+    QString EngineView::captureDescription() const {
+        QStringList descriptions;
+        for (const QVariant &indicator : activityIndicators()) {
+            const QVariantMap item = indicator.toMap();
+            if (item.value("capture").toBool()) {
+                descriptions.append(item.value("description").toString());
+            }
+        }
+        return descriptions.join(QStringLiteral(". "));
+    }
+
+    void EngineView::setMediaCapture(bool video, bool audio) {
+        if (m_capturingVideo == video && m_capturingAudio == audio) {
+            return;
+        }
+        m_capturingVideo = video;
+        m_capturingAudio = audio;
+        emit captureChanged();
+    }
+
+    void EngineView::setCaptureDetails(const QString &document, int activities) {
+        activities &= 15;
+        if (document.isEmpty() || m_captureDetails.value(document) == activities) {
+            return;
+        }
+        if (activities) {
+            m_captureDetails.insert(document, activities);
+        } else {
+            m_captureDetails.remove(document);
+        }
+        emit captureChanged();
+    }
+
+    void EngineView::clearCaptureDetails() {
+        if (!m_captureDetails.isEmpty()) {
+            m_captureDetails.clear();
+            emit captureChanged();
+        }
+    }
 
     void EngineView::releaseFocus() {}
+
+    void EngineView::exitFullscreen() {}
 
     QUrl EngineView::internalUrlFor(const QUrl &) const {
         return {};

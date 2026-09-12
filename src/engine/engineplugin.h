@@ -27,6 +27,6 @@ namespace eden::engine {
 
     using ResolveEnginePlugin = const EnginePluginApi *(*)();
 
-    inline constexpr int enginePluginAbiVersion = 5;
+    inline constexpr int enginePluginAbiVersion = 7;
 
 }

@@ -32,7 +32,7 @@ Popup {
             width: parent.width
             placeholderText: "Type a command"
             onTextEdited: palette.controller.shortcuts.query = text
-            Keys.onPressed: (event) => {
+            Keys.onPressed: event => {
                 if (event.key === Qt.Key_Down) {
                     commands.currentIndex = Math.min(commands.count - 1, commands.currentIndex + 1);
                     event.accepted = true;
@@ -69,6 +69,7 @@ Popup {
                 color: commands.currentIndex === index ? Theme.surfaceContainerHighest : hover.hovered ? Theme.surfaceContainerHigh : "transparent"
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.leftMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
@@ -78,6 +79,7 @@ Popup {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.right: parent.right
                     anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
@@ -92,7 +94,6 @@ Popup {
                     onHoveredChanged: {
                         if (hovered)
                             commands.currentIndex = command.index;
-
                     }
                 }
 
@@ -102,11 +103,7 @@ Popup {
                         palette.close();
                     }
                 }
-
             }
-
         }
-
     }
-
 }

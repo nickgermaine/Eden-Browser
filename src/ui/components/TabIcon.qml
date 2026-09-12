@@ -1,5 +1,6 @@
 import Eden.Ui
 import QtQuick
+import QtQuick.Controls
 
 Item {
     id: root
@@ -9,7 +10,7 @@ Item {
     required property bool muted
     required property bool audible
     required property string internalPage
-    readonly property bool faviconAvailable: internalPage.length === 0 && !loading && !muted && !audible && faviconImage.status === Image.Ready
+    readonly property bool faviconAvailable: internalPage.length === 0 && !loading && faviconImage.status === Image.Ready
 
     implicitWidth: Theme.iconSize
     implicitHeight: Theme.iconSize
@@ -28,9 +29,9 @@ Item {
 
     Icon {
         anchors.fill: parent
-        name: root.internalPage.length > 0 ? "settings" : root.loading ? "refresh" : root.muted ? "muted" : root.audible ? "volume" : "globe"
+        name: root.internalPage.length > 0 ? "settings" : root.loading ? "refresh" : "globe"
         spinning: root.loading
+        color: Theme.iconColor
         visible: !root.faviconAvailable
     }
-
 }

@@ -131,6 +131,12 @@ namespace eden::core {
         if (role == AudibleRole) {
             return view && view->isAudible();
         }
+        if (role == ActivityIndicatorsRole) {
+            return view ? view->activityIndicators() : QVariantList();
+        }
+        if (role == CaptureDescriptionRole) {
+            return view ? view->captureDescription() : QString();
+        }
         if (role == MutedRole) {
             return view ? view->isMuted() : tab.state.value("muted").toBool();
         }
@@ -164,6 +170,8 @@ namespace eden::core {
             {ProgressRole, "progress"},
             {PinnedRole, "isPinned"},
             {AudibleRole, "isAudible"},
+            {CaptureDescriptionRole, "captureDescription"},
+            {ActivityIndicatorsRole, "activityIndicators"},
             {MutedRole, "isMuted"},
             {PrivateRole, "isPrivate"},
             {EngineViewRole, "engineView"},
@@ -356,7 +364,15 @@ namespace eden::core {
         emit dataChanged(
             index(row),
             index(row),
-            {EngineNameRole, EngineViewRole, LoadingRole, ProgressRole, AudibleRole, MutedRole, DiscardedRole}
+            {EngineNameRole,
+             EngineViewRole,
+             LoadingRole,
+             ProgressRole,
+             AudibleRole,
+             CaptureDescriptionRole,
+             ActivityIndicatorsRole,
+             MutedRole,
+             DiscardedRole}
         );
         emit operationOccurred();
         return created;
@@ -472,6 +488,8 @@ namespace eden::core {
              LoadingRole,
              ProgressRole,
              AudibleRole,
+             CaptureDescriptionRole,
+             ActivityIndicatorsRole,
              MutedRole,
              EngineViewRole,
              InternalPageRole,
@@ -704,6 +722,12 @@ namespace eden::core {
         connect(view, &engine::EngineView::audibleChanged, this, [this, view] {
             notifyViewChanged(view, {AudibleRole});
         });
+        connect(view, &engine::EngineView::activityIndicatorsChanged, this, [this, view] {
+            notifyViewChanged(view, {ActivityIndicatorsRole});
+        });
+        connect(view, &engine::EngineView::captureChanged, this, [this, view] {
+            notifyViewChanged(view, {CaptureDescriptionRole});
+        });
         connect(view, &engine::EngineView::mutedChanged, this, [this, view] { notifyViewChanged(view, {MutedRole}); });
         connect(view, &engine::EngineView::newViewRequested, this, [this, view](engine::EngineNewViewRequest *request) {
             const int row = indexOf(view);
@@ -733,6 +757,8 @@ namespace eden::core {
              LoadingRole,
              ProgressRole,
              AudibleRole,
+             CaptureDescriptionRole,
+             ActivityIndicatorsRole,
              MutedRole,
              EngineViewRole,
              DiscardedRole}
@@ -773,6 +799,8 @@ namespace eden::core {
              LoadingRole,
              ProgressRole,
              AudibleRole,
+             CaptureDescriptionRole,
+             ActivityIndicatorsRole,
              MutedRole,
              EngineViewRole,
              DiscardedRole}

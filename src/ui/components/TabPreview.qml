@@ -10,13 +10,12 @@ Popup {
     required property Item anchorItem
     property bool anchorHovered: false
     property bool vertical: false
-    property var previewData: ({
-    })
+    property var previewData: ({})
     readonly property bool pointerInside: anchorHovered || overlayHover.hovered
 
     function reposition() {
         if (!anchorItem || !parent)
-            return ;
+            return;
 
         const target = anchorItem.mapToItem(parent, vertical ? anchorItem.width + 8 : 0, vertical ? 0 : anchorItem.height + 8);
         x = Math.max(8, Math.min(parent.width - width - 8, target.x));
@@ -36,10 +35,8 @@ Popup {
     onHeightChanged: {
         if (opened)
             reposition();
-
     }
-    onClosed: previewData = ({
-    })
+    onClosed: previewData = ({})
     onPointerInsideChanged: {
         if (pointerInside)
             closeTimer.stop();
@@ -54,7 +51,6 @@ Popup {
         onTriggered: {
             if (!preview.pointerInside)
                 preview.close();
-
         }
     }
 
@@ -68,7 +64,6 @@ Popup {
         function onTabPreviewRevisionChanged() {
             if (preview.opened)
                 preview.previewData = preview.controller.tabPreview(preview.tabIndex);
-
         }
 
         target: preview.controller
@@ -103,13 +98,13 @@ Popup {
             }
 
             Text {
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 visible: !preview.previewData.thumbnail && !preview.previewData.favicon
                 text: "No preview captured"
                 color: Theme.surfaceVariantText
                 font: Theme.bodyFont
             }
-
         }
 
         Row {
@@ -117,6 +112,7 @@ Popup {
             spacing: 8
 
             Text {
+                textFormat: Text.PlainText
                 width: parent.width - engineChip.width - parent.spacing
                 text: preview.previewData.title || preview.previewData.url || "New tab"
                 color: Theme.surfaceText
@@ -135,22 +131,28 @@ Popup {
                 Text {
                     id: engineLabel
 
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: preview.previewData.engine || ""
                     color: Theme.surfaceText
                     font: Theme.labelFont
                 }
-
             }
-
         }
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: preview.previewData.url || ""
             color: Theme.surfaceVariantText
             font: Theme.bodyFont
             elide: Text.ElideMiddle
+        }
+
+        TabActivity {
+            indicators: preview.previewData.activityIndicators || []
+            iconSize: 20
+            spacing: 10
         }
 
         Rectangle {
@@ -167,29 +169,28 @@ Popup {
                 spacing: 5
 
                 Text {
+                    textFormat: Text.PlainText
                     text: "Tab renderer  " + (preview.previewData.rendererMemory || "Unavailable")
                     color: Theme.surfaceText
                     font: Theme.labelFont
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     text: preview.previewData.rendererAttribution || "Renderer mapping unavailable"
                     color: Theme.surfaceVariantText
                     font: Theme.bodyFont
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     text: "Shared processes  Browser " + (preview.previewData.sharedBrowserMemory || "Unavailable") + "   GPU " + (preview.previewData.sharedGpuMemory || "Unavailable") + "   Network " + (preview.previewData.sharedNetworkMemory || "Unavailable")
                     color: Theme.surfaceVariantText
                     font.family: Theme.bodyFont.family
                     font.pixelSize: 11
                     elide: Text.ElideRight
                 }
-
             }
-
         }
-
     }
-
 }

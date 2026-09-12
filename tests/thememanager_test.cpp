@@ -11,6 +11,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QtQml>
@@ -62,6 +63,8 @@ class ThemeManagerTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void untrustedLabelsStayPlainText();
+    void activityIconsRenderAndExposeTooltips();
     void darkModeUsesLightIcons();
     void editorOrganizesSchemesAndSections();
     void legacyThemesMigrateToSharedBase();
@@ -80,6 +83,105 @@ class ThemeManagerTest final : public QObject {
     bool loadPage(const char *typeName);
     std::unique_ptr<QQmlEngine> m_uiEngine;
 };
+
+void ThemeManagerTest::activityIconsRenderAndExposeTooltips() {
+    QQmlEngine &engine = uiEngine();
+    QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+    QQmlComponent component(&engine);
+    component.loadFromModule("Eden.Ui", "TabActivity");
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QVariantList indicators;
+    for (const QString &icon :
+         {QString("camera"), QString("microphone"), QString("monitor"), QString("volume"), QString("muted")}) {
+        indicators.append(
+            QVariantMap{
+                {"icon", icon},
+                {"description", icon + " active"},
+                {"summary", "Camera, microphone, screen and audio active"},
+                {"capture", icon != "muted"}
+            }
+        );
+    }
+    std::unique_ptr<QObject> object(
+        component.createWithInitialProperties({{"indicators", indicators}, {"iconSize", 24}})
+    );
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto *item = qobject_cast<QQuickItem *>(object.get());
+    QVERIFY(item);
+    QQuickWindow window;
+    window.setColor(QColor("#202124"));
+    window.resize(200, 70);
+    item->setParentItem(window.contentItem());
+    item->setPosition(QPointF(20, 20));
+    window.show();
+    QTRY_COMPARE(item->implicitWidth(), 136.0);
+    QStringList accessible;
+    for (auto *child : item->childItems()) {
+        const QString name =
+            QQmlProperty(child, "Accessible.name", QQmlEngine::contextForObject(child)).read().toString();
+        if (!name.isEmpty()) {
+            accessible.append(name);
+        }
+    }
+    QCOMPARE(accessible.size(), 5);
+    QVERIFY(accessible.contains("microphone active"));
+    QTest::qWait(100);
+    const QImage rendered = window.grabWindow();
+    QVERIFY(!rendered.isNull());
+    if (window.rendererInterface()->graphicsApi() != QSGRendererInterface::Software) {
+        int visiblePixels = 0;
+        for (int y = 0; y < rendered.height(); ++y) {
+            for (int x = 0; x < rendered.width(); ++x) {
+                visiblePixels += rendered.pixelColor(x, y) != QColor("#202124");
+            }
+        }
+        QVERIFY(visiblePixels > 100);
+    }
+    QVERIFY(rendered.save("/tmp/eden-work-activity-icons.png"));
+    QVERIFY(object->setProperty("compact", true));
+    QTRY_COMPARE(item->implicitWidth(), 24.0);
+    accessible.clear();
+    for (auto *child : item->childItems()) {
+        const QString name =
+            QQmlProperty(child, "Accessible.name", QQmlEngine::contextForObject(child)).read().toString();
+        if (!name.isEmpty()) {
+            accessible.append(name);
+        }
+    }
+    QCOMPARE(accessible, QStringList{"Camera, microphone, screen and audio active"});
+    QCOMPARE(warnings.size(), 0);
+    item->setParentItem(nullptr);
+}
+
+void ThemeManagerTest::untrustedLabelsStayPlainText() {
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QSignalSpy requests(&server, &QTcpServer::newConnection);
+    QQmlEngine &engine = uiEngine();
+    QQmlComponent component(&engine);
+    component.loadFromModule("Eden.Ui", "EdenButton");
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    const QString title =
+        QString("<b>Work sign-in</b><img src=\"http://127.0.0.1:%1/marker\">").arg(server.serverPort());
+    std::unique_ptr<QObject> button(component.createWithInitialProperties({{"text", title}}));
+    QVERIFY(button);
+    auto *item = qobject_cast<QQuickItem *>(button.get());
+    QVERIFY(item);
+    QQuickWindow window;
+    window.resize(800, 100);
+    item->setParentItem(window.contentItem());
+    window.show();
+    QTest::qWait(300);
+    QCOMPARE(requests.size(), 0);
+    bool foundLabel = false;
+    for (QObject *child : button->findChildren<QObject *>()) {
+        if (child->property("text").toString() == title && child->property("textFormat").isValid()) {
+            QCOMPARE(child->property("textFormat").toInt(), 0);
+            foundLabel = true;
+        }
+    }
+    QVERIFY(foundLabel);
+}
 
 void ThemeManagerTest::currentUrlHasDedicatedNotification() {
     eden::core::WindowController controller;

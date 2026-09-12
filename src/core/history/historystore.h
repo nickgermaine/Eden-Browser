@@ -1,10 +1,13 @@
 #pragma once
 
+#include "core/profiles/profileerror.h"
+
 #include <QAbstractListModel>
 #include <QByteArray>
 #include <QUrl>
 
-struct sqlite3;
+#include <functional>
+#include <memory>
 
 namespace eden::core {
 
@@ -19,6 +22,9 @@ namespace eden::core {
 
         void initialize(const QByteArray &key);
         bool isInitialized() const;
+        void close(std::function<void()> completion);
+        bool hasPendingWrites() const;
+        ProfileError error() const;
 
         int rowCount(const QModelIndex &parent = {}) const override;
         QVariant data(const QModelIndex &index, int role) const override;
@@ -29,18 +35,27 @@ namespace eden::core {
         Q_INVOKABLE void remove(const QUrl &url);
         Q_INVOKABLE void clear();
 
+      signals:
+        void closed();
+        void changed();
+        void writesFinished();
+        void errorChanged();
+
       private:
         struct Entry {
             QString title;
             QUrl url;
-            qint64 visitedAt;
-            int visitCount;
+            qint64 visitedAt = 0;
+            qint64 visitCount = 0;
         };
 
-        void reload();
+        void setError(ProfileError error);
+
+        class Private;
+        std::unique_ptr<Private> d;
 
         QString m_databasePath;
-        sqlite3 *m_database = nullptr;
+        ProfileError m_error = ProfileError::None;
         QList<Entry> m_entries;
     };
 

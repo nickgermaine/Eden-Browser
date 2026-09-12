@@ -7,6 +7,7 @@
 #include <QUrl>
 
 #include <functional>
+#include <memory>
 
 namespace eden::engine {
 
@@ -23,6 +24,7 @@ namespace eden::engine {
         Backend backend() const;
         const EngineProfileParameters &parameters() const;
         quint64 downloadIdentifier(quint32 nativeId) const;
+        static std::shared_ptr<const QString> reserveDownloadPath(const QString &directory, const QString &fileName);
 
         virtual QObject *nativeProfile() const = 0;
         virtual void clearData() = 0;

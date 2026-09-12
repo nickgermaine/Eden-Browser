@@ -6,7 +6,9 @@
 #include "engine/cef/cefprofile.h"
 #include "engine/cef/cefruntime.h"
 #include "engine/cef/cefuibridge.h"
+#include "engine/cef/clipboardmirror.h"
 #include "engine/cef/devtoolssocketserver.h"
+#include "engine/cef/osrtexture.h"
 
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
@@ -43,6 +45,9 @@
 #include <QGuiApplication>
 #include <QHoverEvent>
 #include <QImage>
+#include <QImageReader>
+#include <QInputMethod>
+#include <QInputMethodEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -58,6 +63,7 @@
 #include <QSslCertificate>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
+#include <QTextCharFormat>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrlQuery>
@@ -76,6 +82,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -207,7 +214,7 @@ namespace eden::engine::cef {
 
     struct CefOsrFrame {
         CefOsrFrame() = default;
-        CefOsrFrame(QImage image, CefRefPtr<CefEngineClient> owner, int stagingIndex);
+        CefOsrFrame(QImage image, CefRefPtr<CefEngineClient> owner, int stagingIndex, QRegion damage = {});
         CefOsrFrame(const CefOsrFrame &) = delete;
         CefOsrFrame &operator=(const CefOsrFrame &) = delete;
         CefOsrFrame(CefOsrFrame &&other) noexcept;
@@ -218,6 +225,7 @@ namespace eden::engine::cef {
         void reset();
 
         QImage image;
+        QRegion damage;
         CefRefPtr<CefEngineClient> owner;
         int stagingIndex = -1;
     };
@@ -242,16 +250,36 @@ namespace eden::engine::cef {
         return counter.fetch_add(1, std::memory_order_relaxed);
     }
 
-    static QString &mirroredClipboardText() {
-        static QString text;
-        return text;
+    static void setMirroredClipboardText(const QString &text) {
+        ClipboardMirror::instance().setText(text);
     }
 
-    static void setMirroredClipboardText(const QString &text) {
-        mirroredClipboardText() = text;
-        if (QClipboard *clipboard = QGuiApplication::clipboard()) {
-            clipboard->setText(text);
+    static bool handleClipboardMessage(CefProcessId sourceProcess, CefRefPtr<CefProcessMessage> message) {
+        if (!message) {
+            return false;
         }
+        const bool begin = message->GetName() == "eden_clipboard_begin";
+        if (!begin && message->GetName() != "eden_clipboard_copy") {
+            return false;
+        }
+        const CefRefPtr<CefListValue> values = message->GetArgumentList();
+        if (sourceProcess != PID_RENDERER || values->GetSize() != (begin ? 1u : 2u) ||
+            values->GetType(0) != VTYPE_STRING || (!begin && values->GetType(1) != VTYPE_STRING)) {
+            return true;
+        }
+        const QString token = QString::fromStdString(values->GetString(0).ToString());
+        const QString text = begin ? QString() : QString::fromStdString(values->GetString(1).ToString());
+        CefUiBridge::runOnUiThread([begin, token, text] {
+            auto &mirror = ClipboardMirror::instance();
+            if (begin) {
+                mirror.begin(token);
+            } else if (token.isEmpty()) {
+                mirror.setText(text);
+            } else {
+                mirror.commit(token, text);
+            }
+        });
+        return true;
     }
 
     static QString contextMenuLabel(const CefString &label) {
@@ -284,7 +312,7 @@ namespace eden::engine::cef {
         if (!buffer || !validCefFrameDimensions(width, height)) {
             return {};
         }
-        QImage frame(width, height, QImage::Format_ARGB32);
+        QImage frame(width, height, QImage::Format_ARGB32_Premultiplied);
         const qsizetype rowBytes = static_cast<qsizetype>(width) * 4;
         if (frame.isNull() || frame.bytesPerLine() < rowBytes) {
             return {};
@@ -298,6 +326,15 @@ namespace eden::engine::cef {
             );
         }
         return frame;
+    }
+
+    static QRegion cefFrameDamage(const CefRenderHandler::RectList &rects, const QSize &size) {
+        QRegion damage;
+        for (const CefRect &rect : rects) {
+            damage += QRect(rect.x, rect.y, rect.width, rect.height);
+        }
+        damage = boundedTextureDamage(damage, size);
+        return damage.isEmpty() ? QRegion(QRect(QPoint(), size)) : damage;
     }
 
     static void updateCefFrame(QImage &target, const void *buffer, const QRegion &dirtyRegion) {
@@ -651,6 +688,30 @@ namespace eden::engine::cef {
 
     class CefOsrTextureNode final : public QSGSimpleTextureNode {
       public:
+        void present(QQuickWindow *window, const QImage &image, const QRegion &damage) {
+            if (window->rhi()) {
+                if (!m_persistent) {
+                    m_persistent = new OsrTexture;
+                    m_persistent->setFrame(image, damage);
+                    replaceTexture(m_persistent);
+                } else {
+                    const QSize previousSize = m_persistent->textureSize();
+                    m_persistent->setFrame(image, damage);
+                    if (previousSize != m_persistent->textureSize()) {
+                        setOwnsTexture(false);
+                        setTexture(m_persistent);
+                        setOwnsTexture(true);
+                        markDirty(QSGNode::DirtyGeometry);
+                    }
+                }
+                markDirty(QSGNode::DirtyMaterial);
+            } else {
+                m_persistent = nullptr;
+                replaceTexture(window->createTextureFromImage(image));
+            }
+        }
+
+      private:
         void replaceTexture(QSGTexture *nextTexture) {
             QSGTexture *previousTexture = texture();
             setOwnsTexture(false);
@@ -658,11 +719,14 @@ namespace eden::engine::cef {
             setOwnsTexture(true);
             delete previousTexture;
         }
+
+        OsrTexture *m_persistent = nullptr;
     };
 
     struct CefOsrPopupFrame {
         QRect bounds;
         QImage image;
+        QRegion damage;
         bool visible = false;
     };
 
@@ -677,6 +741,7 @@ namespace eden::engine::cef {
             if (!visible) {
                 m_frame.bounds = {};
                 m_frame.image = {};
+                m_frame.damage = {};
             }
             return schedule();
         }
@@ -689,12 +754,13 @@ namespace eden::engine::cef {
             }
             if (m_frame.bounds.size() != next.size()) {
                 m_frame.image = {};
+                m_frame.damage = {};
             }
             m_frame.bounds = next;
             return schedule();
         }
 
-        bool paint(const void *buffer, int width, int height) {
+        bool paint(const void *buffer, int width, int height, const QRegion &damage) {
             {
                 const std::lock_guard lock(m_mutex);
                 if (!m_frame.visible) {
@@ -705,8 +771,10 @@ namespace eden::engine::cef {
             if (image.isNull()) {
                 return false;
             }
-            image.reinterpretAsFormat(QImage::Format_ARGB32_Premultiplied);
             const std::lock_guard lock(m_mutex);
+            m_frame.damage = m_frame.image.size() == image.size()
+                                 ? boundedTextureDamage(m_frame.damage + damage, image.size())
+                                 : QRegion(image.rect());
             m_frame.image = std::move(image);
             return schedule();
         }
@@ -714,7 +782,9 @@ namespace eden::engine::cef {
         CefOsrPopupFrame take() {
             const std::lock_guard lock(m_mutex);
             m_queued = false;
-            return m_frame;
+            CefOsrPopupFrame frame = m_frame;
+            m_frame.damage = {};
+            return frame;
         }
 
       private:
@@ -742,17 +812,124 @@ namespace eden::engine::cef {
             m_eventHandler = std::move(handler);
         }
 
+        void setTextInputState(bool editable, bool password) {
+            m_editable = editable;
+            m_password = password;
+            m_composing = false;
+            m_compositionRange = CefRange::InvalidRange();
+            setFlag(ItemAcceptsInputMethod, editable);
+            if (!editable || password) {
+                m_selectedText.clear();
+            }
+            updateInputMethod(Qt::ImEnabled | Qt::ImHints | Qt::ImCursorRectangle | Qt::ImCurrentSelection);
+        }
+
+        void setTextSelection(const QString &text, const CefRange &range) {
+            const QString selection = m_password ? QString() : text;
+            if (m_selectedText == selection && m_selectionRange == range) {
+                return;
+            }
+            m_selectedText = selection;
+            m_selectionRange = range;
+            updateInputMethod(Qt::ImCurrentSelection | Qt::ImAbsolutePosition);
+        }
+
+        void setCompositionBounds(const CefRange &range, const QList<QRect> &bounds) {
+            if (range == CefRange::InvalidRange()) {
+                if (bounds.size() == 1) {
+                    m_nativeCaretSupported = true;
+                    if (m_cursorRectangle != bounds.constFirst()) {
+                        m_cursorRectangle = bounds.constFirst();
+                        updateInputMethod(Qt::ImCursorRectangle);
+                    }
+                }
+                return;
+            }
+            if (!m_composing) {
+                return;
+            }
+            m_compositionRange = range;
+            if (!m_nativeCaretSupported && !bounds.isEmpty()) {
+                const qsizetype cursor = std::clamp<qsizetype>(m_preeditCursor, 0, bounds.size());
+                QRect rectangle = bounds.at(cursor < bounds.size() ? cursor : bounds.size() - 1);
+                if (cursor == bounds.size()) {
+                    rectangle.moveLeft(rectangle.x() + rectangle.width());
+                }
+                rectangle.setWidth(1);
+                m_cursorRectangle = rectangle;
+                updateInputMethod(Qt::ImCursorRectangle);
+            }
+        }
+
+        bool editable() const {
+            return m_editable;
+        }
+
+        bool composing() const {
+            return m_composing;
+        }
+
+        void setComposing(bool composing, int cursor = 0) {
+            m_composing = composing;
+            m_preeditCursor = cursor;
+            if (!composing) {
+                m_compositionRange = CefRange::InvalidRange();
+            }
+        }
+
+        CefRange replacementRange(int start, int length) const {
+            if (start == 0 && length == 0) {
+                return CefRange::InvalidRange();
+            }
+            const CefRange range = m_composing ? m_compositionRange : m_selectionRange;
+            if (range == CefRange::InvalidRange()) {
+                return range;
+            }
+            const qint64 from = qint64(std::min(range.from, range.to)) + start;
+            const qint64 to = from + length;
+            if (from < 0 || to < from || to >= std::numeric_limits<uint32_t>::max()) {
+                return CefRange::InvalidRange();
+            }
+            return CefRange(static_cast<uint32_t>(from), static_cast<uint32_t>(to));
+        }
+
+        QVariant inputMethodQuery(Qt::InputMethodQuery query) const override {
+            switch (query) {
+            case Qt::ImEnabled:
+                return m_editable;
+            case Qt::ImHints:
+                return int(
+                    m_password ? Qt::ImhHiddenText | Qt::ImhSensitiveData | Qt::ImhNoPredictiveText : Qt::ImhNone
+                );
+            case Qt::ImCursorRectangle:
+                return m_cursorRectangle;
+            case Qt::ImCurrentSelection:
+                return m_password ? QString() : m_selectedText;
+            case Qt::ImAbsolutePosition:
+                return m_selectionRange == CefRange::InvalidRange() ? QVariant() : QVariant(m_selectionRange.to);
+            default:
+                return QQuickItem::inputMethodQuery(query);
+            }
+        }
+
         void presentFrame(CefOsrFrame frame) {
+            if (frame.image.size() == m_pendingFrame.image.size()) {
+                frame.damage = boundedTextureDamage(frame.damage + m_pendingFrame.damage, frame.image.size());
+            } else if (!m_pendingFrame.isNull()) {
+                frame.damage = frame.image.rect();
+            }
             m_pendingFrame = std::move(frame);
             update();
         }
 
-        void presentFrame(QImage frame) {
-            m_pendingFrame = CefOsrFrame(std::move(frame), nullptr, -1);
-            update();
+        void presentFrame(QImage frame, QRegion damage) {
+            presentFrame(CefOsrFrame(std::move(frame), nullptr, -1, std::move(damage)));
         }
 
         void presentPopup(CefOsrPopupFrame frame) {
+            if (m_popupChanged && frame.image.size() == m_popupFrame.image.size()) {
+                frame.damage = boundedTextureDamage(frame.damage + m_popupFrame.damage, frame.image.size());
+            }
             m_popupFrame = std::move(frame);
             m_popupChanged = true;
             update();
@@ -767,6 +944,10 @@ namespace eden::engine::cef {
         }
 
       protected:
+        void inputMethodEvent(QInputMethodEvent *event) override {
+            event->setAccepted(m_eventHandler(event));
+        }
+
         void focusInEvent(QFocusEvent *event) override {
             m_eventHandler(event);
             QQuickItem::focusInEvent(event);
@@ -790,6 +971,10 @@ namespace eden::engine::cef {
         }
 
         void mouseDoubleClickEvent(QMouseEvent *event) override {
+            event->setAccepted(m_eventHandler(event));
+        }
+
+        void hoverEnterEvent(QHoverEvent *event) override {
             event->setAccepted(m_eventHandler(event));
         }
 
@@ -818,23 +1003,23 @@ namespace eden::engine::cef {
             }
             node->setRect(boundingRect());
             if (!m_pendingFrame.isNull()) {
-                node->replaceTexture(window()->createTextureFromImage(m_pendingFrame.image));
+                node->present(window(), m_pendingFrame.image, m_pendingFrame.damage);
                 m_displayedFrame = std::move(m_pendingFrame);
             } else if (!node->texture()) {
-                node->replaceTexture(window()->createTextureFromImage(m_displayedFrame.image));
+                node->present(window(), m_displayedFrame.image, m_displayedFrame.image.rect());
             }
             auto *popup = static_cast<CefOsrTextureNode *>(node->firstChild());
             if (!m_popupFrame.visible || m_popupFrame.image.isNull() || m_popupFrame.bounds.isEmpty()) {
                 delete popup;
             } else {
+                const bool created = !popup;
                 if (!popup) {
                     popup = new CefOsrTextureNode;
                     popup->setFiltering(QSGTexture::Linear);
-                    node->appendChildNode(popup);
                     m_popupChanged = true;
                 }
                 if (m_popupChanged) {
-                    popup->replaceTexture(window()->createTextureFromImage(m_popupFrame.image));
+                    popup->present(window(), m_popupFrame.image, m_popupFrame.damage);
                 }
                 const QRectF bounds = popupBounds();
                 const QRectF visibleBounds = bounds.intersected(boundingRect());
@@ -845,12 +1030,21 @@ namespace eden::engine::cef {
                     m_popupFrame.image.width() * visibleBounds.width() / bounds.width(),
                     m_popupFrame.image.height() * visibleBounds.height() / bounds.height()
                 ));
+                if (created) {
+                    node->appendChildNode(popup);
+                }
             }
             m_popupChanged = false;
             return node;
         }
 
       private:
+        void updateInputMethod(Qt::InputMethodQueries queries) {
+            if (hasActiveFocus() && (m_editable || queries.testFlag(Qt::ImEnabled))) {
+                QGuiApplication::inputMethod()->update(queries);
+            }
+        }
+
         QRectF popupBounds() const {
             QRectF bounds(m_popupFrame.bounds);
             bounds.moveLeft(std::clamp(bounds.left(), 0.0, std::max(0.0, width() - bounds.width())));
@@ -863,6 +1057,15 @@ namespace eden::engine::cef {
         CefOsrFrame m_displayedFrame;
         CefOsrPopupFrame m_popupFrame;
         bool m_popupChanged = false;
+        bool m_editable = false;
+        bool m_password = false;
+        bool m_composing = false;
+        int m_preeditCursor = 0;
+        bool m_nativeCaretSupported = false;
+        QString m_selectedText;
+        CefRange m_selectionRange = CefRange::InvalidRange();
+        CefRange m_compositionRange = CefRange::InvalidRange();
+        QRectF m_cursorRectangle;
     };
 
     class CefDevToolsProtocolSession;
@@ -909,9 +1112,16 @@ namespace eden::engine::cef {
                     if (!payload.isEmpty()) {
                         const QByteArray encoded =
                             QJsonDocument::fromJson(payload).object().value("data").toString().toLatin1();
-                        image.loadFromData(QByteArray::fromBase64(encoded));
+                        QByteArray bytes = QByteArray::fromBase64(encoded);
+                        QBuffer buffer(&bytes);
+                        buffer.open(QIODevice::ReadOnly);
+                        QImageReader reader(&buffer);
+                        const QSize sourceSize = reader.size();
+                        if (sourceSize.isValid()) {
+                            reader.setScaledSize(sourceSize.scaled(size, Qt::KeepAspectRatioByExpanding));
+                        }
+                        image = reader.read();
                         if (!image.isNull() && image.size() != size) {
-                            image = image.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
                             if (image.width() > size.width() || image.height() > size.height()) {
                                 image = image.copy(
                                     (image.width() - size.width()) / 2,
@@ -1140,6 +1350,11 @@ namespace eden::engine::cef {
 
         void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
         void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect &rect) override;
+        void OnImeCompositionRangeChanged(
+            CefRefPtr<CefBrowser> browser,
+            const CefRange &range,
+            const RectList &bounds
+        ) override;
         void publishPopup();
         void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
         void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
@@ -1186,6 +1401,7 @@ namespace eden::engine::cef {
             const std::vector<CefString> &acceptDescriptions,
             CefRefPtr<CefFileDialogCallback> callback
         ) override;
+        void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition) override;
         void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
         bool OnProcessMessageReceived(
             CefRefPtr<CefBrowser> browser,
@@ -1230,7 +1446,7 @@ namespace eden::engine::cef {
             });
         }
 
-        void enqueueFrame(QImage frame);
+        void enqueueFrame(QImage frame, QRegion damage);
         QVariantList contextMenuActions(CefRefPtr<CefMenuModel> model);
 
         std::shared_ptr<CefViewLifetime> m_lifetime;
@@ -1247,6 +1463,7 @@ namespace eden::engine::cef {
         float m_deviceScaleFactor = 1.0F;
         std::mutex m_frameMutex;
         QImage m_pendingFrame;
+        QRegion m_pendingDamage;
         bool m_frameDeliveryQueued = false;
         CefRefPtr<CefRunContextMenuCallback> m_contextMenuCallback;
         QHash<QString, int> m_contextMenuCommands;
@@ -1327,8 +1544,18 @@ namespace eden::engine::cef {
             return this;
         }
 
+        void OnTextSelectionChanged(
+            CefRefPtr<CefBrowser> browser,
+            const CefString &selectedText,
+            const CefRange &selectedRange
+        ) override;
         void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
         void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect &rect) override;
+        void OnImeCompositionRangeChanged(
+            CefRefPtr<CefBrowser> browser,
+            const CefRange &range,
+            const RectList &bounds
+        ) override;
         void publishPopup();
         void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
         void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
@@ -1363,6 +1590,7 @@ namespace eden::engine::cef {
         ) override;
         bool GetRootWindowScreenRect(CefRefPtr<CefBrowser> browser, CefRect &rect) override;
         void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) override;
+        void OnMediaAccessChange(CefRefPtr<CefBrowser> browser, bool video, bool audio) override;
         void OnTakeFocus(CefRefPtr<CefBrowser> browser, bool next) override;
         void OnGotFocus(CefRefPtr<CefBrowser> browser) override;
         bool OnPreKeyEvent(
@@ -1506,6 +1734,12 @@ namespace eden::engine::cef {
         void popupCreated(int popupId);
         void abortPopupCreation();
         void detachPopupSource();
+        void noteUserActivity() {
+            m_lastUserActivity.store(
+                std::chrono::steady_clock::now().time_since_epoch().count(),
+                std::memory_order_relaxed
+            );
+        }
 
       private:
         friend class CefDevToolsClient;
@@ -1524,7 +1758,9 @@ namespace eden::engine::cef {
         static QStringList permissionNames(uint32_t permissions, bool media);
         static QString sanitizedDownloadName(const QString &suggestedName);
         void cancelInteractions();
+        void cancelDisplayCaptureRequests(const std::string &frameId);
         struct DownloadRecord {
+            std::shared_ptr<const QString> pathReservation;
             QString fileName;
             QUrl sourceUrl;
             QString targetPath;
@@ -1543,8 +1779,19 @@ namespace eden::engine::cef {
         void requestFaviconCandidate(CefRefPtr<CefBrowser> browser, quint64 serial);
         void publishNavigationState();
         void scheduleRendererGarbageCollection();
+        void requestGarbageCollectionSample();
+        void receiveGarbageCollectionSample(CefRefPtr<CefBrowser> browser, CefRefPtr<CefListValue> values);
 
         quint64 m_navigationGeneration = 0;
+        quint64 m_gcGeneration = 0;
+        quint64 m_gcSampleSerial = 0;
+        bool m_gcPending = false;
+        bool m_gcAwaitingSample = false;
+        bool m_gcSampleScheduled = false;
+        std::string m_gcDocument;
+        double m_gcPreviousCpu = 0;
+        double m_gcPreviousWall = 0;
+        std::atomic<std::chrono::steady_clock::rep> m_lastUserActivity = 0;
         bool m_mainDocumentLoading = false;
         bool m_mainDocumentCommitted = false;
         bool m_canGoBack = false;
@@ -1603,6 +1850,8 @@ namespace eden::engine::cef {
         struct DisplayCaptureApproval {
             QUrl origin;
             std::string frameId;
+            bool audio = false;
+            int rendererRequestId = 0;
         };
         std::map<quint64, DisplayCaptureRequest> m_displayCaptureRequests;
         std::optional<DisplayCaptureApproval> m_displayCaptureApproval;
@@ -1626,13 +1875,20 @@ namespace eden::engine::cef {
         IMPLEMENT_REFCOUNTING(CefEngineClient);
     };
 
-    CefOsrFrame::CefOsrFrame(QImage nextImage, CefRefPtr<CefEngineClient> nextOwner, int nextStagingIndex)
+    CefOsrFrame::CefOsrFrame(
+        QImage nextImage,
+        CefRefPtr<CefEngineClient> nextOwner,
+        int nextStagingIndex,
+        QRegion nextDamage
+    )
         : image(std::move(nextImage)),
+          damage(nextDamage.isEmpty() ? QRegion(image.rect()) : std::move(nextDamage)),
           owner(std::move(nextOwner)),
           stagingIndex(nextStagingIndex) {}
 
     CefOsrFrame::CefOsrFrame(CefOsrFrame &&other) noexcept
         : image(std::move(other.image)),
+          damage(std::move(other.damage)),
           owner(std::move(other.owner)),
           stagingIndex(std::exchange(other.stagingIndex, -1)) {}
 
@@ -1642,6 +1898,7 @@ namespace eden::engine::cef {
         }
         reset();
         image = std::move(other.image);
+        damage = std::move(other.damage);
         owner = std::move(other.owner);
         stagingIndex = std::exchange(other.stagingIndex, -1);
         return *this;
@@ -1656,6 +1913,7 @@ namespace eden::engine::cef {
     }
 
     void CefOsrFrame::reset() {
+        damage = {};
         if (stagingIndex < 0) {
             image = {};
             owner = nullptr;
@@ -1736,6 +1994,9 @@ namespace eden::engine::cef {
                 disconnectViewport();
                 viewport.clear();
                 syncVisibility();
+                if (hostWindow) {
+                    hostWindow->setParent(nullptr);
+                }
                 return;
             }
             if (viewport == item) {
@@ -2434,6 +2695,8 @@ namespace eden::engine::cef {
         void renderProcessTerminated(const QUrl &failedUrl, const QString &details, const QString &errorPageUrl) {
             CefUiBridge::assertOnUiThread(q);
             cancelAutofillTargets();
+            q->clearCaptureDetails();
+            q->setMediaCapture(false, false);
             updateTitle("Tab crashed");
             updateLoading(false, canGoBack, canGoForward);
             pendingUrl = failedUrl;
@@ -2547,10 +2810,10 @@ namespace eden::engine::cef {
             }
         }
 
-        void presentDevToolsFrame(QImage frame) {
+        void presentDevToolsFrame(QImage frame, QRegion damage) {
             CefUiBridge::assertOnUiThread(q);
             if (q->devToolsOpen() && devToolsOsrItem) {
-                devToolsOsrItem->presentFrame(std::move(frame));
+                devToolsOsrItem->presentFrame(std::move(frame), std::move(damage));
             }
         }
 
@@ -2657,7 +2920,7 @@ namespace eden::engine::cef {
             }
             QClipboard *clipboard = QGuiApplication::clipboard();
             const QString text = clipboard ? clipboard->text() : QString();
-            if (text.isEmpty() || text == mirroredClipboardText()) {
+            if (text.isEmpty() || text == ClipboardMirror::instance().mirroredText()) {
                 postToCefUi([currentBrowser] {
                     CefRefPtr<CefFrame> frame = currentBrowser->GetFocusedFrame();
                     if (!frame) {
@@ -2676,6 +2939,14 @@ namespace eden::engine::cef {
                 currentBrowser->GetHost()
                     ->ExecuteDevToolsMethod(nextDevToolsMessageId(), "Input.insertText", parameters);
             });
+        }
+
+        void updateCaptureDetails(const QString &frame, int activities) {
+            q->setCaptureDetails(frame, activities);
+        }
+
+        void updateMediaCapture(bool video, bool audio) {
+            q->setMediaCapture(video, audio);
         }
 
         void requestFullscreen(bool fullscreen) {
@@ -3037,6 +3308,33 @@ namespace eden::engine::cef {
             if (!targetBrowser || !targetItem) {
                 return false;
             }
+            switch (event->type()) {
+            case QEvent::KeyPress:
+            case QEvent::KeyRelease:
+            case QEvent::InputMethod:
+            case QEvent::MouseButtonPress:
+            case QEvent::MouseButtonRelease:
+            case QEvent::MouseButtonDblClick:
+            case QEvent::Wheel:
+                if (client) {
+                    client->noteUserActivity();
+                }
+                break;
+            case QEvent::MouseMove:
+            case QEvent::HoverEnter:
+            case QEvent::HoverMove: {
+                const QPointF position = static_cast<QSinglePointEvent *>(event)->globalPosition();
+                if (lastPointerPosition != position) {
+                    lastPointerPosition = position;
+                    if (client) {
+                        client->noteUserActivity();
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+            }
             CefRefPtr<CefBrowser> currentBrowser = targetBrowser;
             if (event->type() == QEvent::FocusIn) {
                 otherFocused = false;
@@ -3046,8 +3344,98 @@ namespace eden::engine::cef {
             }
             if (event->type() == QEvent::FocusOut) {
                 focused = false;
-                postToCefUi([currentBrowser] { currentBrowser->GetHost()->SetFocus(false); });
+                const bool composing = targetItem->composing();
+                targetItem->setComposing(false);
+                postToCefUi([currentBrowser, composing] {
+                    if (composing) {
+                        currentBrowser->GetHost()->ImeFinishComposingText(false);
+                    }
+                    currentBrowser->GetHost()->SetFocus(false);
+                });
                 return false;
+            }
+            if (event->type() == QEvent::InputMethod) {
+                if (!targetItem->editable()) {
+                    return false;
+                }
+                const auto *input = static_cast<QInputMethodEvent *>(event);
+                const QString committed = input->commitString();
+                const QString preedit = input->preeditString();
+                const bool wasComposing = targetItem->composing();
+                const bool replacesText = input->replacementStart() != 0 || input->replacementLength() != 0;
+                const CefRange replacement =
+                    targetItem->replacementRange(input->replacementStart(), input->replacementLength());
+                if (replacesText && replacement == CefRange::InvalidRange()) {
+                    return false;
+                }
+                const bool commitsText = !committed.isEmpty() || replacesText;
+                const int length = static_cast<int>(preedit.size());
+                int cursor = length;
+                std::vector<CefCompositionUnderline> underlines;
+                for (const QInputMethodEvent::Attribute &attribute : input->attributes()) {
+                    if (attribute.type == QInputMethodEvent::Cursor) {
+                        cursor = std::clamp(attribute.start, 0, length);
+                    } else if (attribute.type == QInputMethodEvent::TextFormat) {
+                        const QTextCharFormat format = attribute.value.value<QTextFormat>().toCharFormat();
+                        const int from = std::clamp(attribute.start, 0, length);
+                        const int to = static_cast<int>(
+                            std::clamp<qint64>(qint64(attribute.start) + attribute.length, from, length)
+                        );
+                        if (from == to) {
+                            continue;
+                        }
+                        CefCompositionUnderline underline;
+                        underline.range = CefRange(from, to);
+                        underline.color = format.foreground().color().rgba();
+                        underline.background_color =
+                            format.background().style() == Qt::NoBrush ? 0 : format.background().color().rgba();
+                        underline.thick = false;
+                        underline.style = format.fontUnderline() ? CEF_CUS_SOLID : CEF_CUS_NONE;
+                        underlines.push_back(underline);
+                    }
+                }
+                if (underlines.empty() && !preedit.isEmpty()) {
+                    CefCompositionUnderline underline;
+                    underline.range = CefRange(0, length);
+                    underline.color = qRgba(0, 0, 0, 255);
+                    underline.background_color = 0;
+                    underline.thick = false;
+                    underline.style = CEF_CUS_SOLID;
+                    underlines.push_back(underline);
+                }
+                const bool posted = postToCefUi([currentBrowser,
+                                                 committed,
+                                                 preedit,
+                                                 commitsText,
+                                                 wasComposing,
+                                                 replacement,
+                                                 cursor,
+                                                 underlines = std::move(underlines)] {
+                    CefRefPtr<CefBrowserHost> host = currentBrowser->GetHost();
+                    if (wasComposing && replacement != CefRange::InvalidRange()) {
+                        host->ImeCancelComposition();
+                    }
+                    if (commitsText) {
+                        host->ImeCommitText(committed.toStdU16String(), replacement, 0);
+                    }
+                    if (!preedit.isEmpty()) {
+                        host->ImeSetComposition(
+                            preedit.toStdU16String(),
+                            underlines,
+                            CefRange::InvalidRange(),
+                            CefRange(cursor, cursor)
+                        );
+                    } else if (wasComposing && !commitsText) {
+                        host->ImeCancelComposition();
+                    }
+                });
+                if (posted) {
+                    if (commitsText) {
+                        targetItem->setComposing(false);
+                    }
+                    targetItem->setComposing(!preedit.isEmpty(), cursor);
+                }
+                return posted;
             }
             if (event->type() == QEvent::MouseMove) {
                 auto *mouse = static_cast<QMouseEvent *>(event);
@@ -3061,7 +3449,7 @@ namespace eden::engine::cef {
                 });
                 return true;
             }
-            if (event->type() == QEvent::HoverMove) {
+            if (event->type() == QEvent::HoverEnter || event->type() == QEvent::HoverMove) {
                 auto *hover = static_cast<QHoverEvent *>(event);
                 CefMouseEvent cefEvent;
                 const QPoint position = targetItem->browserPosition(hover->position());
@@ -3142,9 +3530,13 @@ namespace eden::engine::cef {
                         !(cefEvent.modifiers & EVENTFLAG_CONTROL_DOWN) && !(cefEvent.modifiers & EVENTFLAG_ALT_DOWN)) {
                         CefKeyEvent characterEvent = cefEvent;
                         characterEvent.type = KEYEVENT_CHAR;
-                        characterEvent.windows_key_code = cefEvent.character;
-                        characterEvent.native_key_code = cefEvent.character;
-                        currentBrowser->GetHost()->SendKeyEvent(characterEvent);
+                        for (const QChar character : text) {
+                            characterEvent.character = character.unicode();
+                            characterEvent.unmodified_character = characterEvent.character;
+                            characterEvent.windows_key_code = characterEvent.character;
+                            characterEvent.native_key_code = characterEvent.character;
+                            currentBrowser->GetHost()->SendKeyEvent(characterEvent);
+                        }
                     }
                 });
                 return true;
@@ -3169,6 +3561,7 @@ namespace eden::engine::cef {
         QPointer<QWindow> hostWindow;
         QPointer<CefOsrItem> osrItem;
         QPointer<QQuickWindow> osrEventWindow;
+        std::optional<QPointF> lastPointerPosition;
         QList<QMetaObject::Connection> viewportConnections;
         QPointer<QQuickItem> devToolsViewport;
         QPointer<CefOsrItem> devToolsOsrItem;
@@ -3586,9 +3979,30 @@ namespace eden::engine::cef {
         }
     }
 
-    void
-    CefDevToolsClient::OnTextSelectionChanged(CefRefPtr<CefBrowser>, const CefString &selectedText, const CefRange &) {
+    void CefDevToolsClient::OnTextSelectionChanged(
+        CefRefPtr<CefBrowser>,
+        const CefString &selectedText,
+        const CefRange &range
+    ) {
         m_selectedText = QString::fromStdString(selectedText.ToString());
+        dispatch([text = m_selectedText, range](CefEngineView::Private &state) {
+            if (state.devToolsOsrItem) {
+                state.devToolsOsrItem->setTextSelection(text, range);
+            }
+        });
+    }
+
+    void CefEngineClient::OnTextSelectionChanged(
+        CefRefPtr<CefBrowser>,
+        const CefString &selectedText,
+        const CefRange &range
+    ) {
+        const QString text = QString::fromStdString(selectedText.ToString());
+        dispatch([text, range](CefEngineView::Private &state) {
+            if (state.osrItem) {
+                state.osrItem->setTextSelection(text, range);
+            }
+        });
     }
 
     bool CefDevToolsClient::OnBeforeDownload(
@@ -3634,18 +4048,34 @@ namespace eden::engine::cef {
 
     bool CefDevToolsClient::OnProcessMessageReceived(
         CefRefPtr<CefBrowser>,
-        CefRefPtr<CefFrame>,
-        CefProcessId,
+        CefRefPtr<CefFrame> frame,
+        CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
-        if (!message || message->GetName() != "eden_clipboard_copy") {
-            return false;
+        if (message && message->GetName() == "eden_text_input_state") {
+            if (sourceProcess == PID_RENDERER && frame && frame->IsFocused()) {
+                const CefRefPtr<CefListValue> values = message->GetArgumentList();
+                const bool editable = values->GetBool(0);
+                const bool password = values->GetBool(1);
+                dispatch([editable, password](CefEngineView::Private &state) {
+                    if (state.devToolsOsrItem) {
+                        state.devToolsOsrItem->setTextInputState(editable, password);
+                    }
+                });
+            }
+            return true;
         }
-        const QString text = QString::fromStdString(message->GetArgumentList()->GetString(0).ToString());
-        if (!text.isEmpty()) {
-            CefUiBridge::runOnUiThread([text] { setMirroredClipboardText(text); });
+        return handleClipboardMessage(sourceProcess, message);
+    }
+
+    void CefDevToolsClient::OnLoadStart(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, TransitionType) {
+        if (frame && frame->IsMain()) {
+            dispatch([](CefEngineView::Private &state) {
+                if (state.devToolsOsrItem) {
+                    state.devToolsOsrItem->setTextInputState(false, false);
+                }
+            });
         }
-        return true;
     }
 
     void CefDevToolsClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int) {
@@ -3687,6 +4117,23 @@ namespace eden::engine::cef {
         return true;
     }
 
+    void CefDevToolsClient::OnImeCompositionRangeChanged(
+        CefRefPtr<CefBrowser>,
+        const CefRange &range,
+        const RectList &bounds
+    ) {
+        QList<QRect> rectangles;
+        rectangles.reserve(static_cast<qsizetype>(bounds.size()));
+        for (const CefRect &rect : bounds) {
+            rectangles.append(QRect(rect.x, rect.y, rect.width, rect.height));
+        }
+        dispatch([range, rectangles = std::move(rectangles)](CefEngineView::Private &state) {
+            if (state.devToolsOsrItem) {
+                state.devToolsOsrItem->setCompositionBounds(range, rectangles);
+            }
+        });
+    }
+
     void CefDevToolsClient::OnPopupShow(CefRefPtr<CefBrowser>, bool show) {
         if (m_popup->setVisible(show)) {
             publishPopup();
@@ -3709,13 +4156,13 @@ namespace eden::engine::cef {
     void CefDevToolsClient::OnPaint(
         CefRefPtr<CefBrowser>,
         PaintElementType type,
-        const RectList &,
+        const RectList &dirtyRects,
         const void *buffer,
         int width,
         int height
     ) {
         if (type == PET_POPUP) {
-            if (m_popup->paint(buffer, width, height)) {
+            if (m_popup->paint(buffer, width, height, cefFrameDamage(dirtyRects, QSize(width, height)))) {
                 publishPopup();
             }
             return;
@@ -3725,13 +4172,19 @@ namespace eden::engine::cef {
         }
         QImage frame = copyCefFrame(buffer, width, height);
         if (!frame.isNull()) {
-            enqueueFrame(std::move(frame));
+            QRegion damage = cefFrameDamage(dirtyRects, frame.size());
+            enqueueFrame(std::move(frame), std::move(damage));
         }
     }
 
-    void CefDevToolsClient::enqueueFrame(QImage frame) {
+    void CefDevToolsClient::enqueueFrame(QImage frame, QRegion damage) {
         {
             const std::lock_guard lock(m_frameMutex);
+            m_pendingDamage = m_pendingFrame.isNull()
+                                  ? damage
+                                  : (m_pendingFrame.size() == frame.size()
+                                         ? boundedTextureDamage(m_pendingDamage + damage, frame.size())
+                                         : QRegion(frame.rect()));
             m_pendingFrame = std::move(frame);
             if (m_frameDeliveryQueued) {
                 return;
@@ -3741,17 +4194,20 @@ namespace eden::engine::cef {
         const CefRefPtr<CefDevToolsClient> self(this);
         if (!dispatch([self](CefEngineView::Private &state) {
                 QImage frame;
+                QRegion damage;
                 {
                     const std::lock_guard lock(self->m_frameMutex);
                     frame = std::move(self->m_pendingFrame);
+                    damage = std::exchange(self->m_pendingDamage, {});
                     self->m_frameDeliveryQueued = false;
                 }
                 if (!frame.isNull()) {
-                    state.presentDevToolsFrame(std::move(frame));
+                    state.presentDevToolsFrame(std::move(frame), std::move(damage));
                 }
             })) {
             const std::lock_guard lock(m_frameMutex);
             m_pendingFrame = {};
+            m_pendingDamage = {};
             m_frameDeliveryQueued = false;
         }
     }
@@ -4186,6 +4642,10 @@ namespace eden::engine::cef {
         return true;
     }
 
+    void CefEngineClient::OnMediaAccessChange(CefRefPtr<CefBrowser>, bool video, bool audio) {
+        dispatch([video, audio](CefEngineView::Private &state) { state.updateMediaCapture(video, audio); });
+    }
+
     void CefEngineClient::OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) {
         dispatch([fullscreen](CefEngineView::Private &state) { state.requestFullscreen(fullscreen); });
     }
@@ -4214,6 +4674,7 @@ namespace eden::engine::cef {
     CefEngineClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent &event, CefEventHandle, bool *) {
         const CefWindowHandle browserWindow = browser->GetHost()->GetWindowHandle();
         if (browserWindow) {
+            noteUserActivity();
             Display *display = cef_get_xdisplay();
             Window focusedWindow = 0;
             int revertTo = 0;
@@ -4292,6 +4753,9 @@ namespace eden::engine::cef {
         if (!loading) {
             m_mainDocumentLoading = false;
             m_mainDocumentCommitted = false;
+            if (m_gcPending && m_gcGeneration == m_navigationGeneration) {
+                requestGarbageCollectionSample();
+            }
         }
         publishNavigationState();
     }
@@ -4303,8 +4767,14 @@ namespace eden::engine::cef {
         bool,
         bool
     ) {
+        if (frame) {
+            cancelDisplayCaptureRequests(frame->IsMain() ? std::string() : frame->GetIdentifier().ToString());
+        }
         if (frame && frame->IsMain()) {
             ++m_navigationGeneration;
+            m_gcPending = false;
+            m_gcAwaitingSample = false;
+            m_gcSampleScheduled = false;
             m_mainDocumentLoading = true;
             m_mainDocumentCommitted = false;
             publishNavigationState();
@@ -4324,7 +4794,12 @@ namespace eden::engine::cef {
         m_faviconCandidates.clear();
         m_faviconCandidateIndex = 0;
         publishNavigationState();
-        dispatch([](CefEngineView::Private &state) { state.updateFavicon({}); });
+        dispatch([](CefEngineView::Private &state) {
+            if (state.osrItem) {
+                state.osrItem->setTextInputState(false, false);
+            }
+            state.updateFavicon({});
+        });
     }
 
     void CefEngineClient::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) {
@@ -4347,22 +4822,97 @@ namespace eden::engine::cef {
     }
 
     void CefEngineClient::scheduleRendererGarbageCollection() {
+        m_gcGeneration = m_navigationGeneration;
+        m_gcDocument.clear();
+        m_gcPending = true;
+        m_gcAwaitingSample = false;
+        m_gcSampleScheduled = false;
+        requestGarbageCollectionSample();
+    }
+
+    void CefEngineClient::requestGarbageCollectionSample() {
+        if (m_gcSampleScheduled || m_gcAwaitingSample) {
+            return;
+        }
+        m_gcSampleScheduled = true;
         const quint64 generation = m_navigationGeneration;
         const CefRefPtr<CefEngineClient> self(this);
-        CefPostDelayedTask(
+        const bool posted = CefPostDelayedTask(
             TID_UI,
             new CefFunctionTask([self, generation] {
-                if (self->m_navigationGeneration != generation) {
+                if (!self->m_gcPending || self->m_gcGeneration != generation ||
+                    self->m_navigationGeneration != generation || self->m_closeIssued) {
                     return;
                 }
+                self->m_gcSampleScheduled = false;
                 const CefRefPtr<CefBrowser> browser = self->browserSnapshot();
-                if (browser && !browser->IsLoading()) {
-                    browser->GetHost()
-                        ->ExecuteDevToolsMethod(nextDevToolsMessageId(), "HeapProfiler.collectGarbage", nullptr);
+                const CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
+                if (!frame || !frame->IsValid()) {
+                    self->m_gcPending = false;
+                    return;
                 }
+                if (browser->IsLoading()) {
+                    self->m_gcDocument.clear();
+                    return;
+                }
+                self->m_gcAwaitingSample = true;
+                const CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_gc_sample");
+                message->GetArgumentList()->SetString(0, std::to_string(++self->m_gcSampleSerial));
+                frame->SendProcessMessage(PID_RENDERER, message);
             }),
             1500
         );
+        if (!posted) {
+            m_gcSampleScheduled = false;
+            m_gcPending = false;
+        }
+    }
+
+    void
+    CefEngineClient::receiveGarbageCollectionSample(CefRefPtr<CefBrowser> browser, CefRefPtr<CefListValue> values) {
+        if (!m_gcPending || !m_gcAwaitingSample || m_gcGeneration != m_navigationGeneration || m_closeIssued ||
+            values->GetSize() < 1 || values->GetType(0) != VTYPE_STRING ||
+            values->GetString(0) != std::to_string(m_gcSampleSerial)) {
+            return;
+        }
+        m_gcAwaitingSample = false;
+        if (values->GetSize() != 4 || values->GetType(1) != VTYPE_STRING || values->GetType(2) != VTYPE_DOUBLE ||
+            values->GetType(3) != VTYPE_DOUBLE) {
+            m_gcPending = false;
+            return;
+        }
+        const std::string document = values->GetString(1).ToString();
+        const double cpu = values->GetDouble(2);
+        const double wall = values->GetDouble(3);
+        if (document.empty() || !std::isfinite(cpu) || !std::isfinite(wall) || cpu < 0 || wall <= 0) {
+            m_gcPending = false;
+            return;
+        }
+        const double elapsed = wall - m_gcPreviousWall;
+        const double used = cpu - m_gcPreviousCpu;
+        const auto now = std::chrono::steady_clock::now();
+        const auto lastInput = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(m_lastUserActivity.load(std::memory_order_relaxed))
+        );
+        const bool idle = m_gcDocument == document && elapsed >= 1 && elapsed <= 3 && used >= 0 &&
+                          used <= elapsed * 0.05 && now - lastInput >= std::chrono::seconds(2) && !browser->IsLoading();
+        m_gcDocument = document;
+        m_gcPreviousCpu = cpu;
+        m_gcPreviousWall = wall;
+        if (!idle) {
+            requestGarbageCollectionSample();
+            return;
+        }
+        m_gcPending = false;
+        const int messageId =
+            browser->GetHost()->ExecuteDevToolsMethod(nextDevToolsMessageId(), "HeapProfiler.collectGarbage", nullptr);
+#if EDEN_ENABLE_AUTOMATION
+        if (messageId > 0) {
+            eden::core::PerformanceMetrics::record("renderer.gc.request", browser->GetIdentifier());
+        }
+#else
+        Q_UNUSED(messageId)
+#endif
     }
 
     bool CefEngineClient::OnProcessMessageReceived(
@@ -4371,10 +4921,39 @@ namespace eden::engine::cef {
         CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
+        if (message && message->GetName() == "eden_gc_sample") {
+            if (sourceProcess == PID_RENDERER && isCurrentMainFrame(browser, frame)) {
+                receiveGarbageCollectionSample(browser, message->GetArgumentList());
+            }
+            return true;
+        }
+        if (message && message->GetName() == "eden_text_input_state") {
+            if (sourceProcess == PID_RENDERER && frame && frame->IsFocused()) {
+                const CefRefPtr<CefListValue> values = message->GetArgumentList();
+                const bool editable = values->GetBool(0);
+                const bool password = values->GetBool(1);
+                dispatch([editable, password](CefEngineView::Private &state) {
+                    if (state.osrItem) {
+                        state.osrItem->setTextInputState(editable, password);
+                    }
+                });
+            }
+            return true;
+        }
         if (!message) {
             return false;
         }
         const std::string name = message->GetName().ToString();
+        if (name == "eden_media_activity") {
+            if (sourceProcess == PID_RENDERER && frame && frame->IsValid()) {
+                const QString frameId = QString::fromStdString(frame->GetIdentifier().ToString());
+                const int activities = message->GetArgumentList()->GetInt(0) & 15;
+                dispatch([frameId, activities](CefEngineView::Private &state) {
+                    state.updateCaptureDetails(frameId, activities);
+                });
+            }
+            return true;
+        }
         if (name == "eden_autofill_target") {
             if (sourceProcess != PID_RENDERER) {
                 return true;
@@ -4412,11 +4991,7 @@ namespace eden::engine::cef {
             }
             return true;
         }
-        if (name == "eden_clipboard_copy") {
-            const QString text = QString::fromStdString(message->GetArgumentList()->GetString(0).ToString());
-            if (!text.isEmpty()) {
-                CefUiBridge::runOnUiThread([text] { setMirroredClipboardText(text); });
-            }
+        if (handleClipboardMessage(sourceProcess, message)) {
             return true;
         }
         if (name == "eden_credential_submit" && frame) {
@@ -4449,6 +5024,14 @@ namespace eden::engine::cef {
             dispatch([origin, type, fieldName, autocomplete, value, rect](CefEngineView::Private &state) {
                 state.formFieldFocused(origin, type, fieldName, autocomplete, value, rect);
             });
+            return true;
+        }
+        if (name == "eden_display_capture_finished" && frame) {
+            if (m_displayCaptureApproval &&
+                m_displayCaptureApproval->rendererRequestId == message->GetArgumentList()->GetInt(0) &&
+                m_displayCaptureApproval->frameId == frame->GetIdentifier().ToString()) {
+                m_displayCaptureApproval.reset();
+            }
             return true;
         }
         if (name == "eden_display_capture_request" && frame) {
@@ -4499,20 +5082,36 @@ namespace eden::engine::cef {
             return;
         }
         const std::string frameId = frame->GetIdentifier().ToString();
+        cancelDisplayCaptureRequests(frameId);
+        dispatch([frameId](CefEngineView::Private &state) {
+            state.updateCaptureDetails(QString::fromStdString(frameId), 0);
+        });
+        const std::lock_guard lock(m_framePidMutex);
+        m_framePids.erase(frameId);
+    }
+
+    void CefEngineClient::cancelDisplayCaptureRequests(const std::string &frameId) {
         for (auto iterator = m_displayCaptureRequests.begin(); iterator != m_displayCaptureRequests.end();) {
-            if (iterator->second.frame && iterator->second.frame->GetIdentifier().ToString() == frameId) {
+            if (frameId.empty() ||
+                (iterator->second.frame && iterator->second.frame->GetIdentifier().ToString() == frameId)) {
                 const quint64 id = iterator->first;
+                const DisplayCaptureRequest request = iterator->second;
                 iterator = m_displayCaptureRequests.erase(iterator);
+                if (request.frame && request.frame->IsValid()) {
+                    const CefRefPtr<CefProcessMessage> response =
+                        CefProcessMessage::Create("eden_display_capture_response");
+                    response->GetArgumentList()->SetInt(0, request.rendererRequestId);
+                    response->GetArgumentList()->SetString(1, {});
+                    request.frame->SendProcessMessage(PID_RENDERER, response);
+                }
                 dispatch([id](CefEngineView::Private &state) { state.closeDisplayCaptureRequest(id); });
             } else {
                 ++iterator;
             }
         }
-        if (m_displayCaptureApproval && m_displayCaptureApproval->frameId == frameId) {
+        if (m_displayCaptureApproval && (frameId.empty() || m_displayCaptureApproval->frameId == frameId)) {
             m_displayCaptureApproval.reset();
         }
-        const std::lock_guard lock(m_framePidMutex);
-        m_framePids.erase(frameId);
     }
 
     void CefEngineClient::OnLoadError(
@@ -4701,12 +5300,22 @@ namespace eden::engine::cef {
         origin.setFragment({});
         const uint32_t devicePermissions =
             CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE | CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE;
-        const bool displayCapture = (requestedPermissions & CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE) != 0;
-        if (m_displayCaptureApproval && frame && displayCapture && (requestedPermissions & devicePermissions) == 0 &&
-            m_displayCaptureApproval->origin == origin &&
-            m_displayCaptureApproval->frameId == frame->GetIdentifier().ToString()) {
+        const uint32_t desktopPermissions =
+            CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE | CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE;
+        if ((requestedPermissions & desktopPermissions) != 0) {
+            const bool approved = m_displayCaptureApproval && frame &&
+                                  (requestedPermissions & CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE) != 0 &&
+                                  (requestedPermissions & devicePermissions) == 0 &&
+                                  ((requestedPermissions & CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE) == 0 ||
+                                   m_displayCaptureApproval->audio) &&
+                                  m_displayCaptureApproval->origin == origin &&
+                                  m_displayCaptureApproval->frameId == frame->GetIdentifier().ToString();
             m_displayCaptureApproval.reset();
-            callback->Continue(requestedPermissions);
+            if (approved) {
+                callback->Continue(requestedPermissions);
+            } else {
+                callback->Cancel();
+            }
             return true;
         }
         const quint64 id = m_nextInteractionId++;
@@ -4856,6 +5465,23 @@ namespace eden::engine::cef {
         return true;
     }
 
+    void CefEngineClient::OnImeCompositionRangeChanged(
+        CefRefPtr<CefBrowser>,
+        const CefRange &range,
+        const RectList &bounds
+    ) {
+        QList<QRect> rectangles;
+        rectangles.reserve(static_cast<qsizetype>(bounds.size()));
+        for (const CefRect &rect : bounds) {
+            rectangles.append(QRect(rect.x, rect.y, rect.width, rect.height));
+        }
+        dispatch([range, rectangles = std::move(rectangles)](CefEngineView::Private &state) {
+            if (state.osrItem) {
+                state.osrItem->setCompositionBounds(range, rectangles);
+            }
+        });
+    }
+
     void CefEngineClient::OnPopupShow(CefRefPtr<CefBrowser>, bool show) {
         if (m_popup->setVisible(show)) {
             publishPopup();
@@ -4884,7 +5510,7 @@ namespace eden::engine::cef {
         int height
     ) {
         if (type == PET_POPUP) {
-            if (m_popup->paint(buffer, width, height)) {
+            if (m_popup->paint(buffer, width, height, cefFrameDamage(dirtyRects, QSize(width, height)))) {
                 publishPopup();
             }
             return;
@@ -4915,9 +5541,12 @@ namespace eden::engine::cef {
         const QSize frameSize(width, height);
         const QRect frameBounds(QPoint(), frameSize);
         CefOsrFrame supersededFrame;
+        QRegion supersededDamage;
+        QRegion gpuDamage;
         {
             const std::lock_guard lock(m_frameMutex);
             if (m_pendingFrame.owner) {
+                supersededDamage = m_pendingFrame.damage;
                 supersededFrame = std::move(m_pendingFrame);
             }
         }
@@ -4933,7 +5562,9 @@ namespace eden::engine::cef {
             if (incomingDirtyRegion.isEmpty()) {
                 incomingDirtyRegion = frameBounds;
             }
+            gpuDamage = boundedTextureDamage(incomingDirtyRegion + supersededDamage, frameSize);
             if (m_stagingFrameSize != frameSize) {
+                gpuDamage = frameBounds;
                 for (QRegion &region : m_stagingDirtyRegions) {
                     region = frameBounds;
                 }
@@ -4952,12 +5583,12 @@ namespace eden::engine::cef {
             }
             if (stagingIndex < 0) {
                 lock.unlock();
-                enqueueCopiedFrame(buffer, frameSize, incomingDirtyRegion);
+                enqueueCopiedFrame(buffer, frameSize, gpuDamage);
                 return;
             }
             QImage &target = m_stagingFrames[stagingIndex];
             if (target.size() != frameSize) {
-                target = QImage(frameSize, QImage::Format_ARGB32);
+                target = QImage(frameSize, QImage::Format_ARGB32_Premultiplied);
                 m_stagingDirtyRegions[stagingIndex] = frameBounds;
             }
             if (target.isNull()) {
@@ -4973,13 +5604,16 @@ namespace eden::engine::cef {
 #if EDEN_ENABLE_AUTOMATION
         eden::core::PerformanceMetrics::markReady("scroll.input_to_frame_ms");
 #endif
-        enqueueFrame(CefOsrFrame(std::move(stagedFrame), this, stagingIndex));
+        enqueueFrame(CefOsrFrame(std::move(stagedFrame), this, stagingIndex, std::move(gpuDamage)));
     }
 
     void CefEngineClient::enqueueFrame(CefOsrFrame frame) {
         CefOsrFrame replacedFrame;
         {
             const std::lock_guard lock(m_frameMutex);
+            if (frame.image.size() == m_pendingFrame.image.size()) {
+                frame.damage = boundedTextureDamage(frame.damage + m_pendingFrame.damage, frame.image.size());
+            }
             replacedFrame = std::move(m_pendingFrame);
             m_pendingFrame = std::move(frame);
             if (m_frameDeliveryQueued) {
@@ -5000,10 +5634,14 @@ namespace eden::engine::cef {
                 if (image.isNull()) {
                     return;
                 }
+                const QRegion damage = m_pendingFrame.image.size() == size
+                                           ? boundedTextureDamage(m_pendingFrame.damage + dirtyRegion, size)
+                                           : dirtyRegion;
                 replacedFrame = std::move(m_pendingFrame);
-                m_pendingFrame = CefOsrFrame(std::move(image), nullptr, -1);
+                m_pendingFrame = CefOsrFrame(std::move(image), nullptr, -1, damage);
             } else {
                 updateCefFrame(m_pendingFrame.image, buffer, dirtyRegion);
+                m_pendingFrame.damage = boundedTextureDamage(m_pendingFrame.damage + dirtyRegion, size);
             }
             queueDelivery = !m_frameDeliveryQueued;
             m_frameDeliveryQueued = true;
@@ -5354,31 +5992,9 @@ namespace eden::engine::cef {
                                           ? QString::fromStdString(downloadItem->GetSuggestedFileName().ToString())
                                           : suggestedName;
             download.fileName = sanitizedDownloadName(candidate);
-            const QFileInfo nameInfo(download.fileName);
-            const QString suffix = nameInfo.suffix();
-            const QString baseName =
-                nameInfo.completeBaseName().isEmpty() ? QString("download") : nameInfo.completeBaseName();
-            QString uniqueName = download.fileName;
-            int sequence = 0;
-            const auto targetReserved = [this, id](const QString &path) {
-                if (QFileInfo::exists(path)) {
-                    return true;
-                }
-                for (const auto &[otherId, otherDownload] : m_downloads) {
-                    if (otherId != id && otherDownload.targetPath == path) {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            do {
-                if (sequence > 0) {
-                    uniqueName = suffix.isEmpty() ? QString("%1 (%2)").arg(baseName).arg(sequence)
-                                                  : QString("%1 (%2).%3").arg(baseName).arg(sequence).arg(suffix);
-                }
-                download.targetPath = QDir(m_downloadDirectory).filePath(uniqueName);
-                ++sequence;
-            } while (targetReserved(download.targetPath));
+            download.pathReservation = EngineProfile::reserveDownloadPath(m_downloadDirectory, download.fileName);
+            download.targetPath = *download.pathReservation;
+            download.fileName = QFileInfo(download.targetPath).fileName();
         }
         download.sourceUrl = QUrl(QString::fromStdString(downloadItem->GetURL().ToString()));
         download.totalBytes = downloadItem->GetTotalBytes();
@@ -5462,10 +6078,17 @@ namespace eden::engine::cef {
         }
         DisplayCaptureRequest request = found->second;
         m_displayCaptureRequests.erase(found);
-        const bool accepted = source == "window" || source == "screen";
-        if (accepted && request.frame) {
-            m_displayCaptureApproval =
-                DisplayCaptureApproval{request.origin, request.frame->GetIdentifier().ToString()};
+        const bool accepted = (source == "window" || source == "screen") && request.frame && request.frame->IsValid() &&
+                              autofillOrigin(QUrl(QString::fromStdString(request.frame->GetURL().ToString()))) ==
+                                  autofillOrigin(request.origin);
+        m_displayCaptureApproval.reset();
+        if (accepted) {
+            m_displayCaptureApproval = DisplayCaptureApproval{
+                request.origin,
+                request.frame->GetIdentifier().ToString(),
+                request.audioRequested && source == "screen",
+                request.rendererRequestId
+            };
         }
         if (!request.frame) {
             m_displayCaptureApproval.reset();
@@ -5886,8 +6509,8 @@ namespace eden::engine::cef {
         });
     }
 
-    void CefEngineView::fillForm(const QVariantMap &fields) {
-        if (!d->browser || fields.isEmpty()) {
+    void CefEngineView::fillForm(const AutofillTarget &target, const QVariantMap &fields) {
+        if (!d->browser || !target.isValid() || fields.isEmpty()) {
             return;
         }
         const QByteArray values = QJsonDocument(QJsonObject::fromVariantMap(fields)).toJson(QJsonDocument::Compact);
@@ -5910,7 +6533,27 @@ namespace eden::engine::cef {
                 "candidate.indexOf(name)>=0;});});});set(field,values[key]);});})(%1)"
             )
                 .arg(QString::fromUtf8(values));
-        d->browser->GetMainFrame()->ExecuteJavaScript(script.toStdString(), d->url.toString().toStdString(), 0);
+        const CefRefPtr<CefBrowser> browser = d->browser;
+        postToCefUi([browser, target, script] {
+            const CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+            if (!frame || !frame->IsValid() ||
+                autofillOrigin(QUrl(QString::fromStdString(frame->GetURL().ToString()))) != target.origin) {
+                return;
+            }
+            const CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_fill_form");
+            const CefRefPtr<CefListValue> values = message->GetArgumentList();
+            values->SetString(0, target.documentId.toStdString());
+            values->SetString(1, target.origin.toString(QUrl::FullyEncoded).toStdString());
+            values->SetString(2, script.toStdString());
+            frame->SendProcessMessage(PID_RENDERER, message);
+        });
+    }
+
+    void CefEngineView::exitFullscreen() {
+        if (d->browser) {
+            const CefRefPtr<CefBrowser> browser = d->browser;
+            postToCefUi([browser] { browser->GetHost()->ExitFullscreen(true); });
+        }
     }
 
     void CefEngineView::openDevTools() {

@@ -23,7 +23,6 @@ Popup {
     onClosed: {
         if (controller.permissionRequest.id !== undefined)
             controller.dismissPermissionRequest();
-
     }
 
     background: OverlaySurface {
@@ -34,6 +33,7 @@ Popup {
         spacing: 14
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: permissionPrompt.request.originLabel ? permissionPrompt.request.originLabel + " wants permission" : "Permission request"
             color: Theme.surfaceText
@@ -42,6 +42,7 @@ Popup {
         }
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: permissionPrompt.request.permissions ? "Allow access to " + permissionPrompt.request.permissions.join(", ") + "?" : ""
             color: Theme.surfaceVariantText
@@ -62,9 +63,6 @@ Popup {
                 text: "Allow"
                 onClicked: permissionPrompt.controller.resolvePermissionRequest(true)
             }
-
         }
-
     }
-
 }

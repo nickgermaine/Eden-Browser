@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(eden-browser VERSION 0.3.6 LANGUAGES C CXX)
+project(eden-browser VERSION 0.3.7 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,17 +31,22 @@ if(EDEN_SOLAR_ICONS)
 endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 QuickEffects QuickShapes Sql Test)
+if(EDEN_ENGINE_CEF AND NOT TARGET Qt6::GuiPrivate)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS GuiPrivate)
+endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
 pkg_check_modules(SQLCIPHER REQUIRED IMPORTED_TARGET sqlcipher)
 pkg_check_modules(GLIB2 REQUIRED IMPORTED_TARGET glib-2.0)
+pkg_check_modules(PSL REQUIRED IMPORTED_TARGET libpsl)
 
 if(EDEN_ENGINE_QTWEBENGINE)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS WebEngineCore WebEngineQuick)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS WebEngineCore WebEngineQuick WebChannel)
 endif()
 
 qt_standard_project_setup(REQUIRES 6.8)
+include(cmake/EdenEncryptedStorage.cmake)
 
 set(EDEN_CORE_SOURCES
     src/core/bookmarks/bookmarkstore.cpp
@@ -52,8 +57,12 @@ set(EDEN_CORE_SOURCES
     src/core/history/historystore.h
     src/core/omni/omniboxcontroller.cpp
     src/core/omni/omniboxcontroller.h
+    src/core/omni/omniboxinput.cpp
+    src/core/omni/omniboxinput.h
     src/core/permissions/permissionstore.cpp
     src/core/permissions/permissionstore.h
+    src/core/profiles/enginestorage.cpp
+    src/core/profiles/enginestorage.h
     src/core/profiles/applicationcontext.cpp
     src/core/profiles/applicationcontext.h
     src/core/profiles/avatarimageprovider.cpp
@@ -164,6 +173,7 @@ target_link_libraries(eden-core PUBLIC
     PkgConfig::LIBSECRET
     PkgConfig::SODIUM
     PkgConfig::SQLCIPHER
+    PkgConfig::PSL
 )
 
 if(EDEN_ENGINE_QTWEBENGINE)
@@ -176,7 +186,7 @@ if(EDEN_ENGINE_QTWEBENGINE)
     )
     set_target_properties(eden-engine-qtwebengine PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-qtwebengine")
     target_include_directories(eden-engine-qtwebengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(eden-engine-qtwebengine PRIVATE eden-core Qt6::WebEngineCore Qt6::WebEngineQuick)
+    target_link_libraries(eden-engine-qtwebengine PRIVATE eden-core Qt6::WebEngineCore Qt6::WebEngineQuick Qt6::WebChannel)
 endif()
 
 if(EDEN_ENGINE_CEF)
@@ -204,6 +214,10 @@ if(EDEN_ENGINE_CEF)
         src/engine/cef/cefprofile.h
         src/engine/cef/cefruntime.cpp
         src/engine/cef/cefruntime.h
+        src/engine/cef/osrtexture.cpp
+        src/engine/cef/osrtexture.h
+        src/engine/cef/clipboardmirror.cpp
+        src/engine/cef/clipboardmirror.h
         src/engine/cef/cefuibridge.cpp
         src/engine/cef/cefuibridge.h
         src/engine/cef/devtoolssocketserver.cpp
@@ -211,7 +225,7 @@ if(EDEN_ENGINE_CEF)
     )
     set_target_properties(eden-engine-cef PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-cef" BUILD_RPATH "$ORIGIN")
     target_include_directories(eden-engine-cef PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CEF_INCLUDE_PATH})
-    target_link_libraries(eden-engine-cef PRIVATE eden-core eden-cef-process Qt6::WebSockets X11::X11)
+    target_link_libraries(eden-engine-cef PRIVATE eden-core eden-cef-process Qt6::WebSockets Qt6::GuiPrivate X11::X11)
 endif()
 
 set_source_files_properties(src/ui/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -238,6 +252,7 @@ qt_add_qml_module(eden-ui
         src/ui/components/ProfileAvatar.qml
         src/ui/components/ProfileMenu.qml
         src/ui/components/SecurityPopover.qml
+        src/ui/components/TabActivity.qml
         src/ui/components/TabIcon.qml
         src/ui/components/TabPreview.qml
         src/ui/components/TabSidebar.qml
@@ -411,6 +426,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/monitor-bold.svg
         resources/icons/solar/monitor-broken.svg
         resources/icons/solar/monitor-line-duotone.svg
+        resources/icons/solar/microphone-linear.svg
+        resources/icons/solar/microphone-bold.svg
+        resources/icons/solar/microphone-bold-duotone.svg
+        resources/icons/solar/microphone-broken.svg
+        resources/icons/solar/microphone-line-duotone.svg
+        resources/icons/solar/microphone-outline.svg
         resources/icons/solar/monitor-linear.svg
         resources/icons/solar/monitor-outline.svg
         resources/icons/solar/muted-bold-duotone.svg
@@ -675,6 +696,7 @@ if(EDEN_ENGINE_CEF)
     add_dependencies(eden-browser eden-helper)
     add_dependencies(eden-browser eden-engine-cef)
     SET_EXECUTABLE_TARGET_PROPERTIES(eden-browser)
+    target_compile_options(eden-browser PRIVATE -fexceptions -frtti -fthreadsafe-statics)
     set_target_properties(eden-browser PROPERTIES BUILD_RPATH "$ORIGIN")
     eden_stage_cef_runtime(eden-browser)
 endif()
@@ -711,6 +733,15 @@ qt_add_executable(eden-download-manager-tests tests/downloadmanager_test.cpp)
 target_link_libraries(eden-download-manager-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-download-manager-tests COMMAND eden-download-manager-tests)
 
+qt_add_executable(eden-engine-storage-tests tests/enginestorage_test.cpp)
+target_link_libraries(eden-engine-storage-tests PRIVATE eden-core Qt6::Test)
+add_test(NAME eden-engine-storage COMMAND eden-engine-storage-tests)
+
+qt_add_executable(eden-credential-vault-tests tests/credentialvault_test.cpp)
+target_link_libraries(eden-credential-vault-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-credential-vault-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-credential-vault-tests COMMAND eden-credential-vault-tests)
+
 qt_add_executable(eden-profile-registry-tests tests/profileregistry_test.cpp)
 target_link_libraries(eden-profile-registry-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-profile-registry-tests COMMAND eden-profile-registry-tests)
@@ -723,8 +754,29 @@ set_tests_properties(eden-permission-store-tests PROPERTIES ENVIRONMENT "QT_QPA_
 
 qt_add_executable(eden-profile-context-tests tests/profilecontext_test.cpp)
 target_link_libraries(eden-profile-context-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-profile-context-tests PRIVATE -Wl,--export-dynamic)
 add_test(NAME eden-profile-context-tests COMMAND eden-profile-context-tests)
 set_tests_properties(eden-profile-context-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(eden-history-store-tests tests/historystore_test.cpp)
+target_link_libraries(eden-history-store-tests PRIVATE eden-core Qt6::Test)
+add_test(NAME eden-history-store-tests COMMAND eden-history-store-tests)
+
+qt_add_executable(eden-profile-settings-tests tests/profilesettings_test.cpp)
+target_link_libraries(eden-profile-settings-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-profile-settings-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-profile-settings-tests COMMAND eden-profile-settings-tests)
+
+qt_add_executable(eden-session-store-tests tests/sessionstore_test.cpp)
+target_link_libraries(eden-session-store-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-session-store-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-session-store-tests COMMAND eden-session-store-tests)
+
+qt_add_executable(eden-profile-activation-tests tests/profileactivation_test.cpp)
+target_link_libraries(eden-profile-activation-tests PRIVATE eden-core eden-ui Qt6::Test)
+target_link_options(eden-profile-activation-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-profile-activation-tests COMMAND eden-profile-activation-tests)
+set_tests_properties(eden-profile-activation-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config")
 
 qt_add_executable(eden-password-hasher-tests tests/passwordhasher_test.cpp)
 target_link_libraries(eden-password-hasher-tests PRIVATE eden-core Qt6::Test)
@@ -766,7 +818,7 @@ target_link_libraries(eden-wayland-glib-event-dispatcher-tests PRIVATE Qt6::Core
 add_test(NAME eden-wayland-glib-event-dispatcher-tests COMMAND eden-wayland-glib-event-dispatcher-tests)
 
 qt_add_executable(eden-omnibox-tests tests/omniboxcontroller_test.cpp)
-target_link_libraries(eden-omnibox-tests PRIVATE eden-core Qt6::Test)
+target_link_libraries(eden-omnibox-tests PRIVATE eden-core eden-ui Qt6::Test)
 add_test(NAME eden-omnibox-tests COMMAND eden-omnibox-tests)
 set_tests_properties(eden-omnibox-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/omnibox-test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/omnibox-test-config")
 
@@ -794,11 +846,22 @@ if(EDEN_ENGINE_CEF)
     target_include_directories(eden-cef-bootstrap-tests PRIVATE ${CEF_INCLUDE_PATH})
     target_link_libraries(eden-cef-bootstrap-tests PRIVATE eden-core eden-engine-cef eden-cef-process Qt6::Test)
     SET_EXECUTABLE_TARGET_PROPERTIES(eden-cef-bootstrap-tests)
+    target_compile_options(eden-cef-bootstrap-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
     set_target_properties(eden-cef-bootstrap-tests PROPERTIES BUILD_RPATH "$ORIGIN")
     add_dependencies(eden-cef-bootstrap-tests eden-helper)
     eden_stage_cef_runtime(eden-cef-bootstrap-tests)
     add_test(NAME eden-cef-bootstrap-tests COMMAND eden-cef-bootstrap-tests)
     set_tests_properties(eden-cef-bootstrap-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    qt_add_executable(eden-osr-texture-tests tests/osrtexture_test.cpp src/engine/cef/osrtexture.cpp)
+    target_include_directories(eden-osr-texture-tests PRIVATE src)
+    target_link_libraries(eden-osr-texture-tests PRIVATE Qt6::Quick Qt6::GuiPrivate Qt6::Test)
+
+    qt_add_executable(eden-clipboard-mirror-tests tests/clipboardmirror_test.cpp src/engine/cef/clipboardmirror.cpp)
+    target_include_directories(eden-clipboard-mirror-tests PRIVATE src)
+    target_link_libraries(eden-clipboard-mirror-tests PRIVATE Qt6::Gui Qt6::Test)
+    add_test(NAME eden-clipboard-mirror-tests COMMAND eden-clipboard-mirror-tests)
+    set_tests_properties(eden-clipboard-mirror-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     qt_add_executable(eden-cef-handlers-tests tests/cefhandlers_test.cpp)
     target_include_directories(eden-cef-handlers-tests PRIVATE ${CEF_INCLUDE_PATH})
@@ -813,10 +876,24 @@ if(EDEN_ENGINE_CEF)
     )
     target_link_options(eden-cef-handlers-tests PRIVATE -Wl,--export-dynamic)
     SET_EXECUTABLE_TARGET_PROPERTIES(eden-cef-handlers-tests)
+    target_compile_options(eden-cef-handlers-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
     set_target_properties(eden-cef-handlers-tests PROPERTIES BUILD_RPATH "$ORIGIN")
     add_dependencies(eden-cef-handlers-tests eden-helper)
     eden_stage_cef_runtime(eden-cef-handlers-tests)
+    if(EDEN_ENGINE_QTWEBENGINE)
+        qt_add_executable(eden-engine-storage-native-tests tests/enginestoragenative_test.cpp)
+        target_include_directories(eden-engine-storage-native-tests PRIVATE ${CEF_INCLUDE_PATH})
+        target_link_libraries(eden-engine-storage-native-tests PRIVATE eden-core eden-engine-cef eden-cef-process Qt6::Test)
+        target_link_options(eden-engine-storage-native-tests PRIVATE -Wl,--export-dynamic)
+        SET_EXECUTABLE_TARGET_PROPERTIES(eden-engine-storage-native-tests)
+        target_compile_options(eden-engine-storage-native-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
+        set_target_properties(eden-engine-storage-native-tests PROPERTIES BUILD_RPATH "$ORIGIN")
+        add_dependencies(eden-engine-storage-native-tests eden-helper eden-engine-qtwebengine)
+        eden_stage_cef_runtime(eden-engine-storage-native-tests)
+    endif()
     find_program(EDEN_XVFB_RUN xvfb-run REQUIRED)
+    add_test(NAME eden-osr-texture-tests COMMAND ${EDEN_XVFB_RUN} -a -s "-screen 0 1600x1000x24" $<TARGET_FILE:eden-osr-texture-tests>)
+    set_tests_properties(eden-osr-texture-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb")
     add_test(NAME eden-cef-handlers-tests COMMAND ${EDEN_XVFB_RUN} -a -s "-screen 0 1600x1000x24" $<TARGET_FILE:eden-cef-handlers-tests> --no-sandbox --engine-compositing=osr --ozone-platform=x11)
     set_tests_properties(eden-cef-handlers-tests PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=xcb")
 

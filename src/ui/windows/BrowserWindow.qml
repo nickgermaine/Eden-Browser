@@ -38,7 +38,6 @@ Window {
 
             if (profileMenuLoader.item)
                 profileMenuLoader.item.close();
-
         }
     }
     onClosing: controller.prepareToClose()
@@ -156,9 +155,7 @@ Window {
                         x: 0
                         y: tabBarSurface.height
                     }
-
                 }
-
             }
 
             Item {
@@ -174,14 +171,12 @@ Window {
                     onActiveChanged: {
                         if (active)
                             frame.startSystemMove();
-
                     }
                 }
 
                 TapHandler {
                     onDoubleTapped: frame.toggleMaximized()
                 }
-
             }
 
             TabStrip {
@@ -203,9 +198,7 @@ Window {
                         duration: Theme.mediumDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Item {
@@ -241,7 +234,6 @@ Window {
                                 backHistoryMenuLoader.item.open();
                             }
                         }
-
                     }
 
                     EdenButton {
@@ -260,7 +252,6 @@ Window {
                                 forwardHistoryMenuLoader.item.open();
                             }
                         }
-
                     }
 
                     EdenButton {
@@ -268,7 +259,6 @@ Window {
                         iconName: controller.currentEngine && controller.currentEngine.loading ? "close" : "refresh"
                         onClicked: controller.currentEngine && controller.currentEngine.loading ? controller.stop() : controller.reload()
                     }
-
                 }
 
                 Omnibox {
@@ -324,7 +314,6 @@ Window {
                             profileMenuLoader.item.open();
                         }
                     }
-
                 }
 
                 EdenButton {
@@ -340,7 +329,6 @@ Window {
                         mainMenuLoader.item.toggle();
                     }
                 }
-
             }
 
             Row {
@@ -375,9 +363,43 @@ Window {
                     iconName: "close"
                     onClicked: frame.close()
                 }
+            }
+        }
 
+        Rectangle {
+            id: fullscreenNotice
+
+            objectName: "fullscreenNotice"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: topChrome.bottom
+            height: controller.contentFullscreen ? 48 : 0
+            visible: controller.contentFullscreen
+            color: Theme.surfaceContainerHigh
+
+            Text {
+                textFormat: Text.PlainText
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.right: fullscreenExit.left
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Fullscreen content in " + controller.fullscreenOrigin + ". Press Esc to exit."
+                elide: Text.ElideMiddle
+                color: Theme.surfaceText
+                font: Theme.bodyFont
             }
 
+            EdenButton {
+                id: fullscreenExit
+
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Exit fullscreen"
+                iconName: "close"
+                onClicked: controller.exitContentFullscreen()
+            }
         }
 
         Item {
@@ -385,7 +407,7 @@ Window {
 
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.top: topChrome.bottom
+            anchors.top: fullscreenNotice.bottom
             anchors.bottom: parent.bottom
             anchors.margins: controller.contentFullscreen ? 0 : Theme.workspaceInset
 
@@ -415,9 +437,7 @@ Window {
                             duration: Theme.mediumDuration
                             easing.type: Easing.OutCubic
                         }
-
                     }
-
                 }
 
                 Behavior on opacity {
@@ -425,9 +445,7 @@ Window {
                         duration: Theme.mediumDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Item {
@@ -479,12 +497,10 @@ Window {
                             Component.onCompleted: {
                                 if (engineView)
                                     engineView.attach(engineHost);
-
                             }
                             onEngineViewChanged: {
                                 if (engineView)
                                     engineView.attach(engineHost);
-
                             }
 
                             Item {
@@ -511,7 +527,6 @@ Window {
                                     value: tabViewportDelegate.url
                                     when: settingsPageLoader.item !== null
                                 }
-
                             }
 
                             Loader {
@@ -527,9 +542,7 @@ Window {
                                 active: internalPage === "newtab"
                                 source: Qt.resolvedUrl("../pages/NewTabPage.qml")
                             }
-
                         }
-
                     }
 
                     Rectangle {
@@ -538,14 +551,13 @@ Window {
                         color: Theme.surface
 
                         Text {
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: "A quiet place for your next tab"
                             color: Theme.surfaceVariantText
                             font: Theme.titleFont
                         }
-
                     }
-
                 }
 
                 Item {
@@ -575,9 +587,7 @@ Window {
                             value: controller.currentEngine
                             when: devToolsDock.item !== null
                         }
-
                     }
-
                 }
 
                 Item {
@@ -603,10 +613,8 @@ Window {
                         onTranslationChanged: {
                             if (active)
                                 controller.resizeDevToolsPane(translation.x, true);
-
                         }
                     }
-
                 }
 
                 Item {
@@ -632,10 +640,8 @@ Window {
                         onTranslationChanged: {
                             if (active)
                                 controller.resizeDevToolsPane(translation.y, false);
-
                         }
                     }
-
                 }
 
                 ChromeCornerMask {
@@ -690,7 +696,6 @@ Window {
                     border.color: Theme.contentBorder
                     z: 4
                 }
-
             }
 
             Loader {
@@ -734,15 +739,12 @@ Window {
                     onActiveChanged: {
                         if (active)
                             controller.beginPaneResize();
-
                     }
                     onTranslationChanged: {
                         if (active)
                             controller.resizePane(translation.x);
-
                     }
                 }
-
             }
 
             Loader {
@@ -755,7 +757,6 @@ Window {
                     "controller": root.windowController
                 })
             }
-
         }
 
         Loader {
@@ -839,13 +840,11 @@ Window {
                     preferredWidth: 360
                     maximumHeight: shell.height - y - 16
                     z: 12
-                    onTriggered: (historyOffset) => {
+                    onTriggered: historyOffset => {
                         return controller.navigateHistory(historyOffset);
                     }
                 }
-
             }
-
         }
 
         Loader {
@@ -862,13 +861,11 @@ Window {
                     preferredWidth: 360
                     maximumHeight: shell.height - y - 16
                     z: 12
-                    onTriggered: (historyOffset) => {
+                    onTriggered: historyOffset => {
                         return controller.navigateHistory(historyOffset);
                     }
                 }
-
             }
-
         }
 
         Loader {
@@ -891,13 +888,11 @@ Window {
                     z: 14
                     actions: controller.pageContextMenuActions
                     onClosed: controller.dismissPageContextMenu()
-                    onTriggered: (command) => {
+                    onTriggered: command => {
                         return controller.executePageContextMenuCommand(command);
                     }
                 }
-
             }
-
         }
 
         Loader {
@@ -915,13 +910,11 @@ Window {
                     maximumHeight: shell.height - 16
                     z: 14
                     actions: controller.autofillSuggestions
-                    onTriggered: (command) => {
+                    onTriggered: command => {
                         return controller.fillAutofillSuggestion(command);
                     }
                 }
-
             }
-
         }
 
         Instantiator {
@@ -934,7 +927,6 @@ Window {
                 z: 20
                 Component.onCompleted: open()
             }
-
         }
 
         Connections {
@@ -944,31 +936,27 @@ Window {
 
             function onPageContextMenuRequested() {
                 if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2)
-                    return ;
+                    return;
 
                 pageContextMenuLoader.active = true;
                 if (!pageContextMenuLoader.item.tryOpen())
                     controller.dismissPageContextMenu();
-
             }
 
             function onAutofillRequested() {
                 autofillMenuLoader.active = true;
                 if (autofillMenuLoader.item)
                     autofillMenuLoader.item.tryOpen();
-
             }
 
             function onCredentialStateChanged() {
                 if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item)
                     autofillMenuLoader.item.close();
-
             }
 
             function onJavaScriptDialogChanged() {
                 if (controller.javaScriptDialog.id === undefined && javaScriptDialogLoader.item)
                     javaScriptDialogLoader.item.close();
-
             }
 
             function onJavaScriptDialogRequested() {
@@ -979,7 +967,6 @@ Window {
             function onFileDialogChanged() {
                 if (controller.fileDialog.id === undefined && fileDialogLoader.item)
                     fileDialogLoader.item.close();
-
             }
 
             function onFileDialogRequested() {
@@ -990,7 +977,6 @@ Window {
             function onPermissionRequestChanged() {
                 if (controller.permissionRequest.id === undefined && permissionPromptLoader.item)
                     permissionPromptLoader.item.close();
-
             }
 
             function onPermissionRequestRequested() {
@@ -999,10 +985,8 @@ Window {
             }
 
             function onDisplayCaptureRequestChanged() {
-                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item) {
+                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item)
                     displayCapturePromptLoader.item.close();
-                }
-
             }
 
             function onDisplayCaptureRequestRequested() {
@@ -1027,9 +1011,7 @@ Window {
                     y: topChrome.height
                     z: 12
                 }
-
             }
-
         }
 
         Rectangle {
@@ -1061,6 +1043,7 @@ Window {
             Text {
                 id: toastText
 
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: transientToast.message
                 color: Theme.surfaceText
@@ -1079,9 +1062,7 @@ Window {
                     duration: Theme.mediumDuration
                     easing.type: Easing.OutCubic
                 }
-
             }
-
         }
 
         Loader {
@@ -1118,6 +1099,7 @@ Window {
                         spacing: 14
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             wrapMode: Text.WordWrap
                             text: signOutConfirm.downloadCount === 1 ? "1 download is still running. Signing out will cancel it." : signOutConfirm.downloadCount + " downloads are still running. Signing out will cancel them."
@@ -1145,15 +1127,10 @@ Window {
                                     signOutConfirm.close();
                                 }
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
 
         Connections {
@@ -1167,7 +1144,7 @@ Window {
         Connections {
             function onSignOutConfirmationRequired(profileId, downloadCount) {
                 if (profileId !== controller.profileId)
-                    return ;
+                    return;
 
                 if (root.active || Profiles.browserWindowCount === 1) {
                     signOutConfirmLoader.active = true;
@@ -1190,48 +1167,59 @@ Window {
                     x: shell.width - width - 12
                     y: topChrome.height
                     z: 12
-                    actions: [{
-                        "id": "new_tab",
-                        "title": "New tab",
-                        "icon": "add"
-                    }, {
-                        "id": "new_window",
-                        "title": "New window",
-                        "icon": "square-top-down"
-                    }, {
-                        "id": "private_window",
-                        "title": "New private window",
-                        "icon": "incognito"
-                    }, {
-                        "id": "bookmarks",
-                        "title": "Bookmarks",
-                        "icon": "bookmark-circle"
-                    }, {
-                        "id": "history",
-                        "title": "History",
-                        "icon": "history"
-                    }, {
-                        "id": "downloads",
-                        "title": "Downloads",
-                        "icon": "round-transfer-vertical"
-                    }, {
-                        "id": "devtools",
-                        "title": "Developer tools",
-                        "icon": "programming"
-                    }, {
-                        "id": "about_eden",
-                        "title": "About Eden",
-                        "icon": "info-circle"
-                    }, {
-                        "id": "settings",
-                        "title": "Settings",
-                        "icon": "settings"
-                    }, {
-                        "id": "quit",
-                        "title": "Quit",
-                        "icon": "power"
-                    }]
-                    onTriggered: (actionId) => {
+                    actions: [
+                        {
+                            "id": "new_tab",
+                            "title": "New tab",
+                            "icon": "add"
+                        },
+                        {
+                            "id": "new_window",
+                            "title": "New window",
+                            "icon": "square-top-down"
+                        },
+                        {
+                            "id": "private_window",
+                            "title": "New private window",
+                            "icon": "incognito"
+                        },
+                        {
+                            "id": "bookmarks",
+                            "title": "Bookmarks",
+                            "icon": "bookmark-circle"
+                        },
+                        {
+                            "id": "history",
+                            "title": "History",
+                            "icon": "history"
+                        },
+                        {
+                            "id": "downloads",
+                            "title": "Downloads",
+                            "icon": "round-transfer-vertical"
+                        },
+                        {
+                            "id": "devtools",
+                            "title": "Developer tools",
+                            "icon": "programming"
+                        },
+                        {
+                            "id": "about_eden",
+                            "title": "About Eden",
+                            "icon": "info-circle"
+                        },
+                        {
+                            "id": "settings",
+                            "title": "Settings",
+                            "icon": "settings"
+                        },
+                        {
+                            "id": "quit",
+                            "title": "Quit",
+                            "icon": "power"
+                        }
+                    ]
+                    onTriggered: actionId => {
                         if (actionId === "new_tab")
                             controller.newTabAndFocusOmnibox();
                         else if (actionId === "new_window")
@@ -1250,9 +1238,7 @@ Window {
                             controller.shortcuts.execute(actionId);
                     }
                 }
-
             }
-
         }
 
         ResizeHandle {
@@ -1342,27 +1328,24 @@ Window {
             visible: !root.edgeToEdge
             z: 101
         }
+    }
 
-        component ResizeHandle: Item {
-            required property int edges
-            property int cursorShape: Qt.ArrowCursor
+    component ResizeHandle: Item {
+        required property int edges
+        property int cursorShape: Qt.ArrowCursor
 
-            HoverHandler {
-                cursorShape: parent.cursorShape
-            }
-
-            DragHandler {
-                target: null
-                acceptedButtons: Qt.LeftButton
-                onActiveChanged: {
-                    if (active)
-                        frame.startSystemResize(parent.edges);
-
-                }
-            }
-
+        HoverHandler {
+            cursorShape: parent.cursorShape
         }
 
+        DragHandler {
+            target: null
+            acceptedButtons: Qt.LeftButton
+            onActiveChanged: {
+                if (active)
+                    frame.startSystemResize(parent.edges);
+            }
+        }
     }
 
     Loader {
@@ -1373,5 +1356,4 @@ Window {
             "hostWindow": root
         })
     }
-
 }

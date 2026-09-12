@@ -97,6 +97,13 @@ class FakeEngineView : public eden::engine::EngineView {
         m_muted = muted;
         emit mutedChanged();
     }
+    void setActivity(const QString &document, int flags) {
+        setCaptureDetails(document, flags);
+    }
+    void setNativeActivity(bool video, bool audio) {
+        setMediaCapture(video, audio);
+    }
+
     void setFavicon(const QUrl &favicon) {
         if (m_favicon == favicon) {
             return;
@@ -176,6 +183,7 @@ class TabModelTest final : public QObject {
     void closeOthersSparesPinnedTabs();
     void undoCloseRestoresIntoMatchingRegion();
     void faviconChangesReachTheModel();
+    void activityIndicatorsFollowCaptureAndMute();
     void internalPageDoesNotCreateEngine();
     void urlCredentialsAreNotExposed();
     void newViewRequestCrossesTheEngineSeam();
@@ -383,6 +391,39 @@ void TabModelTest::undoCloseRestoresIntoMatchingRegion() {
     QVERIFY(model.undoClose());
     QCOMPARE(model.rowCount(), 2);
     QVERIFY(!model.data(model.index(1), eden::core::TabModel::PinnedRole).toBool());
+}
+
+void TabModelTest::activityIndicatorsFollowCaptureAndMute() {
+    auto model = createModel();
+    model.addTab(QUrl("https://work.example/meeting"));
+    auto *view = static_cast<FakeEngineView *>(model.engineAt(0));
+    QVERIFY(view);
+    const auto activity = [&] {
+        return model.data(model.index(0), eden::core::TabModel::ActivityIndicatorsRole).toList();
+    };
+    QSignalSpy changes(&model, &QAbstractItemModel::dataChanged);
+    view->setActivity("call", 3);
+    QCOMPARE(activity().size(), 2);
+    QVERIFY(!changes.isEmpty());
+    QVERIFY(std::any_of(changes.cbegin(), changes.cend(), [](const auto &change) {
+        return change[2].template value<QList<int>>().contains(eden::core::TabModel::ActivityIndicatorsRole);
+    }));
+    view->setActivity("share", 12);
+    QCOMPARE(activity().size(), 4);
+    view->setMuted(true);
+    QCOMPARE(activity().size(), 5);
+    QCOMPARE(activity().last().toMap().value("icon").toString(), QString("muted"));
+    view->setActivity("call", 0);
+    QCOMPARE(activity().size(), 3);
+    view->setActivity("share", 0);
+    QVERIFY(!view->isCapturing());
+    QCOMPARE(activity().size(), 1);
+    view->setMuted(false);
+    QVERIFY(activity().isEmpty());
+    view->setNativeActivity(true, true);
+    QCOMPARE(activity().size(), 2);
+    view->setNativeActivity(false, false);
+    QVERIFY(activity().isEmpty());
 }
 
 void TabModelTest::faviconChangesReachTheModel() {

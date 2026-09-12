@@ -1,5 +1,12 @@
+#include <libsecret/secret.h>
+
 #include "autofilltargetchecks.h"
+#include "downloadchecks.h"
+#if EDEN_ENABLE_AUTOMATION
+#include "core/automation/performancemetrics.h"
+#endif
 #include "core/profiles/applicationcontext.h"
+#include "core/profiles/enginestorage.h"
 #include "core/profiles/profileeditorcontroller.h"
 #include "core/profiles/profilelistmodel.h"
 #include "core/profiles/profilemanager.h"
@@ -12,24 +19,31 @@
 #include "engine/cef/cefengineview.h"
 #include "engine/cef/cefprofile.h"
 #include "engine/cef/cefruntime.h"
+#include "engine/cef/cefuibridge.h"
 #include "engine/cef/devtoolssocketserver.h"
 #include "engine/enginefactory.h"
 #include "engine/engineregistry.h"
 #include "include/capi/cef_task_capi.h"
 #include "include/cef_browser.h"
+#include "include/cef_client.h"
 #include "include/cef_task.h"
 #include "profiletesthelpers.h"
 
 #include <QBuffer>
 #include <QClipboard>
 #include <QColor>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QHoverEvent>
 #include <QImage>
+#include <QInputMethodEvent>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLibrary>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -41,6 +55,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTextCharFormat>
 #include <QTimer>
 #include <QtGui/qguiapplication_platform.h>
 #include <QtTest>
@@ -115,7 +130,84 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path.startsWith("/select-popup")) {
+                    if (path.startsWith("/gc-frame")) {
+                        responseBody = R"HTML(<!doctype html><title>GC ready</title><iframe
+style="position:absolute;left:0;top:0;width:480px;height:300px;border:0" src="/gc-page?busy"></iframe>)HTML";
+                    } else if (path.startsWith("/gc-page")) {
+                        responseBody = R"HTML(<!doctype html><title>GC ready</title><body style="margin:0">
+<button style="position:absolute;left:20px;top:20px;width:120px;height:40px"
+onclick="window.gcBusy=false;document.title='GC quiet'">Stop work</button>
+<input style="position:absolute;left:20px;top:100px;width:300px;height:40px">
+<script>
+window.gcBusy=location.search.includes('busy');
+if(location.search.includes('memory')){window.liveAllocation=new Array(2000000).fill(0.25);}
+function work(){
+if(!window.gcBusy){return;}
+var end=performance.now()+35;
+while(performance.now()<end){}
+setTimeout(work,5);
+}
+if(window.gcBusy){setTimeout(work,0);}
+</script>)HTML";
+                    } else if (path.startsWith("/ime-frame?")) {
+                        const QByteArray nested = QByteArray("/ime?") + path.sliced(path.indexOf('?') + 1);
+                        responseBody = QByteArray(
+                                           "<!doctype html><title>Input ready</title><body style='margin:0'><iframe "
+                                           "style='position:absolute;left:60px;top:60px;width:520px;height:380px;"
+                                           "border:0' src='http://127.0.0.2:"
+                                       ) +
+                                       QByteArray::number(serverPort()) + nested + "'></iframe></body>";
+                    } else if (path.startsWith("/ime?")) {
+                        m_inputPage = QString::fromUtf8(path);
+                        m_inputState = {};
+                        responseBody = R"HTML(<!doctype html><title>Input ready</title>
+<body style="margin:0;background:#214365">
+<input id="editor" style="position:absolute;left:20px;top:20px;width:400px;height:40px;font:20px sans-serif">
+<button style="position:absolute;left:20px;top:90px;width:160px;height:40px">Leave editor</button>
+<input readonly style="position:absolute;left:20px;top:160px;width:400px;height:40px">
+<input type="PASSWORD" style="position:absolute;left:20px;top:230px;width:400px;height:40px">
+<script>
+const editor = document.getElementById('editor');
+let composing = false;
+const events = [];
+let pending = Promise.resolve();
+function report() {
+    const selection = getSelection();
+    const range = editor.isContentEditable && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    if(range){range.collapse(false);}
+    const caret = range ? range.getBoundingClientRect() : null;
+    const body = JSON.stringify({page:location.pathname+location.search,
+        value:editor.isContentEditable ? editor.textContent : editor.value,
+        cursor:editor.isContentEditable ? selection.focusOffset : editor.selectionStart,
+        caret:caret ? {x:caret.x,y:caret.y,width:caret.width,height:caret.height} : null,
+        composing, events, ready:true});
+    pending = pending.then(()=>fetch('/ime-state', {method:'POST', body}));
+}
+editor.addEventListener('compositionstart', ()=>{composing=true;events.push('start');report();});
+editor.addEventListener('compositionend', ()=>{composing=false;events.push('end');report();});
+editor.addEventListener('input', report);
+document.addEventListener('selectionchange', report);
+report();
+</script>)HTML";
+                        if (path.contains("rtl-caret")) {
+                            responseBody.replace(
+                                "<input id=\"editor\" style=\"position:absolute;left:20px;top:20px;width:400px;"
+                                "height:40px;font:20px sans-serif\">",
+                                "<div id=\"editor\" contenteditable dir=\"rtl\" style=\"position:absolute;left:20px;"
+                                "top:20px;width:400px;height:40px;font:20px sans-serif;background:white\"></div>"
+                            );
+                        }
+                    } else if (path == "/ime-state") {
+                        const QJsonObject state = QJsonDocument::fromJson(body).object();
+                        if (state.value("page").toString() == m_inputPage) {
+                            m_inputState = state;
+                        }
+                        responseBody = "received";
+                    } else if (path == "/thumbnail") {
+                        responseBody = R"HTML(<!doctype html><title>Thumbnail ready</title>
+<body style="margin:0;background:#cc2233">
+<div style="position:fixed;left:40%;top:40%;width:20%;height:20%;background:#22bb66"></div>)HTML";
+                    } else if (path.startsWith("/select-popup")) {
                         const QByteArray placement =
                             path.contains("edge=1") ? "right:4px;bottom:4px" : "left:40px;top:40px";
                         responseBody = R"HTML(<!doctype html><title>Select ready</title>
@@ -186,6 +278,12 @@ function tick() {
 report();
 requestAnimationFrame(tick);
 </script>)HTML";
+                    } else if (path == "/fullscreen") {
+                        responseBody =
+                            R"HTML(<!doctype html><title>fullscreen-ready</title><body style="background:#315d32;color:white;min-height:100vh">Click to enter fullscreen<script>
+document.addEventListener('click',()=>document.documentElement.requestFullscreen(),{once:true});
+document.addEventListener('fullscreenchange',()=>document.title=document.fullscreenElement?'fullscreen-active':'fullscreen-exited');
+</script></body>)HTML";
                     } else if (path == "/address-form") {
                         responseBody = R"HTML(<!doctype html><title>Address form</title>
 <input autocomplete="email"><textarea autocomplete="street-address"></textarea>
@@ -200,6 +298,30 @@ for (const kind of ['input', 'change']) {
     });
 }
 </script>)HTML";
+                    } else if (path.startsWith("/clipboard-writes") || path == "/clipboard-child") {
+                        responseBody = R"HTML(<!doctype html><title>Clipboard ready</title>
+<body style="margin:0;background:#438521">
+<button style="position:absolute;left:20px;top:20px;width:240px;height:48px">Copy</button>
+<script>
+let attempt=0;
+const child=location.pathname==='/clipboard-child';
+const prefix=child?'Frame ':'';
+document.querySelector('button').onclick=async()=>{
+    const current=++attempt;
+    try {
+        if(current===1){await navigator.clipboard.write([new ClipboardItem({'text/plain':new Blob([prefix+'Blob text'],{type:'text/plain'})})]);}
+        else {await navigator.clipboard.writeText(current===2?prefix+'Plain text':'');}
+        document.title='Copied:'+current;
+    } catch(error) {document.title=String(error);}
+};
+</script>)HTML";
+                        if (path.startsWith("/clipboard-writes")) {
+                            responseBody += QByteArray(
+                                                "<iframe style='position:absolute;left:20px;top:100px;width:300px;"
+                                                "height:180px;border:0' allow='clipboard-write' src='http://127.0.0.2:"
+                                            ) +
+                                            QByteArray::number(serverPort()) + "/clipboard-child'></iframe>";
+                        }
                     } else if (path == "/clipboard-denied") {
                         responseBody = R"HTML(<!doctype html><title>Clipboard pending</title>
 <input value="Copied by user" style="position:absolute;left:20px;top:20px;width:300px;height:48px">
@@ -353,7 +475,13 @@ document.getElementById('display').onclick=()=>{
         return m_selectedOptions;
     }
 
+    const QJsonObject &inputState() const {
+        return m_inputState;
+    }
+
   private:
+    QString m_inputPage;
+    QJsonObject m_inputState;
     int m_rootRequests = 0;
     int m_completedFrameRuns = 0;
     int m_pendingNavigations = 0;
@@ -361,27 +489,48 @@ document.getElementById('display').onclick=()=>{
     QHash<QTcpSocket *, QByteArray> m_requests;
 };
 
+enum class InputScenario { Unicode, Composition, InitialCaret, RightToLeftCaret, FocusedFrameNavigation };
+
+Q_DECLARE_METATYPE(InputScenario)
+
 class CefHandlersTest final : public QObject {
     Q_OBJECT
 
   private slots:
     void initTestCase();
     void handlerSuite();
+    void hoverEntry_data();
+    void hoverEntry();
     void navigationEvents();
+    void garbageCollection_data();
+    void garbageCollection();
+    void garbageCollectionMemory();
     void clipboardPermissions();
+    void clipboardWrites_data();
+    void clipboardWrites();
     void permissionDismissal();
     void addressAutofill();
     void browserVisibility();
     void formEvents();
     void credentialTargets();
+    void mediaConsentAndIndicators();
+    void ordinaryCookieHandoff();
+    void concurrentDownloadsKeepDistinctDestinations();
     void preservesFinalPaint_data();
     void preservesFinalPaint();
     void devToolsSuite();
     void shellDevToolsSuite();
+    void shellFullscreen();
+    void shellCallIndicators();
     void resizeStress();
+    void preservesPaintAcrossCoalescedResizes();
     void popupMenus_data();
     void popupMenus();
     void thumbnailPostFailure();
+    void unicodeAndComposition_data();
+    void unicodeAndComposition();
+    void thumbnailCrop_data();
+    void thumbnailCrop();
     void asynchronousClose_data();
     void asynchronousClose();
     void shutdownWaitsForPendingCreation();
@@ -396,16 +545,18 @@ class CefHandlersTest final : public QObject {
 
 class CefNavigateDevTools final : public CefTask {
   public:
-    CefNavigateDevTools(QUrl url, std::shared_ptr<std::atomic_bool> requested)
+    CefNavigateDevTools(QUrl url, std::shared_ptr<std::atomic_bool> requested, QUrl source = {})
         : m_url(std::move(url)),
-          m_requested(std::move(requested)) {}
+          m_requested(std::move(requested)),
+          m_source(std::move(source)) {}
 
     void Execute() override {
         for (int id = 1; id < 1000; ++id) {
             const CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
             const CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
             if (frame && (frame->GetURL().ToString().starts_with("devtools://") ||
-                          frame->GetURL() == m_url.toString().toStdString())) {
+                          frame->GetURL() == m_url.toString().toStdString() ||
+                          (!m_source.isEmpty() && frame->GetURL() == m_source.toString().toStdString()))) {
                 frame->LoadURL(m_url.toString().toStdString());
                 m_requested->store(true);
                 return;
@@ -416,9 +567,358 @@ class CefNavigateDevTools final : public CefTask {
   private:
     QUrl m_url;
     std::shared_ptr<std::atomic_bool> m_requested;
+    QUrl m_source;
 
     IMPLEMENT_REFCOUNTING(CefNavigateDevTools);
 };
+
+class CefNavigateFocusedFrame final : public CefTask {
+  public:
+    CefNavigateFocusedFrame(QUrl source, std::shared_ptr<std::atomic_bool> requested)
+        : m_source(std::move(source)),
+          m_requested(std::move(requested)) {}
+
+    void Execute() override {
+        for (int id = 1; id < 1000; ++id) {
+            const CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
+            const CefRefPtr<CefFrame> main = browser ? browser->GetMainFrame() : nullptr;
+            if (!main || main->GetURL() != m_source.toString().toStdString()) {
+                continue;
+            }
+            const CefRefPtr<CefFrame> focused = browser->GetFocusedFrame();
+            if (focused && !focused->IsMain()) {
+                focused->LoadURL("about:blank");
+                m_requested->store(true);
+            }
+            return;
+        }
+    }
+
+  private:
+    QUrl m_source;
+    std::shared_ptr<std::atomic_bool> m_requested;
+
+    IMPLEMENT_REFCOUNTING(CefNavigateFocusedFrame);
+};
+
+void CefHandlersTest::hoverEntry_data() {
+    QTest::addColumn<bool>("devTools");
+    QTest::newRow("page") << false;
+    QTest::newRow("devtools") << true;
+}
+
+void CefHandlersTest::hoverEntry() {
+    QFETCH(bool, devTools);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(100, 100));
+    viewport.setSize(QSizeF(700, 500));
+    QQuickItem inspectedPage(window.contentItem());
+    inspectedPage.setSize(QSizeF(40, 40));
+    eden::engine::cef::CefEngineView view(&profile);
+    const QUrl fixture(QString("http://127.0.0.1:%1/hover-entry").arg(m_server.serverPort()));
+    if (devTools) {
+        view.attach(&inspectedPage);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!viewport.childItems().isEmpty(), 5000);
+    QQuickItem *item = viewport.childItems().constFirst();
+    QTRY_COMPARE_WITH_TIMEOUT(
+        window.grabWindow().pixelColor(
+            QPoint(qRound(105 * window.devicePixelRatio()), qRound(300 * window.devicePixelRatio()))
+        ),
+        QColor("#d8ead3"),
+        10000
+    );
+    for (const QPoint &position : {QPoint(75, 370), QPoint(200, 430), QPoint(75, 370)}) {
+        const QPointF global = item->mapToGlobal(position);
+        QHoverEvent leave(QEvent::HoverLeave, position, global, position);
+        QCoreApplication::sendEvent(item, &leave);
+        QCOMPARE(item->cursor().shape(), Qt::ArrowCursor);
+        QHoverEvent enter(QEvent::HoverEnter, position, global, QPointF(-1, -1));
+        QCoreApplication::sendEvent(item, &enter);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            item->cursor().shape(),
+            position.y() == 370 ? Qt::PointingHandCursor : Qt::IBeamCursor,
+            5000
+        );
+    }
+}
+
+void CefHandlersTest::unicodeAndComposition_data() {
+    QTest::addColumn<bool>("devTools");
+    QTest::addColumn<bool>("embedded");
+    QTest::addColumn<InputScenario>("scenario");
+    QTest::newRow("page-unicode") << false << false << InputScenario::Unicode;
+    QTest::newRow("devtools-unicode") << true << false << InputScenario::Unicode;
+    QTest::newRow("page-ime") << false << false << InputScenario::Composition;
+    QTest::newRow("devtools-ime") << true << false << InputScenario::Composition;
+    QTest::newRow("page-iframe-ime") << false << true << InputScenario::Composition;
+    QTest::newRow("devtools-iframe-ime") << true << true << InputScenario::Composition;
+    QTest::newRow("page-initial-caret") << false << false << InputScenario::InitialCaret;
+    QTest::newRow("devtools-initial-caret") << true << false << InputScenario::InitialCaret;
+    QTest::newRow("page-iframe-initial-caret") << false << true << InputScenario::InitialCaret;
+    QTest::newRow("devtools-iframe-initial-caret") << true << true << InputScenario::InitialCaret;
+    QTest::newRow("page-rtl-caret") << false << false << InputScenario::RightToLeftCaret;
+    QTest::newRow("devtools-rtl-caret") << true << false << InputScenario::RightToLeftCaret;
+    QTest::newRow("page-iframe-rtl-caret") << false << true << InputScenario::RightToLeftCaret;
+    QTest::newRow("devtools-iframe-rtl-caret") << true << true << InputScenario::RightToLeftCaret;
+    QTest::newRow("page-iframe-navigation") << false << true << InputScenario::FocusedFrameNavigation;
+    QTest::newRow("devtools-iframe-navigation") << true << true << InputScenario::FocusedFrameNavigation;
+}
+
+void CefHandlersTest::unicodeAndComposition() {
+    QFETCH(bool, devTools);
+    QFETCH(bool, embedded);
+    QFETCH(InputScenario, scenario);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11);
+    XSetInputFocus(x11->display(), static_cast<Window>(window.winId()), RevertToParent, CurrentTime);
+    XSync(x11->display(), False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(100, 100));
+    viewport.setSize(QSizeF(700, 500));
+    QQuickItem inspectedPage(window.contentItem());
+    inspectedPage.setSize(QSizeF(40, 40));
+    eden::engine::cef::CefEngineView view(&profile);
+    const QUrl fixture(QString("http://127.0.0.1:%1/%2?case=%3")
+                           .arg(m_server.serverPort())
+                           .arg(embedded ? "ime-frame" : "ime")
+                           .arg(QString::fromLatin1(QTest::currentDataTag())));
+    const QPoint inputOffset = embedded ? QPoint(60, 60) : QPoint();
+    if (devTools) {
+        view.attach(&inspectedPage);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Input ready"), 15000);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(
+        m_server.inputState().value("page").toString(),
+        QString("/ime?") + fixture.query(),
+        10000
+    );
+    QTRY_VERIFY_WITH_TIMEOUT(!viewport.childItems().isEmpty(), 5000);
+    QQuickItem *item = viewport.childItems().constFirst();
+    QTRY_COMPARE_WITH_TIMEOUT(
+        window.grabWindow().pixelColor(QPoint(
+            qRound((110 + inputOffset.x()) * window.devicePixelRatio()),
+            qRound((110 + inputOffset.y()) * window.devicePixelRatio())
+        )),
+        QColor("#214365"),
+        10000
+    );
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(150, 140) + inputOffset);
+    QTRY_VERIFY_WITH_TIMEOUT(item->hasActiveFocus(), 5000);
+    if (scenario == InputScenario::Unicode) {
+        const QString text = QString::fromUtf8("A🚀é");
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_unknown, Qt::NoModifier, text);
+        QCoreApplication::sendEvent(&window, &press);
+        QCoreApplication::sendEvent(&window, &release);
+        QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), text, 5000);
+        return;
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            if (!item->inputMethodQuery(Qt::ImEnabled).toBool()) {
+                QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(150, 140) + inputOffset);
+            }
+            return item->inputMethodQuery(Qt::ImEnabled).toBool();
+        }()),
+        5000
+    );
+    if (scenario == InputScenario::FocusedFrameNavigation) {
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateFocusedFrame(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            window.grabWindow().pixelColor(QPoint(
+                qRound((110 + inputOffset.x()) * window.devicePixelRatio()),
+                qRound((110 + inputOffset.y()) * window.devicePixelRatio())
+            )),
+            QColor(Qt::white),
+            10000
+        );
+        QTRY_VERIFY_WITH_TIMEOUT(!item->inputMethodQuery(Qt::ImEnabled).toBool(), 5000);
+        QInputMethodEvent ignored;
+        ignored.setCommitString("ignored");
+        ignored.ignore();
+        QCoreApplication::sendEvent(&window, &ignored);
+        QVERIFY(!ignored.isAccepted());
+        return;
+    }
+    if (scenario == InputScenario::InitialCaret) {
+        QTRY_VERIFY_WITH_TIMEOUT(
+            item->inputMethodQuery(Qt::ImCursorRectangle)
+                .toRectF()
+                .intersects(QRectF(20 + inputOffset.x(), 20 + inputOffset.y(), 420, 50)),
+            5000
+        );
+        return;
+    }
+    if (scenario == InputScenario::RightToLeftCaret) {
+        const QString text = QString::fromUtf8("ببب");
+        for (const int cursor : {3, 0, 1, 3}) {
+            QInputMethodEvent preedit(text, {{QInputMethodEvent::Cursor, cursor, 1, {}}});
+            QCoreApplication::sendEvent(&window, &preedit);
+            QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), text, 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("cursor").toInt(), cursor, 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                m_server.inputState().value("caret").toObject().value("height").toDouble() > 0,
+                5000
+            );
+            const QJsonObject expected = m_server.inputState().value("caret").toObject();
+            QTRY_VERIFY_WITH_TIMEOUT(
+                std::abs(
+                    item->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x() -
+                    (expected.value("x").toDouble() + inputOffset.x())
+                ) <= 2.0,
+                5000
+            );
+            const QRectF rectangle = item->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
+            QVERIFY(std::abs(rectangle.y() - (expected.value("y").toDouble() + inputOffset.y())) <= 2.0);
+            QVERIFY(std::abs(rectangle.height() - expected.value("height").toDouble()) <= 2.0);
+        }
+        QInputMethodEvent commit;
+        commit.setCommitString(text);
+        QCoreApplication::sendEvent(&window, &commit);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_server.inputState().value("composing").toBool(), 5000);
+        return;
+    }
+    QTextCharFormat format;
+    format.setFontUnderline(true);
+    format.setForeground(QColor(Qt::blue));
+    format.setBackground(QColor(Qt::yellow));
+    QInputMethodEvent preedit(
+        QString::fromUtf8("に"),
+        {{QInputMethodEvent::TextFormat, 0, 1, QVariant::fromValue(QTextFormat(format))},
+         {QInputMethodEvent::Cursor, 1, 1, {}}}
+    );
+    preedit.ignore();
+    QCoreApplication::sendEvent(&window, &preedit);
+    QVERIFY(preedit.isAccepted());
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("に"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(m_server.inputState().value("composing").toBool(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        item->inputMethodQuery(Qt::ImCursorRectangle)
+            .toRectF()
+            .intersects(QRectF(20 + inputOffset.x(), 20 + inputOffset.y(), 420, 50)),
+        5000
+    );
+    QInputMethodEvent update(QString::fromUtf8("日本"), {{QInputMethodEvent::Cursor, 1, 1, {}}});
+    QCoreApplication::sendEvent(&window, &update);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("日本"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("cursor").toInt(), 1, 5000);
+    const QString committed = QString::fromUtf8("日本語🚀");
+    QInputMethodEvent commit;
+    commit.setCommitString(committed);
+    QCoreApplication::sendEvent(&window, &commit);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), committed, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_server.inputState().value("composing").toBool(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(item->inputMethodQuery(Qt::ImAbsolutePosition).toInt(), committed.size(), 5000);
+    QInputMethodEvent replacement;
+    replacement.setCommitString("!", -2, 2);
+    QCoreApplication::sendEvent(&window, &replacement);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("日本語!"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(item->inputMethodQuery(Qt::ImAbsolutePosition).toInt(), 4, 5000);
+    QInputMethodEvent removal;
+    removal.setCommitString({}, -1, 1);
+    QCoreApplication::sendEvent(&window, &removal);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("日本語"), 5000);
+    QInputMethodEvent cancelled(QString::fromUtf8("仮"), {});
+    QCoreApplication::sendEvent(&window, &cancelled);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("日本語仮"), 5000);
+    QInputMethodEvent cancel;
+    QCoreApplication::sendEvent(&window, &cancel);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("日本語"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_server.inputState().value("composing").toBool(), 5000);
+    QTest::keyClick(&window, Qt::Key_A, Qt::ControlModifier);
+    QInputMethodEvent initial;
+    initial.setCommitString("abcXYZ");
+    QCoreApplication::sendEvent(&window, &initial);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString("abcXYZ"), 5000);
+    for (int index = 0; index < 3; ++index) {
+        QTest::keyClick(&window, Qt::Key_Left);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(item->inputMethodQuery(Qt::ImAbsolutePosition).toInt(), 3, 5000);
+    QInputMethodEvent crossing(QString::fromUtf8("仮"), {});
+    QCoreApplication::sendEvent(&window, &crossing);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("abc仮XYZ"), 5000);
+    QInputMethodEvent replaceAcross;
+    replaceAcross.setCommitString("a", -1, 2);
+    QCoreApplication::sendEvent(&window, &replaceAcross);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString("abaYZ"), 5000);
+    QInputMethodEvent combined(QString::fromUtf8("仮"), {});
+    combined.setCommitString("!");
+    QCoreApplication::sendEvent(&window, &combined);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("aba!仮YZ"), 5000);
+    QInputMethodEvent finish;
+    finish.setCommitString("done");
+    QCoreApplication::sendEvent(&window, &finish);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString("aba!doneYZ"), 5000);
+    QInputMethodEvent blur(QString::fromUtf8("仮"), {});
+    QCoreApplication::sendEvent(&window, &blur);
+    QTRY_VERIFY_WITH_TIMEOUT(m_server.inputState().value("composing").toBool(), 5000);
+    QQuickItem outside(window.contentItem());
+    outside.setSize(QSizeF(20, 20));
+    outside.forceActiveFocus();
+    QTRY_VERIFY_WITH_TIMEOUT(!m_server.inputState().value("composing").toBool(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), QString::fromUtf8("aba!done仮YZ"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(180, 210) + inputOffset);
+    QTRY_VERIFY_WITH_TIMEOUT(!item->inputMethodQuery(Qt::ImEnabled).toBool(), 5000);
+    QInputMethodEvent ignored;
+    ignored.setCommitString("ignored");
+    ignored.ignore();
+    QCoreApplication::sendEvent(&window, &ignored);
+    QVERIFY(!ignored.isAccepted());
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(180, 280) + inputOffset);
+    QTRY_VERIFY_WITH_TIMEOUT(!item->inputMethodQuery(Qt::ImEnabled).toBool(), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(180, 350) + inputOffset);
+    QTRY_VERIFY_WITH_TIMEOUT(item->inputMethodQuery(Qt::ImEnabled).toBool(), 5000);
+    QVERIFY(item->inputMethodQuery(Qt::ImHints).toInt() & Qt::ImhHiddenText);
+    QVERIFY(item->inputMethodQuery(Qt::ImHints).toInt() & Qt::ImhSensitiveData);
+    QCOMPARE(m_server.inputState().value("value").toString(), QString::fromUtf8("aba!done仮YZ"));
+    auto navigating = std::make_shared<std::atomic_bool>(false);
+    QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(QUrl("about:blank"), navigating, fixture)));
+    QTRY_VERIFY_WITH_TIMEOUT(navigating->load(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!item->inputMethodQuery(Qt::ImEnabled).toBool(), 5000);
+}
 
 void CefHandlersTest::popupMenus_data() {
     QTest::addColumn<bool>("edge");
@@ -550,6 +1050,48 @@ void CefHandlersTest::thumbnailPostFailure() {
     view.requestThumbnail(QSize(64, 48), completed);
     QTRY_COMPARE_WITH_TIMEOUT(completions, 2, 10000);
     QCOMPARE(captured.size(), QSize(64, 48));
+}
+
+void CefHandlersTest::thumbnailCrop_data() {
+    QTest::addColumn<QSize>("viewportSize");
+    QTest::newRow("wide") << QSize(1000, 400);
+    QTest::newRow("tall") << QSize(400, 800);
+}
+
+void CefHandlersTest::thumbnailCrop() {
+    QFETCH(QSize, viewportSize);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(viewportSize);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(viewportSize);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/thumbnail").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Thumbnail ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+    int completions = 0;
+    QImage captured;
+    view.requestThumbnail(QSize(200, 200), [&](const QImage &image) {
+        ++completions;
+        captured = image;
+    });
+    QTRY_COMPARE_WITH_TIMEOUT(completions, 1, 10000);
+    QCOMPARE(captured.size(), QSize(200, 200));
+    const auto near = [](const QColor &color, const QColor &expected) {
+        return std::abs(color.red() - expected.red()) <= 5 && std::abs(color.green() - expected.green()) <= 5 &&
+               std::abs(color.blue() - expected.blue()) <= 5;
+    };
+    QVERIFY(near(captured.pixelColor(100, 100), QColor("#22bb66")));
+    QVERIFY(near(captured.pixelColor(10, 10), QColor("#cc2233")));
+    const QPoint inside = viewportSize.width() > viewportSize.height() ? QPoint(60, 100) : QPoint(100, 70);
+    QVERIFY(near(captured.pixelColor(inside), QColor("#22bb66")));
+    QVERIFY(near(captured.pixelColor(100, 155), QColor("#cc2233")));
 }
 
 class CefUiPause final : public CefTask {
@@ -744,6 +1286,81 @@ class CefIsolatedWorldProbe final : public CefTask, public CefDevToolsMessageObs
     IMPLEMENT_REFCOUNTING(CefIsolatedWorldProbe);
 };
 
+void CefHandlersTest::concurrentDownloadsKeepDistinctDestinations() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView first(&profile);
+    eden::engine::cef::CefEngineView second(&profile);
+    first.attach(&viewport);
+    second.attach(&viewport);
+    verifyConcurrentDownloads(profile, first, second);
+}
+
+void CefHandlersTest::ordinaryCookieHandoff() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.profileId = "cookie-test";
+    parameters.dataPath =
+        QString::fromStdString(eden::engine::cef::CefRuntime::instance().rootCachePath().string()) + "/cookie-test";
+    parameters.cachePath = parameters.dataPath;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    verifyOrdinaryCookieHandoff(view, profile, server.serverPort());
+}
+
+void CefHandlersTest::mediaConsentAndIndicators() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    QSignalSpy permissions(&view, &eden::engine::EngineView::permissionRequested);
+    connect(&view, &eden::engine::EngineView::permissionRequested, &view, [&view](const auto &request) {
+        view.resolvePermissionRequest(request.id, true);
+    });
+    view.load(QUrl(QString("http://127.0.0.1:%1/capture-guard").arg(server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("legacy:NotAllowedError"), 15000);
+    QCOMPARE(permissions.size(), 0);
+    QVERIFY(!view.isCapturing());
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 35));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("call-active"), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(view.isCapturing(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(view.activityIndicators().size(), 2, 5000);
+    QCOMPARE(view.activityIndicators().at(0).toMap().value("icon").toString(), QString("camera"));
+    QCOMPARE(view.activityIndicators().at(1).toMap().value("icon").toString(), QString("microphone"));
+    QCOMPARE(permissions.size(), 1);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 100));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("call-stopped"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view.isCapturing(), 5000);
+    QVERIFY(view.captureDescription().isEmpty());
+}
+
 void CefHandlersTest::credentialTargets() {
     AutofillPageServer server;
     QVERIFY(server.listen(QHostAddress::LocalHost));
@@ -765,6 +1382,10 @@ void CefHandlersTest::credentialTargets() {
         QTRY_VERIFY_WITH_TIMEOUT(result->load() != 0, 5000);
         QCOMPARE(result->load(), 1);
     });
+    if (!QTest::currentTestFailed()) {
+        verifyPersonalDataTargets(view, server.serverPort());
+        verifyCookieIsolation(view, profile, server.serverPort());
+    }
 }
 
 void CefHandlersTest::preservesFinalPaint_data() {
@@ -852,6 +1473,10 @@ static int differingPixels(const QImage &first, const QImage &second, const QRec
     return count;
 }
 
+extern "C" gchar *secret_password_lookup_sync(const SecretSchema *, GCancellable *, GError **, ...) {
+    return g_strdup(QByteArray(32, 'H').toBase64().constData());
+}
+
 void CefHandlersTest::initTestCase() {
     Q_INIT_RESOURCE(eden_ui_raw_res_0);
     QVERIFY(m_dataDirectory.isValid());
@@ -866,6 +1491,19 @@ void CefHandlersTest::initTestCase() {
     userDirectories.close();
     qputenv("HOME", m_environmentDirectory.path().toUtf8());
     qputenv("XDG_CONFIG_HOME", configDirectory.toUtf8());
+    qputenv("XDG_DATA_HOME", (m_environmentDirectory.path() + "/data").toUtf8());
+    qputenv("XDG_CACHE_HOME", (m_environmentDirectory.path() + "/cache").toUtf8());
+    bool encrypted = false;
+    QString encryptionError;
+    eden::core::EngineStorage::instance()->prepare(
+        eden::core::ProfilePaths::standardRoots(),
+        [&](const QString &error) {
+            encryptionError = error;
+            encrypted = true;
+        }
+    );
+    QTRY_VERIFY_WITH_TIMEOUT(encrypted, 40000);
+    QVERIFY2(encryptionError.isEmpty(), qPrintable(encryptionError));
     QQuickStyle::setStyle("Basic");
     qmlRegisterType<eden::core::WindowController>("Eden.Ui", 1, 0, "WindowController");
     qmlRegisterType<eden::core::WindowFrame>("Eden.Ui", 1, 0, "WindowFrame");
@@ -993,6 +1631,13 @@ void CefHandlersTest::handlerSuite() {
 
     QQuickItem *osrItem = viewport.childItems().isEmpty() ? nullptr : viewport.childItems().constFirst();
     QVERIFY(osrItem);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        window.grabWindow().pixelColor(
+            QPoint(qRound(5 * window.devicePixelRatio()), qRound(200 * window.devicePixelRatio()))
+        ),
+        QColor("#d8ead3"),
+        10000
+    );
     QTest::mouseMove(&window, QPoint(75, 370));
     QTRY_COMPARE_WITH_TIMEOUT(osrItem->cursor().shape(), Qt::PointingHandCursor, 5000);
     QTest::mouseMove(&window, QPoint(200, 430));
@@ -1099,6 +1744,16 @@ void CefHandlersTest::handlerSuite() {
     source.resolveDisplayCaptureRequest(windowCaptureInfo.id, "window");
     const QRegularExpression windowCaptureTitle("^Capture source window:([1-9][0-9]*):0 audio none$");
     QTRY_VERIFY_WITH_TIMEOUT(windowCaptureTitle.match(source.title()).hasMatch(), 10000);
+
+    QSignalSpy captureClosed(&source, &eden::engine::EngineView::displayCaptureRequestClosed);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(110, 495));
+    QTRY_COMPARE_WITH_TIMEOUT(displayCapture.size(), 3, 10000);
+    const auto staleCapture = displayCapture.at(2).constFirst().value<eden::engine::DisplayCaptureRequestInfo>();
+    source.reload();
+    QTRY_COMPARE_WITH_TIMEOUT(captureClosed.size(), 1, 10000);
+    QCOMPARE(captureClosed.constFirst().constFirst().toULongLong(), staleCapture.id);
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("E35 Main"), 10000);
+    source.resolveDisplayCaptureRequest(staleCapture.id, "window");
 
     QSignalSpy downloadStarted(&profile, &eden::engine::EngineProfile::downloadStarted);
     QSignalSpy downloadUpdated(&profile, &eden::engine::EngineProfile::downloadUpdated);
@@ -1278,7 +1933,13 @@ void CefHandlersTest::addressAutofill() {
     view.attach(&viewport);
     view.load(QUrl(QString("http://127.0.0.1:%1/address-form").arg(m_server.serverPort())));
     QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Address form"), 15000);
-    view.fillForm({{"email", "person@example.test"}, {"addressLine1", "12 Test Street"}, {"city", "Halifax"}});
+    auto target = std::make_shared<std::optional<eden::engine::AutofillTarget>>();
+    view.requestAutofillTarget([target](auto value) { *target = std::move(value); });
+    QTRY_VERIFY_WITH_TIMEOUT(target->has_value(), 5000);
+    view.fillForm(
+        target->value(),
+        {{"email", "person@example.test"}, {"addressLine1", "12 Test Street"}, {"city", "Halifax"}}
+    );
     QTRY_COMPARE_WITH_TIMEOUT(
         view.title(),
         QString("person@example.test|12 Test Street|Halifax:input,change,input,change,input,change"),
@@ -1320,6 +1981,115 @@ void CefHandlersTest::clipboardPermissions() {
     QTest::qWait(100);
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(QGuiApplication::clipboard()->text(), QString("Copied by user"), 5000);
+}
+
+class CefClipboardMessage final : public CefTask {
+  public:
+    CefClipboardMessage(QUrl url, QString token, QString text, bool begin, std::shared_ptr<std::atomic_bool> delivered)
+        : m_url(std::move(url)),
+          m_token(std::move(token)),
+          m_text(std::move(text)),
+          m_begin(begin),
+          m_delivered(std::move(delivered)) {}
+
+    void Execute() override {
+        for (int id = 1; id < 1000; ++id) {
+            const CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
+            const CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
+            if (!frame || frame->GetURL() != m_url.toString().toStdString()) {
+                continue;
+            }
+            const auto message = CefProcessMessage::Create(m_begin ? "eden_clipboard_begin" : "eden_clipboard_copy");
+            message->GetArgumentList()->SetString(0, m_token.toStdString());
+            if (!m_begin) {
+                message->GetArgumentList()->SetString(1, m_text.toStdString());
+            }
+            if (browser->GetHost()->GetClient()->OnProcessMessageReceived(browser, frame, PID_RENDERER, message)) {
+                eden::engine::cef::CefUiBridge::runOnUiThread([delivered = m_delivered] { delivered->store(true); });
+            }
+            return;
+        }
+    }
+
+  private:
+    QUrl m_url;
+    QString m_token;
+    QString m_text;
+    bool m_begin;
+    std::shared_ptr<std::atomic_bool> m_delivered;
+
+    IMPLEMENT_REFCOUNTING(CefClipboardMessage);
+};
+
+void CefHandlersTest::clipboardWrites_data() {
+    QTest::addColumn<bool>("devTools");
+    QTest::newRow("page") << false;
+    QTest::newRow("devtools") << true;
+}
+
+void CefHandlersTest::clipboardWrites() {
+    QFETCH(bool, devTools);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(700, 400);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    QVERIFY(x11);
+    XSetInputFocus(x11->display(), static_cast<Window>(window.winId()), RevertToParent, CurrentTime);
+    XSync(x11->display(), False);
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    QQuickItem inspected(window.contentItem());
+    inspected.setSize(QSizeF(10, 10));
+    eden::engine::cef::CefEngineView view(&profile);
+    const QUrl fixture(QString("http://127.0.0.1:%1/clipboard-writes?%2")
+                           .arg(m_server.serverPort())
+                           .arg(QString::fromLatin1(QTest::currentDataTag())));
+    if (devTools) {
+        view.attach(&inspected);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Clipboard ready"), 15000);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(QPoint(30, 180)), QColor("#438521"), 10000);
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    clipboard->setText("Initial clipboard");
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(120, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(clipboard->text(), QString("Blob text"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(120, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(clipboard->text(), QString("Plain text"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(140, 144));
+    QTRY_COMPARE_WITH_TIMEOUT(clipboard->text(), QString("Frame Blob text"), 5000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(120, 44));
+    QTRY_COMPARE_WITH_TIMEOUT(clipboard->text(), QString(), 5000);
+    const auto deliver = [&fixture](const QString &token, const QString &text, bool begin) {
+        auto delivered = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefClipboardMessage(fixture, token, text, begin, delivered)));
+        QTRY_VERIFY_WITH_TIMEOUT(delivered->load(), 5000);
+    };
+    deliver("first-frame:1", {}, true);
+    deliver("second-frame:1", {}, true);
+    deliver("second-frame:1", "Newer frame", false);
+    deliver("first-frame:1", "Older extraction", false);
+    QCOMPARE(clipboard->text(), QString("Newer frame"));
+    deliver("pending:1", {}, true);
+    clipboard->setText("External copy");
+    deliver("pending:1", "Older extraction", false);
+    QCOMPARE(clipboard->text(), QString("External copy"));
 }
 
 void CefHandlersTest::permissionDismissal() {
@@ -1465,6 +2235,239 @@ void CefHandlersTest::navigationEvents() {
     QCOMPARE(view.url(), QUrl("http://127.0.0.1:1/"));
 }
 
+void CefHandlersTest::garbageCollection_data() {
+    QTest::addColumn<QString>("workload");
+    for (const char *name : {"idle", "busy", "typing", "pointer", "navigation", "close", "subframe"}) {
+        QTest::newRow(name) << QString::fromLatin1(name);
+    }
+}
+
+void CefHandlersTest::garbageCollection() {
+#if EDEN_ENABLE_AUTOMATION
+    QFETCH(QString, workload);
+    using eden::core::PerformanceMetrics;
+    const quint64 sequence = PerformanceMetrics::sequence();
+    const auto collections = [sequence] {
+        int count = 0;
+        for (const QJsonValue &value : PerformanceMetrics::samplesAfter(sequence)) {
+            if (value.toObject().value("name") == "renderer.gc.request") {
+                ++count;
+            }
+        }
+        return count;
+    };
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(640, 420);
+    window.show();
+    window.requestActivate();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    auto view = std::make_unique<eden::engine::cef::CefEngineView>(&profile);
+    view->attach(&viewport);
+    const QString page = QString("http://127.0.0.1:%1/gc-page?").arg(m_server.serverPort());
+    if (workload == "subframe") {
+        view->load(QUrl(QString("http://127.0.0.1:%1/gc-frame").arg(m_server.serverPort())));
+    } else {
+        view->load(QUrl(page + (workload == "busy" || workload == "navigation" ? "busy" : "idle")));
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("GC ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view->isLoading(), 10000);
+    if (workload == "idle") {
+        QTRY_COMPARE_WITH_TIMEOUT(collections(), 1, 10000);
+    } else if (workload == "close") {
+        view.reset();
+        QTest::qWait(4500);
+        QCOMPARE(collections(), 0);
+        return;
+    } else if (workload == "typing" || workload == "pointer") {
+        if (workload == "typing") {
+            QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(120, 120));
+        }
+        for (int index = 0; index < 24; ++index) {
+            if (workload == "typing") {
+                QTest::keyClick(&window, Qt::Key_A);
+            } else {
+                QTest::mouseMove(&window, QPoint(200 + (index % 2) * 20, 200));
+            }
+            QTest::qWait(200);
+        }
+        QCOMPARE(collections(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(collections(), 1, 10000);
+    } else {
+        QTest::qWait(4800);
+        QCOMPARE(collections(), 0);
+        if (workload == "navigation") {
+            view->load(QUrl(page + "idle"));
+            QTRY_COMPARE_WITH_TIMEOUT(view->url(), QUrl(page + "idle"), 10000);
+            QTest::qWait(1800);
+            QCOMPARE(collections(), 0);
+        } else {
+            QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(80, 40));
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(collections(), 1, 10000);
+    }
+    QTest::qWait(3500);
+    QCOMPARE(collections(), 1);
+#else
+    QSKIP("Garbage collection diagnostics require automation support");
+#endif
+}
+
+void CefHandlersTest::garbageCollectionMemory() {
+#if EDEN_ENABLE_AUTOMATION
+    using eden::core::PerformanceMetrics;
+    const quint64 sequence = PerformanceMetrics::sequence();
+    const auto collections = [sequence] {
+        int count = 0;
+        for (const QJsonValue &value : PerformanceMetrics::samplesAfter(sequence)) {
+            if (value.toObject().value("name") == "renderer.gc.request") {
+                ++count;
+            }
+        }
+        return count;
+    };
+    const auto residentBytes = [](qint64 pid) -> qint64 {
+        QFile status(QString("/proc/%1/status").arg(pid));
+        if (!status.open(QIODevice::ReadOnly)) {
+            return -1;
+        }
+        const QList<QByteArray> lines = status.readAll().split('\n');
+        for (const QByteArray &line : lines) {
+            if (line.startsWith("VmRSS:")) {
+                bool valid = false;
+                const qint64 value = line.simplified().split(' ').value(1).toLongLong(&valid);
+                return valid ? value * 1024 : -1;
+            }
+        }
+        return -1;
+    };
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(640, 420);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/gc-page?memory").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("GC ready"), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(collections(), 1, 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(view.rendererProcessId() > 0, 10000);
+    const qint64 pid = view.rendererProcessId();
+    qint64 baseline = -1;
+    qint64 largestGrowth = 0;
+    for (int iteration = 0; iteration < 13; ++iteration) {
+        const int previousCollections = collections();
+        view.reload();
+        QTRY_COMPARE_WITH_TIMEOUT(collections(), previousCollections + 1, 15000);
+        QTest::qWait(1000);
+        QCOMPARE(view.rendererProcessId(), pid);
+        const qint64 rss = residentBytes(pid);
+        QVERIFY(rss > 0);
+        if (iteration == 2) {
+            baseline = rss;
+        } else if (iteration > 2) {
+            largestGrowth = std::max(largestGrowth, rss - baseline);
+            qInfo("GC reload %d resident bytes %lld growth bytes %lld", iteration - 2, rss, rss - baseline);
+        }
+    }
+    qInfo("GC baseline bytes %lld largest growth bytes %lld", baseline, largestGrowth);
+    QVERIFY2(largestGrowth <= 20 * 1024 * 1024, "Renderer memory grew more than 20 MiB after cleanup");
+#else
+    QSKIP("Garbage collection diagnostics require automation support");
+#endif
+}
+
+class CefPaintSequence final : public CefTask {
+  public:
+    CefPaintSequence(QString url, QList<QImage> frames, std::shared_ptr<std::atomic_int> result)
+        : m_url(std::move(url)),
+          m_frames(std::move(frames)),
+          m_result(std::move(result)) {}
+
+    void Execute() override {
+        for (int id = 1; id < 1000; ++id) {
+            const CefRefPtr<CefBrowser> browser = CefBrowserHost::GetBrowserByIdentifier(id);
+            if (!browser || !browser->GetMainFrame() || browser->GetMainFrame()->GetURL() != m_url.toStdString()) {
+                continue;
+            }
+            const CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            host->WasHidden(true);
+            const CefRefPtr<CefRenderHandler> handler = host->GetClient()->GetRenderHandler();
+            for (const QImage &image : m_frames) {
+                handler->OnPaint(
+                    browser,
+                    PET_VIEW,
+                    {CefRect(0, 0, 1, 1)},
+                    image.constBits(),
+                    image.width(),
+                    image.height()
+                );
+            }
+            m_result->store(1);
+            return;
+        }
+        m_result->store(-1);
+    }
+
+  private:
+    QString m_url;
+    QList<QImage> m_frames;
+    std::shared_ptr<std::atomic_int> m_result;
+
+    IMPLEMENT_REFCOUNTING(CefPaintSequence);
+};
+
+void CefHandlersTest::preservesPaintAcrossCoalescedResizes() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(128, 96);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    const QString page = QString("http://127.0.0.1:%1/gc-page?idle").arg(m_server.serverPort());
+    view.load(QUrl(page));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("GC ready"), 15000);
+    QTest::qWait(250);
+    const auto corner = [&window] {
+        const QImage image = window.grabWindow();
+        return image.isNull() ? QColor() : image.pixelColor((QPointF(100, 70) * window.devicePixelRatio()).toPoint());
+    };
+    QImage initial(64, 48, QImage::Format_ARGB32_Premultiplied);
+    initial.fill(QColor("#c02040"));
+    auto result = std::make_shared<std::atomic_int>(0);
+    QVERIFY(CefPostTask(TID_UI, new CefPaintSequence(page, {initial}, result)));
+    QTRY_COMPARE_WITH_TIMEOUT(result->load(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(corner(), QColor("#c02040"), 10000);
+    QImage intermediate(32, 24, QImage::Format_ARGB32_Premultiplied);
+    intermediate.fill(QColor("#208040"));
+    QImage final(64, 48, QImage::Format_ARGB32_Premultiplied);
+    final.fill(QColor("#2040a0"));
+    result = std::make_shared<std::atomic_int>(0);
+    QVERIFY(CefPostTask(TID_UI, new CefPaintSequence(page, {intermediate, final}, result)));
+    QDeadlineTimer deadline(5000);
+    while (result->load() == 0 && !deadline.hasExpired()) {
+        QThread::msleep(1);
+    }
+    QCOMPARE(result->load(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(corner(), QColor("#2040a0"), 10000);
+}
+
 void CefHandlersTest::resizeStress() {
     eden::engine::EngineProfileParameters privateParameters;
     privateParameters.backend = eden::engine::Backend::Cef;
@@ -1505,8 +2508,12 @@ void CefHandlersTest::resizeStress() {
     QTest::qWait(250);
     const QImage screenshot = window.grabWindow();
     QVERIFY(!screenshot.isNull());
-    QCOMPARE(screenshot.size(), QSize(1000, 700));
-    QVERIFY(screenshot.pixelColor(430, 220) != screenshot.pixelColor(10, 10));
+    const qreal scale = window.devicePixelRatio();
+    QCOMPARE(screenshot.size(), (QSizeF(window.size()) * scale).toSize());
+    QVERIFY(
+        screenshot.pixelColor((QPointF(430, 220) * scale).toPoint()) !=
+        screenshot.pixelColor((QPointF(10, 10) * scale).toPoint())
+    );
 }
 
 void CefHandlersTest::devToolsSuite() {
@@ -1579,6 +2586,144 @@ void CefHandlersTest::devToolsSuite() {
     QVERIFY(!source.devToolsOpen());
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
     QVERIFY(!eden::engine::cef::sharedDevToolsSocketServer()->isListening());
+}
+
+void CefHandlersTest::shellCallIndicators() {
+    AutofillPageServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QQmlApplicationEngine qmlEngine;
+    m_applicationContext->profiles()->setQmlEngine(&qmlEngine);
+    qmlEngine.rootContext()->setContextProperty("startupPrivateWindow", true);
+    qmlEngine.rootContext()->setContextProperty("startupEngineName", QString("cef"));
+    qmlEngine.loadFromModule("Eden.Ui", "BrowserWindow");
+    QTRY_COMPARE_WITH_TIMEOUT(qmlEngine.rootObjects().size(), 1, 10000);
+    auto *window = qobject_cast<QQuickWindow *>(qmlEngine.rootObjects().constFirst());
+    QVERIFY(window);
+    window->resize(1100, 750);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto *controller = window->findChild<eden::core::WindowController *>("windowController");
+    QVERIFY(controller);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    controller->initialize(harness.context, true, "cef", false);
+    controller->newTab(QUrl(QString("http://127.0.0.1:%1/capture-guard").arg(server.serverPort())), false, "cef");
+    auto *view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(view);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("legacy:NotAllowedError"), 15000);
+    QQuickItem *viewport = nullptr;
+    std::function<void(QQuickItem *)> findViewport = [&](QQuickItem *item) {
+        if (item->objectName() == "tabViewport" && item->isVisible()) {
+            viewport = item;
+        }
+        for (auto *child : item->childItems()) {
+            findViewport(child);
+        }
+    };
+    findViewport(window->contentItem());
+    QVERIFY(viewport);
+    QTest::mouseClick(window, Qt::LeftButton, {}, viewport->mapToScene(QPointF(80, 35)).toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(!controller->permissionRequest().isEmpty(), 10000);
+    controller->resolvePermissionRequest(true);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("call-active"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        controller->tabPreview(controller->activeIndex()).value("activityIndicators").toList().size(),
+        2,
+        5000
+    );
+    QObject *preview = nullptr;
+    for (auto *candidate : window->findChildren<QObject *>()) {
+        if (QString::fromLatin1(candidate->metaObject()->className()).startsWith("TabPreview_QMLTYPE") &&
+            candidate->property("tabIndex").toInt() == controller->activeIndex()) {
+            preview = candidate;
+            break;
+        }
+    }
+    QVERIFY(preview);
+    QVERIFY(QMetaObject::invokeMethod(preview, "open"));
+    QTRY_VERIFY(preview->property("opened").toBool());
+    QCOMPARE(preview->property("previewData").toMap().value("activityIndicators").toList().size(), 2);
+    QTest::qWait(250);
+    QVERIFY(window->grabWindow().save("/tmp/eden-work-tab-preview.png"));
+    QVERIFY(QMetaObject::invokeMethod(preview, "close"));
+    QTest::mouseClick(window, Qt::LeftButton, {}, viewport->mapToScene(QPointF(80, 100)).toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("call-stopped"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view->isCapturing(), 5000);
+    QVERIFY(controller->tabPreview(controller->activeIndex()).value("activityIndicators").toList().isEmpty());
+    window->close();
+}
+
+void CefHandlersTest::shellFullscreen() {
+    QQmlApplicationEngine qmlEngine;
+    m_applicationContext->profiles()->setQmlEngine(&qmlEngine);
+    qmlEngine.rootContext()->setContextProperty("startupPrivateWindow", true);
+    qmlEngine.rootContext()->setContextProperty("startupEngineName", QString("cef"));
+    qmlEngine.loadFromModule("Eden.Ui", "BrowserWindow");
+    QTRY_COMPARE_WITH_TIMEOUT(qmlEngine.rootObjects().size(), 1, 10000);
+    auto *window = qobject_cast<QQuickWindow *>(qmlEngine.rootObjects().constFirst());
+    QVERIFY(window);
+    QTRY_VERIFY_WITH_TIMEOUT(window->isVisible(), 10000);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto *controller = window->findChild<eden::core::WindowController *>("windowController");
+    QVERIFY(controller);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    controller->initialize(harness.context, true, "cef", false);
+    controller->newTab(QUrl(QString("http://127.0.0.1:%1/fullscreen").arg(m_server.serverPort())), false, "cef");
+    eden::engine::EngineView *view = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+            return view;
+        })(),
+        10000
+    );
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("fullscreen-ready"), 10000);
+    const QPoint pagePoint(window->width() / 2, window->height() / 2);
+    QVERIFY(view->containsPageScenePoint(pagePoint));
+    if (QCoreApplication::arguments().contains("--engine-compositing=windowed")) {
+        QLibrary xtest("Xtst", 6);
+        using FakeButton = int (*)(Display *, unsigned int, int, unsigned long);
+        const auto fakeButton = reinterpret_cast<FakeButton>(xtest.resolve("XTestFakeButtonEvent"));
+        QVERIFY(fakeButton);
+        auto *x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+        QVERIFY(x11);
+        Display *display = x11->display();
+        XWarpPointer(display, 0, window->winId(), 0, 0, 0, 0, pagePoint.x(), pagePoint.y());
+        QVERIFY(fakeButton(display, 1, true, 0));
+        QVERIFY(fakeButton(display, 1, false, 0));
+        XFlush(display);
+    } else {
+        QTest::mouseClick(window, Qt::LeftButton, {}, pagePoint);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(controller->contentFullscreen(), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("fullscreen-active"), 10000);
+    QCOMPARE(controller->fullscreenOrigin(), QString("http://127.0.0.1:%1").arg(m_server.serverPort()));
+    auto *notice = window->findChild<QQuickItem *>("fullscreenNotice");
+    QVERIFY(notice);
+    QVERIFY(notice->isVisible());
+    QCOMPARE(notice->height(), 48.0);
+    QTRY_VERIFY_WITH_TIMEOUT(!view->containsPageScenePoint(notice->mapToScene(QPointF(20, 20))), 5000);
+    QQuickItem *exitButton = nullptr;
+    for (QQuickItem *candidate : window->findChildren<QQuickItem *>()) {
+        if (candidate->property("text").toString() == "Exit fullscreen" && candidate->isVisible()) {
+            exitButton = candidate;
+            break;
+        }
+    }
+    QVERIFY(exitButton);
+    const QImage fullscreen = window->grabWindow();
+    QVERIFY(!fullscreen.isNull());
+    const QString screenshotPath = qEnvironmentVariable("EDEN_FULLSCREEN_SCREENSHOT");
+    if (!screenshotPath.isEmpty()) {
+        QVERIFY(fullscreen.save(screenshotPath));
+    }
+    const QPoint exitPoint =
+        exitButton->mapToScene(QPointF(exitButton->width() / 2, exitButton->height() / 2)).toPoint();
+    QTest::mouseClick(window, Qt::LeftButton, {}, exitPoint);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller->contentFullscreen(), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("fullscreen-exited"), 10000);
+    QVERIFY(!notice->isVisible());
+    window->close();
 }
 
 void CefHandlersTest::shellDevToolsSuite() {
@@ -1693,7 +2838,13 @@ void CefHandlersTest::shellDevToolsSuite() {
 }
 
 void CefHandlersTest::cleanupTestCase() {
+    eden::engine::EngineFactory::shutdown();
     eden::engine::cef::CefRuntime::instance().shutdown();
+    eden::core::EngineStorage::instance()->shutdown();
+    const auto roots = eden::core::ProfilePaths::standardRoots();
+    for (const auto &path : {roots.dataRoot + "/engine-data", roots.cacheRoot + "/profiles"}) {
+        QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    }
 }
 
 int main(int argc, char *argv[]) {

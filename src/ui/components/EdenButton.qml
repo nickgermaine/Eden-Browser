@@ -36,15 +36,14 @@ T.Button {
             }
 
             Text {
+                textFormat: Text.PlainText
                 visible: control.text.length > 0
                 text: control.text
                 color: control.enabled ? Theme.surfaceText : Theme.disabledText
                 font: Theme.labelFont
                 anchors.verticalCenter: parent.verticalCenter
             }
-
         }
-
     }
 
     background: Rectangle {
@@ -57,9 +56,6 @@ T.Button {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutCubic
             }
-
         }
-
     }
-
 }

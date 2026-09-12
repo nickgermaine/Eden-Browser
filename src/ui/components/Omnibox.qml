@@ -7,8 +7,9 @@ Rectangle {
 
     required property var controller
     property var engine: controller.currentEngine
+    readonly property var editor: controller.omnibox ? controller.omnibox.editor : null
 
-    signal securityRequested()
+    signal securityRequested
 
     implicitHeight: 40
     radius: Math.min(Theme.controlRadius, height / 2)
@@ -43,63 +44,53 @@ Rectangle {
         rightPadding: 8
         placeholderText: "Search or enter address"
         selectByMouse: true
-        text: omnibox.controller.displayUrl
+        Component.onCompleted: text = omnibox.controller.displayUrl
         onPressed: {
-            if (omnibox.engine)
+            if (omnibox.engine) {
                 omnibox.engine.releaseFocus();
-
+            }
         }
+        Accessible.name: "Search or enter address"
+        inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+        maximumLength: 65536
         onActiveFocusChanged: {
+            if (!omnibox.editor) {
+                return;
+            }
             if (activeFocus) {
-                omnibox.controller.omnibox.query = "";
-                text = omnibox.controller.currentUrl.toString();
-                selectAll();
+                omnibox.editor.begin(omnibox.controller.currentUrl.toString());
             } else {
-                text = omnibox.controller.displayUrl;
-                cursorPosition = 0;
-                deselect();
-            }
-        }
-        onTextEdited: {
-            suggestions.currentIndex = 0;
-            omnibox.controller.omnibox.query = text;
-        }
-        Keys.onPressed: (event) => {
-            if (event.key === Qt.Key_Down) {
-                suggestions.currentIndex = Math.min(suggestions.count - 1, suggestions.currentIndex + 1);
-                event.accepted = true;
-            } else if (event.key === Qt.Key_Up) {
-                suggestions.currentIndex = Math.max(0, suggestions.currentIndex - 1);
-                event.accepted = true;
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                if ((event.modifiers & Qt.ControlModifier) !== 0)
-                    omnibox.controller.navigateText(text, true);
-                else if (suggestions.count > 0)
-                    omnibox.controller.activateSuggestion(Math.max(0, suggestions.currentIndex));
-                else
-                    omnibox.controller.navigateText(text, false);
-                field.focus = false;
-                event.accepted = true;
-            } else if (event.key === Qt.Key_Escape) {
-                field.focus = false;
-                event.accepted = true;
+                omnibox.editor.finish(omnibox.controller.displayUrl);
             }
         }
 
-        background: Item {
-        }
-
+        background: Item {}
     }
 
-    Text {
-        x: field.x + field.cursorRectangle.x + field.cursorRectangle.width
-        anchors.verticalCenter: field.verticalCenter
-        width: Math.max(0, bookmarkButton.x - x - 8)
-        visible: field.activeFocus && suggestions.currentIndex === 0 && field.cursorPosition === field.length && field.selectionStart === field.selectionEnd && omnibox.controller.omnibox.query === field.text && text.length > 0
-        text: omnibox.controller.omnibox ? omnibox.controller.omnibox.completionSuffix : ""
-        color: Theme.completionHint
-        font: Theme.bodyFont
-        elide: Text.ElideRight
+    Binding {
+        target: omnibox.editor
+        property: "input"
+        value: field
+    }
+
+    Connections {
+        function onStateChanged() {
+            suggestionPopup.visible = field.activeFocus && omnibox.editor.popupOpen;
+        }
+
+        function onNavigationRequested(url) {
+            omnibox.controller.navigate(url);
+        }
+
+        function onTabRequested(index) {
+            omnibox.controller.activeIndex = index;
+        }
+
+        function onEditingFinished() {
+            field.focus = false;
+        }
+
+        target: omnibox.editor
     }
 
     EdenButton {
@@ -138,8 +129,9 @@ Rectangle {
         }
 
         function onFocusOmniboxRequested() {
-            if (omnibox.engine)
+            if (omnibox.engine) {
                 omnibox.engine.releaseFocus();
+            }
 
             field.forceActiveFocus();
             field.selectAll();
@@ -179,6 +171,7 @@ Rectangle {
                 spacing: 8
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: omnibox.controller.credentialPrompt.mode === "update" ? "Update saved password?" : "Save password?"
                     color: Theme.surfaceText
@@ -186,6 +179,7 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: omnibox.controller.credentialPrompt.site || ""
                     color: Theme.surfaceVariantText
@@ -229,7 +223,6 @@ Rectangle {
                         Accessible.name: credentialPopup.passwordRevealed ? "Hide password" : "Show password"
                         onClicked: credentialPopup.passwordRevealed = !credentialPopup.passwordRevealed
                     }
-
                 }
 
                 Row {
@@ -251,12 +244,11 @@ Rectangle {
                             credentialPopup.close();
                         }
                     }
-
                 }
-
             }
 
             Text {
+                textFormat: Text.PlainText
                 visible: omnibox.controller.autofillSuggestions.length > 0
                 text: "Auto-fill"
                 color: Theme.surfaceText
@@ -282,6 +274,7 @@ Rectangle {
                         anchors.rightMargin: 10
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: modelData.title || ""
                             color: Theme.surfaceText
@@ -290,13 +283,13 @@ Rectangle {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: modelData.subtitle || ""
                             color: Theme.surfaceVariantText
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
-
                     }
 
                     HoverHandler {
@@ -311,13 +304,9 @@ Rectangle {
                             credentialPopup.close();
                         }
                     }
-
                 }
-
             }
-
         }
-
     }
 
     Popup {
@@ -329,9 +318,14 @@ Rectangle {
         y: omnibox.height + 4
         width: omnibox.width
         height: Math.min(420, suggestions.contentHeight + 12)
-        visible: suggestions.count > 0
+        objectName: "omniboxSuggestions"
         focus: false
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        closePolicy: Popup.CloseOnPressOutside
+        onClosed: {
+            if (omnibox.editor) {
+                omnibox.editor.dismiss();
+            }
+        }
         padding: 6
 
         background: OverlaySurface {
@@ -341,10 +335,12 @@ Rectangle {
         contentItem: ListView {
             id: suggestions
 
+            objectName: "omniboxSuggestionList"
+
             model: omnibox.controller.omnibox
-            currentIndex: 0
+            currentIndex: omnibox.editor ? omnibox.editor.selectedIndex : -1
             clip: true
-            onCountChanged: currentIndex = count > 0 ? 0 : -1
+            onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
 
             delegate: Rectangle {
                 id: suggestion
@@ -353,6 +349,11 @@ Rectangle {
                 required property string title
                 required property url url
                 required property string kind
+
+                Accessible.role: Accessible.ListItem
+                Accessible.name: suggestion.title + ", " + suggestion.url.toString()
+                Accessible.selected: suggestions.currentIndex === index
+                Accessible.onPressAction: omnibox.editor.activate(suggestion.index)
 
                 width: suggestions.width
                 height: 48
@@ -369,7 +370,7 @@ Rectangle {
                         id: suggestionIcon
 
                         anchors.verticalCenter: parent.verticalCenter
-                        name: suggestion.kind === "tab" ? "window" : suggestion.kind === "bookmark" ? "bookmark-circle" : suggestion.kind === "history" ? "history" : "search"
+                        name: suggestion.kind === "tab" ? "window" : suggestion.kind === "bookmark" ? "bookmark-circle" : suggestion.kind === "history" ? "history" : suggestion.kind === "url" ? "globe" : "search"
                     }
 
                     Column {
@@ -377,6 +378,7 @@ Rectangle {
                         width: parent.width - suggestionIcon.width - parent.spacing
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: suggestion.title
                             color: Theme.surfaceText
@@ -385,45 +387,32 @@ Rectangle {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: suggestion.url.toString()
                             color: Theme.surfaceVariantText
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
-
                     }
-
                 }
 
                 HoverHandler {
                     id: hover
 
-                    onHoveredChanged: {
-                        if (hovered)
-                            suggestions.currentIndex = suggestion.index;
-
-                    }
+                    cursorShape: Qt.PointingHandCursor
                 }
 
                 TapHandler {
-                    onTapped: {
-                        field.focus = false;
-                        omnibox.controller.activateSuggestion(suggestion.index);
-                    }
+                    onTapped: omnibox.editor.activate(suggestion.index)
                 }
-
             }
-
         }
-
     }
 
     Behavior on color {
         ColorAnimation {
             duration: Theme.shortDuration
         }
-
     }
-
 }

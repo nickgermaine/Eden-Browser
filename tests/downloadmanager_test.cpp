@@ -1,6 +1,10 @@
 #include "core/downloads/downloadmanager.h"
 #include "engine/engineprofile.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QtTest>
 
 class DownloadTestProfile final : public eden::engine::EngineProfile {
@@ -35,7 +39,32 @@ class DownloadManagerTest final : public QObject {
     void separatesNativeIdentifiersAcrossProfiles();
     void keepsNativeIdentifiersStableWithinProfile();
     void preservesFullWidthIdentifiers();
+    void reservesAndReleasesDestinationsAcrossBackends();
 };
+
+void DownloadManagerTest::reservesAndReleasesDestinationsAcrossBackends() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DownloadTestProfile cef;
+    DownloadTestProfile qt(eden::engine::Backend::QtWebEngine);
+    const QString existing = directory.filePath("report.txt");
+    QFile file(existing);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("preserve"), qint64(8));
+    file.close();
+    auto first = cef.reserveDownloadPath(directory.path(), "report.txt");
+    auto second = qt.reserveDownloadPath(directory.path() + "/unused/..", "report.txt");
+    QCOMPARE(QFileInfo(*first).fileName(), QString("report (1).txt"));
+    QCOMPARE(QFileInfo(*second).fileName(), QString("report (2).txt"));
+    const QString released = *first;
+    first.reset();
+    auto reused = qt.reserveDownloadPath(directory.path(), "report.txt");
+    QCOMPARE(*reused, released);
+    const auto sanitized = cef.reserveDownloadPath(directory.path(), "../../report.txt");
+    QCOMPARE(QFileInfo(*sanitized).absolutePath(), directory.path());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArray("preserve"));
+}
 
 static void connectDownloads(DownloadTestProfile &profile, eden::core::DownloadManager &downloads) {
     QObject::connect(

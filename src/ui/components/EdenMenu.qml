@@ -27,7 +27,7 @@ Popup {
     function toggle() {
         if (opened) {
             close();
-            return ;
+            return;
         }
         tryOpen();
     }
@@ -93,9 +93,7 @@ Popup {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Row {
@@ -120,6 +118,7 @@ Popup {
                     spacing: 2
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: menuItem.actionTitle
                         color: menuItem.actionEnabled ? Theme.surfaceText : Theme.disabledText
@@ -128,6 +127,7 @@ Popup {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: menuItem.subtitle.length > 0
                         text: menuItem.subtitle
@@ -136,7 +136,6 @@ Popup {
                         font.pixelSize: 11
                         elide: Text.ElideMiddle
                     }
-
                 }
 
                 Icon {
@@ -145,7 +144,6 @@ Popup {
                     name: "arrow-right"
                     color: menuItem.actionEnabled ? Theme.iconColor : Theme.disabledIconColor
                 }
-
             }
 
             HoverHandler {
@@ -161,14 +159,13 @@ Popup {
                 onTapped: {
                     if (menuItem.hasChildren) {
                         childMenu.open();
-                        return ;
+                        return;
                     }
                     const rootMenu = menu;
                     const actionId = menuItem.modelData.id;
                     rootMenu.triggered(actionId);
                     if (rootMenu)
                         rootMenu.close();
-
                 }
             }
 
@@ -238,6 +235,7 @@ Popup {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0))
                                 text: childItem.actionTitle
@@ -252,7 +250,6 @@ Popup {
                                 name: childItem.trailingIconName
                                 iconSize: 16
                             }
-
                         }
 
                         HoverHandler {
@@ -275,18 +272,11 @@ Popup {
 
                                 if (rootMenu)
                                     rootMenu.close();
-
                             }
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }

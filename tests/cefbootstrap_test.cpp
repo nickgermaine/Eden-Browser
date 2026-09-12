@@ -144,7 +144,7 @@ void CefBootstrapTest::privateContextSettingsAreInMemory() {
 void CefBootstrapTest::runtimeCreatesIsolatedProfiles() {
     QTemporaryDir temporaryDirectory;
     QVERIFY(temporaryDirectory.isValid());
-    QByteArray executable = QCoreApplication::applicationFilePath().toLocal8Bit();
+    QByteArray executable = "eden-cef-bootstrap-tests";
     QByteArray noSandbox = "--no-sandbox";
     QByteArray ozonePlatform = "--ozone-platform=x11";
     char *arguments[] = {executable.data(), noSandbox.data(), ozonePlatform.data()};
@@ -154,7 +154,7 @@ void CefBootstrapTest::runtimeCreatesIsolatedProfiles() {
         eden::engine::EngineProfileParameters normalParameters;
         normalParameters.profileId = QStringLiteral("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
         normalParameters.backend = eden::engine::Backend::Cef;
-        normalParameters.dataPath = temporaryDirectory.path() + "/profiles/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        normalParameters.dataPath = temporaryDirectory.path() + "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         eden::engine::EngineProfileParameters privateParameters;
         privateParameters.backend = eden::engine::Backend::Cef;
         privateParameters.privateProfile = true;

@@ -32,6 +32,7 @@ Item {
             spacing: 20
 
             Text {
+                textFormat: Text.PlainText
                 text: "Appearance"
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
@@ -53,12 +54,14 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Startup and new tabs"
                         color: Theme.surfaceText
                         font: Theme.titleFont
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "Your home page opens when there are no tabs to restore."
                         color: Theme.surfaceVariantText
@@ -73,11 +76,11 @@ Item {
                         onTextEdited: {
                             if (page.profileSettings)
                                 page.profileSettings.homePageUrl = text;
-
                         }
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "New tabs open"
                         color: Theme.surfaceText
                         font: Theme.labelFont
@@ -93,7 +96,6 @@ Item {
                             onClicked: {
                                 if (page.profileSettings)
                                     page.profileSettings.newTabBehavior = "new-tab-page";
-
                             }
                         }
 
@@ -103,7 +105,6 @@ Item {
                             onClicked: {
                                 if (page.profileSettings)
                                     page.profileSettings.newTabBehavior = "home-page";
-
                             }
                         }
 
@@ -113,10 +114,8 @@ Item {
                             onClicked: {
                                 if (page.profileSettings)
                                     page.profileSettings.newTabBehavior = "custom-url";
-
                             }
                         }
-
                     }
 
                     EdenTextField {
@@ -127,11 +126,11 @@ Item {
                         onTextEdited: {
                             if (page.profileSettings)
                                 page.profileSettings.newTabUrl = text;
-
                         }
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: page.profileSettings && page.profileSettings.newTabBehavior === "custom-url"
                         text: "Changes save automatically for this profile."
@@ -139,9 +138,7 @@ Item {
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -158,6 +155,7 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Color scheme"
                         color: Theme.surfaceText
                         font: Theme.titleFont
@@ -177,13 +175,9 @@ Item {
                                 iconName: Settings.theme === modelData ? "check" : ""
                                 onClicked: Settings.theme = modelData
                             }
-
                         }
-
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -200,6 +194,7 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Tab layout"
                         color: Theme.surfaceText
                         font: Theme.titleFont
@@ -214,7 +209,6 @@ Item {
                             onClicked: {
                                 if (page.profileSettings)
                                     page.profileSettings.tabLayout = "horizontal";
-
                             }
                         }
 
@@ -224,14 +218,10 @@ Item {
                             onClicked: {
                                 if (page.profileSettings)
                                     page.profileSettings.tabLayout = "sidebar";
-
                             }
                         }
-
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -248,12 +238,14 @@ Item {
                     spacing: 12
 
                     Text {
+                        textFormat: Text.PlainText
                         text: "Theme"
                         color: Theme.surfaceText
                         font: Theme.titleFont
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "Every preview is drawn from the theme file itself, in the current color scheme."
                         color: Theme.surfaceVariantText
@@ -277,9 +269,7 @@ Item {
                                 width: (themeGrid.width - (themeGrid.cardColumns - 1) * themeGrid.spacing) / themeGrid.cardColumns
                                 onActivated: Themes.activateTheme(themeId)
                             }
-
                         }
-
                     }
 
                     Row {
@@ -299,10 +289,10 @@ Item {
                             text: "Reload themes"
                             onClicked: Themes.refresh()
                         }
-
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: "Theme folder: " + Themes.themeDirectory
                         color: Theme.surfaceVariantText
@@ -311,6 +301,7 @@ Item {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: Themes.lastError.length > 0
                         text: Themes.lastError
@@ -318,13 +309,8 @@ Item {
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }

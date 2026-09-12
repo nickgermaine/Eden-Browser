@@ -39,6 +39,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
 #include <QQuickWindow>
@@ -279,6 +280,11 @@ namespace eden::core {
         : QObject(parent),
           m_shortcuts(std::make_unique<ShortcutRegistry>()) {
         connect(this, &WindowController::currentEngineChanged, this, &WindowController::currentUrlChanged);
+        connect(this, &WindowController::currentEngineChanged, this, [this] {
+            if (m_contentFullscreen && (!m_fullscreenEngine || m_fullscreenEngine != currentEngine())) {
+                exitContentFullscreen();
+            }
+        });
         connect(m_shortcuts.get(), &ShortcutRegistry::commandTriggered, this, [this](const QString &command) {
             executeCommand(command);
         });
@@ -293,9 +299,12 @@ namespace eden::core {
         m_previewCaptureClock.start();
         m_previewCaptureTimer.setSingleShot(true);
         connect(&m_previewCaptureTimer, &QTimer::timeout, this, [this] {
-            const int index = m_tabs ? m_tabs->indexForTabId(m_pendingPreviewTabId) : -1;
-            if (index >= 0) {
-                captureTabPreview(index);
+            const QSet<quint64> pending = std::exchange(m_pendingPreviewTabIds, {});
+            for (quint64 tabId : pending) {
+                const int index = m_tabs ? m_tabs->indexForTabId(tabId) : -1;
+                if (index >= 0) {
+                    captureTabPreview(index);
+                }
             }
         });
     }
@@ -521,13 +530,27 @@ namespace eden::core {
         const QString &engineName,
         bool createInitialTab
     ) {
-        if (m_initialized || !context) {
+        if (m_initialized || !context || context->activate() != ProfileError::None) {
             return;
         }
         m_initialized = true;
         m_context = context;
         m_privateWindow = privateWindow;
-        context->activate();
+        connect(context->settings(), &ProfileSettings::errorChanged, this, [this] {
+            if (m_context->settings()->error() != ProfileError::None) {
+                emit transientMessageRequested(m_context->settings()->errorMessage());
+            }
+        });
+        connect(context->sessions(), &SessionStore::errorChanged, this, [this] {
+            if (m_context->sessions()->error() != ProfileError::None) {
+                emit transientMessageRequested(m_context->sessions()->errorMessage());
+            }
+        });
+        connect(context->history(), &HistoryStore::errorChanged, this, [this] {
+            if (m_context->history()->error() != ProfileError::None) {
+                emit transientMessageRequested(profileErrorMessage(m_context->history()->error()));
+            }
+        });
         engine::EngineRegistry *registry = engine::EngineRegistry::instance();
         const QString requestedEngineName = engineName.isEmpty() ? context->settings()->defaultEngine() : engineName;
         const std::optional<engine::Backend> requestedBackend = registry->backendForId(requestedEngineName);
@@ -633,6 +656,7 @@ namespace eden::core {
             );
         });
         m_thumbnailCache = std::make_unique<ThumbnailCache>();
+        m_thumbnailCache->registerProvider(qmlEngine(this));
         m_devToolsPaneWidth = SettingsStore::instance()->devToolsPaneWidth();
         m_devToolsPaneHeight = SettingsStore::instance()->devToolsPaneHeight();
         emit devToolsPaneSizeChanged();
@@ -684,6 +708,17 @@ namespace eden::core {
                 resolveFileDialog(false);
             }
         });
+        connect(
+            m_tabs.get(),
+            &QAbstractItemModel::dataChanged,
+            this,
+            [this](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
+                if (roles.isEmpty() || roles.contains(TabModel::ActivityIndicatorsRole)) {
+                    ++m_tabPreviewRevision;
+                    emit tabPreviewRevisionChanged();
+                }
+            }
+        );
         connect(m_tabs.get(), &TabModel::operationOccurred, this, [this] { scheduleSessionSave(); });
         connect(m_tabs.get(), &TabModel::tabMoved, this, [this](int from, int to) {
             int nextActiveIndex = m_activeIndex;
@@ -769,6 +804,8 @@ namespace eden::core {
                 }
                 for (int row = first; row <= last; ++row) {
                     m_previewCaptureTimes.remove(m_tabs->tabIdAt(row));
+                    m_pendingPreviewTabIds.remove(m_tabs->tabIdAt(row));
+                    m_previewCapturesInFlight.remove(m_tabs->tabIdAt(row));
                     m_thumbnailCache->remove(m_tabs->tabIdAt(row));
                 }
                 ++m_tabPreviewRevision;
@@ -800,17 +837,6 @@ namespace eden::core {
         if (m_activeIndex == index) {
             return;
         }
-        if (m_activeIndex >= 0) {
-            captureTabPreview(m_activeIndex);
-        }
-        if (index >= 0) {
-            m_tabs->ensureEngine(index);
-        }
-        dismissPageContextMenu();
-        resolveJavaScriptDialog(false);
-        dismissPermissionRequest();
-        resolveDisplayCaptureRequest();
-        resolveFileDialog(false);
         if (qEnvironmentVariableIsSet("EDEN_PERF") && m_window) {
             const auto started = std::chrono::steady_clock::now();
             auto connection = std::make_shared<QMetaObject::Connection>();
@@ -824,6 +850,17 @@ namespace eden::core {
                 qInfo("EDEN_PERF tabswitch.input_to_frame_ms=%.3f", milliseconds);
             });
         }
+        if (m_activeIndex >= 0) {
+            captureTabPreview(m_activeIndex);
+        }
+        if (index >= 0) {
+            m_tabs->ensureEngine(index);
+        }
+        dismissPageContextMenu();
+        resolveJavaScriptDialog(false);
+        dismissPermissionRequest();
+        resolveDisplayCaptureRequest();
+        resolveFileDialog(false);
         m_activeIndex = index;
         emit activeIndexChanged();
         emit currentEngineChanged();
@@ -962,6 +999,7 @@ namespace eden::core {
         );
         preview.insert("favicon", m_tabs->data(modelIndex, TabModel::FaviconRole));
         preview.insert("engine", m_tabs->data(modelIndex, TabModel::EngineNameRole));
+        preview.insert("activityIndicators", m_tabs->data(modelIndex, TabModel::ActivityIndicatorsRole));
         const bool discarded = m_tabs->isDiscarded(index);
         const bool internal = !m_tabs->data(modelIndex, TabModel::InternalPageRole).toString().isEmpty();
         if (discarded) {
@@ -1017,50 +1055,72 @@ namespace eden::core {
             return;
         }
         const quint64 tabId = m_tabs->tabIdAt(index);
-        m_thumbnailCache->putMetadata(tabId, tabPreviewMetadata(index, true));
-        ++m_tabPreviewRevision;
-        emit tabPreviewRevisionChanged();
-        engine::EngineView *view = m_tabs->engineViewAt(index);
-        if (!view || !(view->capabilities() & engine::EngineView::ThumbnailCapture)) {
-            captureInternalPagePreview(index);
+        if (m_previewCapturesInFlight.contains(tabId)) {
+            m_pendingPreviewTabIds.insert(tabId);
             return;
         }
         constexpr qint64 captureIntervalMs = 2000;
         const qint64 now = m_previewCaptureClock.elapsed();
         const qint64 elapsed = now - m_previewCaptureTimes.value(tabId, -captureIntervalMs);
         if (elapsed < captureIntervalMs) {
-            m_pendingPreviewTabId = tabId;
-            m_previewCaptureTimer.start(static_cast<int>(captureIntervalMs - elapsed));
+            m_pendingPreviewTabIds.insert(tabId);
+            const int remaining = static_cast<int>(captureIntervalMs - elapsed);
+            if (!m_previewCaptureTimer.isActive() || m_previewCaptureTimer.remainingTime() > remaining) {
+                m_previewCaptureTimer.start(remaining);
+            }
+            return;
+        }
+        engine::EngineView *view = m_tabs->engineViewAt(index);
+        const bool internal = !m_tabs->data(m_tabs->index(index), TabModel::InternalPageRole).toString().isEmpty();
+        if (!internal && (!view || !(view->capabilities() & engine::EngineView::ThumbnailCapture))) {
+            m_pendingPreviewTabIds.remove(tabId);
             return;
         }
         m_previewCaptureTimes.insert(tabId, now);
+        m_previewCapturesInFlight.insert(tabId);
+        m_pendingPreviewTabIds.remove(tabId);
+        const QUrl url = m_tabs->data(m_tabs->index(index), TabModel::UrlRole).toUrl();
+        const QPointer<engine::EngineView> capturedView(view);
         QPointer<WindowController> guard(this);
         const auto started = std::chrono::steady_clock::now();
-        view->requestThumbnail(QSize(420, 236), [guard, tabId, started](const QImage &image) {
-            if (!guard || !guard->m_tabs || !guard->m_thumbnailCache || guard->m_tabs->indexForTabId(tabId) < 0) {
+        auto completed = [guard, tabId, url, capturedView, started](const QImage &image) {
+            if (!guard || !guard->m_tabs || !guard->m_thumbnailCache) {
                 return;
             }
+            guard->m_previewCapturesInFlight.remove(tabId);
             const int index = guard->m_tabs->indexForTabId(tabId);
-            guard->m_thumbnailCache->putMetadata(tabId, guard->tabPreviewMetadata(index, true));
-            guard->m_thumbnailCache->putImage(tabId, image);
-            ++guard->m_tabPreviewRevision;
-            emit guard->tabPreviewRevisionChanged();
+            if (index < 0) {
+                return;
+            }
+            if (!image.isNull() && guard->m_tabs->engineViewAt(index) == capturedView &&
+                guard->m_tabs->data(guard->m_tabs->index(index), TabModel::UrlRole).toUrl() == url) {
+                guard->m_thumbnailCache->putMetadata(tabId, guard->tabPreviewMetadata(index, false));
+                if (guard->m_thumbnailCache->putImage(tabId, image)) {
+                    ++guard->m_tabPreviewRevision;
+                    emit guard->tabPreviewRevisionChanged();
+                }
+            }
             if (qEnvironmentVariableIsSet("EDEN_PERF")) {
                 const double milliseconds =
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
                 qInfo("EDEN_PERF preview.capture_ms=%.3f", milliseconds);
             }
-        });
+            if (guard->m_pendingPreviewTabIds.contains(tabId)) {
+                guard->captureTabPreview(index);
+            }
+        };
+        if (internal) {
+            captureInternalPagePreview(index, std::move(completed));
+        } else {
+            view->requestThumbnail(QSize(420, 236), std::move(completed));
+        }
     }
 
-    void WindowController::captureInternalPagePreview(int index) {
-        if (!m_window || !m_tabs || !m_thumbnailCache || index < 0 || index >= m_tabs->rowCount()) {
+    void WindowController::captureInternalPagePreview(int index, engine::EngineView::ThumbnailCallback callback) {
+        if (!m_window || !m_tabs || index < 0 || index >= m_tabs->rowCount()) {
+            callback({});
             return;
         }
-        if (m_tabs->data(m_tabs->index(index), TabModel::InternalPageRole).toString().isEmpty()) {
-            return;
-        }
-        const quint64 tabId = m_tabs->tabIdAt(index);
         QList<QQuickItem *> delegates;
         std::function<void(QQuickItem *)> collect = [&collect, &delegates](QQuickItem *item) {
             if (!item) {
@@ -1082,20 +1142,15 @@ namespace eden::core {
             }
             QSharedPointer<QQuickItemGrabResult> grab = delegate->grabToImage(QSize(420, 236));
             if (!grab) {
-                return;
+                break;
             }
-            QPointer<WindowController> guard(this);
-            connect(grab.get(), &QQuickItemGrabResult::ready, this, [guard, grab, tabId]() mutable {
-                if (guard && guard->m_thumbnailCache && guard->m_tabs && !grab->image().isNull() &&
-                    guard->m_tabs->indexForTabId(tabId) >= 0) {
-                    guard->m_thumbnailCache->putImage(tabId, grab->image());
-                    ++guard->m_tabPreviewRevision;
-                    emit guard->tabPreviewRevisionChanged();
-                }
+            connect(grab.get(), &QQuickItemGrabResult::ready, this, [grab, callback = std::move(callback)]() mutable {
+                callback(grab->image());
                 grab.clear();
             });
             return;
         }
+        callback({});
     }
 
     int WindowController::newTabAndFocusOmnibox() {
@@ -1152,14 +1207,27 @@ namespace eden::core {
 
     void WindowController::navigateText(const QString &text, bool controlEnter) {
         if (m_omnibox) {
-            navigate(m_omnibox->destination(text, controlEnter));
+            const QUrl url = m_omnibox->destination(text, controlEnter);
+            if (url.isEmpty() || !url.isValid()) {
+                return;
+            }
+            navigate(url);
             m_omnibox->setQuery({});
         }
     }
 
     void WindowController::activateSuggestion(int row) {
         if (m_omnibox) {
-            navigate(m_omnibox->suggestionUrl(row));
+            const QUrl url = m_omnibox->suggestionUrl(row);
+            if (url.isEmpty() || !url.isValid()) {
+                return;
+            }
+            const int tab = m_omnibox->suggestionTabIndex(row);
+            if (tab >= 0) {
+                setActiveIndex(tab);
+            } else {
+                navigate(url);
+            }
             m_omnibox->setQuery({});
         }
     }
@@ -1751,6 +1819,13 @@ namespace eden::core {
             registry->normalWindowCountForProfile(m_context->idString()) > 0) {
             m_context->saveSessionNow();
         }
+        if (m_tabs) {
+            for (int row = 0; row < m_tabs->rowCount(); ++row) {
+                if (engine::EngineView *view = m_tabs->engineViewAt(row)) {
+                    view->attach(nullptr);
+                }
+            }
+        }
     }
 
     void WindowController::closeWindowNow() {
@@ -1918,18 +1993,34 @@ namespace eden::core {
     }
 
     void WindowController::fillSavedForm(qint64 id) {
-        auto *vault = qobject_cast<passwords::CredentialVault *>(credentialVault());
         auto *view = qobject_cast<engine::EngineView *>(currentEngine());
-        if (!vault || !view || id <= 0) {
+        if (!view || view->isLoading() || id <= 0) {
             return;
         }
-        for (const QVariant &item : vault->formProfiles()) {
-            const QVariantMap profile = item.toMap();
-            if (profile.value("id").toLongLong() == id) {
-                view->fillForm(profile);
+        const QUrl expectedOrigin = engine::autofillOrigin(view->url());
+        if (expectedOrigin.isEmpty()) {
+            return;
+        }
+        const QPointer<WindowController> guard(this);
+        const QPointer<engine::EngineView> targetView(view);
+        view->requestAutofillTarget([guard, targetView, expectedOrigin, id](engine::AutofillTarget target) {
+            if (!guard || !targetView || targetView != guard->currentEngine() || targetView->isLoading() ||
+                !target.isValid() || target.origin != expectedOrigin ||
+                engine::autofillOrigin(targetView->url()) != expectedOrigin) {
                 return;
             }
-        }
+            auto *vault = qobject_cast<passwords::CredentialVault *>(guard->credentialVault());
+            if (!vault || !vault->available()) {
+                return;
+            }
+            for (const QVariant &item : vault->formProfiles()) {
+                const QVariantMap profile = item.toMap();
+                if (profile.value("id").toLongLong() == id) {
+                    targetView->fillForm(target, profile);
+                    return;
+                }
+            }
+        });
     }
 
     void WindowController::fillAutofillSuggestion(const QString &id) {
@@ -2142,14 +2233,6 @@ namespace eden::core {
         const bool accepted = source == "window" || source == "screen";
         QPointer<engine::EngineView> engine = m_displayCaptureRequestEngine;
         const quint64 id = m_displayCaptureRequest.value("id").toULongLong();
-        const QVariantMap request = m_displayCaptureRequest;
-        if (accepted && !m_privateWindow && m_context && m_context->permissions()) {
-            const QUrl origin = request.value("origin").toUrl();
-            m_context->permissions()->setPermission(origin, "screen sharing", true);
-            if (request.value("audioRequested").toBool() && source == "screen") {
-                m_context->permissions()->setPermission(origin, "screen audio", true);
-            }
-        }
         m_displayCaptureRequest.clear();
         m_displayCaptureRequestEngine.clear();
         emit displayCaptureRequestChanged();
@@ -2276,6 +2359,9 @@ namespace eden::core {
             }
         });
         connect(view, &engine::EngineView::loadingChanged, this, [this, view] {
+            if (m_fullscreenEngine == view && view->isLoading()) {
+                exitContentFullscreen();
+            }
             if (!m_privateWindow && !view->isLoading() && history()) {
                 history()->recordVisit(view->url(), view->title());
             }
@@ -2289,6 +2375,9 @@ namespace eden::core {
             }
         });
         connect(view, &engine::EngineView::urlChanged, this, [this, view] {
+            if (m_fullscreenEngine == view) {
+                exitContentFullscreen();
+            }
             const auto pending = m_pendingCredentialUsernames.constFind(view);
             if (pending != m_pendingCredentialUsernames.cend()) {
                 QUrl origin = view->url();
@@ -2382,8 +2471,16 @@ namespace eden::core {
             m_shortcuts->execute(command);
         });
         connect(view, &engine::EngineView::fullscreenRequested, this, [this, view](bool fullscreen) {
-            if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
-                setContentFullscreen(fullscreen);
+            if (fullscreen && view == qobject_cast<engine::EngineView *>(currentEngine()) && m_window) {
+                m_fullscreenEngine = view;
+                const QUrl origin = engine::autofillOrigin(view->url());
+                m_fullscreenOrigin =
+                    origin.isEmpty() ? QStringLiteral("Local or embedded content") : origin.toDisplayString();
+                setContentFullscreen(true);
+            } else if (!fullscreen && m_fullscreenEngine == view) {
+                setContentFullscreen(false);
+            } else if (fullscreen) {
+                view->exitFullscreen();
             }
         });
         connect(
@@ -2698,6 +2795,18 @@ namespace eden::core {
         }
     }
 
+    QString WindowController::fullscreenOrigin() const {
+        return m_fullscreenOrigin;
+    }
+
+    void WindowController::exitContentFullscreen() {
+        QPointer<engine::EngineView> view = m_fullscreenEngine;
+        setContentFullscreen(false);
+        if (view) {
+            view->exitFullscreen();
+        }
+    }
+
     void WindowController::setContentFullscreen(bool fullscreen) {
         if (m_contentFullscreen == fullscreen || !m_window) {
             return;
@@ -2706,10 +2815,16 @@ namespace eden::core {
         if (fullscreen) {
             m_visibilityBeforeContentFullscreen = static_cast<int>(m_window->visibility());
             m_window->showFullScreen();
+        } else if (m_visibilityBeforeContentFullscreen == static_cast<int>(QWindow::FullScreen)) {
+            m_window->showFullScreen();
         } else if (m_visibilityBeforeContentFullscreen == static_cast<int>(QWindow::Maximized)) {
             m_window->showMaximized();
         } else {
             m_window->showNormal();
+        }
+        if (!fullscreen) {
+            m_fullscreenEngine.clear();
+            m_fullscreenOrigin.clear();
         }
         emit contentFullscreenChanged();
     }

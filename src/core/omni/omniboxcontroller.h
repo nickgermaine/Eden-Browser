@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "core/omni/omniboxinput.h"
+
 class QNetworkReply;
 
 namespace eden::core {
@@ -19,6 +21,7 @@ namespace eden::core {
         Q_OBJECT
         Q_PROPERTY(QString query READ query WRITE setQuery NOTIFY queryChanged)
         Q_PROPERTY(QString completionSuffix READ completionSuffix NOTIFY completionSuffixChanged)
+        Q_PROPERTY(OmniboxInput *editor READ editor CONSTANT)
 
       public:
         enum Role { TitleRole = Qt::UserRole + 1, UrlRole, KindRole, ScoreRole };
@@ -28,8 +31,10 @@ namespace eden::core {
             HistoryStore *history,
             BookmarkStore *bookmarks,
             ProfileSettings *settings = nullptr,
-            QObject *parent = nullptr
+            QObject *parent = nullptr,
+            QNetworkAccessManager *network = nullptr
         );
+        ~OmniboxController() override;
 
         int rowCount(const QModelIndex &parent = {}) const override;
         QVariant data(const QModelIndex &index, int role) const override;
@@ -37,9 +42,15 @@ namespace eden::core {
 
         QString query() const;
         QString completionSuffix() const;
+        OmniboxInput *editor() const;
         void setQuery(const QString &query);
+        void updateQuery(const QString &query, bool allowCompletion);
         Q_INVOKABLE QUrl destination(const QString &text, bool controlEnter = false) const;
         Q_INVOKABLE QUrl suggestionUrl(int row) const;
+        QString suggestionText(int row) const;
+        int suggestionTabIndex(int row) const;
+        QUrl searchDestination(const QString &text) const;
+        static QUrl directUrl(const QString &text);
 
       signals:
         void queryChanged();
@@ -53,10 +64,13 @@ namespace eden::core {
             QUrl url;
             QString kind;
             int score;
+            quint64 tabId = 0;
+            QString completion;
         };
 
         static int fuzzyScore(const QString &needle, const QString &haystack);
-        static void sortAndLimit(QList<Suggestion> &suggestions);
+        static void sortSuggestions(QList<Suggestion> &suggestions);
+        static QString completionFor(const QString &query, const QUrl &url);
         void rebuildLocalSuggestions();
         void cancelRemoteSuggestions();
         bool queryEligibleForRemoteSuggestions(const QString &query) const;
@@ -66,7 +80,6 @@ namespace eden::core {
         void requestRemoteSuggestions();
         void applyRemoteSuggestions(const QByteArray &payload, quint64 generation);
         void replaceSuggestions(QList<Suggestion> suggestions, const QString &query);
-        void clearCompletionSuffix();
         void updateCompletionSuffix();
 
         QString searchEngineName() const;
@@ -77,15 +90,18 @@ namespace eden::core {
         HistoryStore *m_history;
         BookmarkStore *m_bookmarks;
         ProfileSettings *m_settings;
+        OmniboxInput *m_editor;
         QString m_query;
         QString m_suggestionsQuery;
         QString m_completionSuffix;
         QList<Suggestion> m_suggestions;
+        QList<Suggestion> m_remoteSuggestions;
         QTimer m_localTimer;
         QTimer m_remoteTimer;
-        QNetworkAccessManager m_network;
+        QNetworkAccessManager *m_network;
         QPointer<QNetworkReply> m_remoteReply;
         quint64 m_generation = 0;
+        bool m_allowCompletion = true;
     };
 
 }

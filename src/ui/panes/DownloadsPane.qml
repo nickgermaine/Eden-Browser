@@ -22,6 +22,7 @@ Rectangle {
         height: 52
 
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: "Downloads"
@@ -42,9 +43,7 @@ Rectangle {
                 iconName: "close"
                 onClicked: pane.controller.openPane = ""
             }
-
         }
-
     }
 
     ListView {
@@ -73,6 +72,7 @@ Rectangle {
             color: "transparent"
 
             Text {
+                textFormat: Text.PlainText
                 anchors.left: parent.left
                 anchors.right: actions.left
                 anchors.rightMargin: 8
@@ -84,6 +84,7 @@ Rectangle {
             }
 
             Text {
+                textFormat: Text.PlainText
                 anchors.left: parent.left
                 anchors.bottom: parent.bottom
                 text: downloadState
@@ -106,7 +107,6 @@ Rectangle {
                     radius: Math.min(Theme.controlRadius, height / 2)
                     color: Theme.primary
                 }
-
             }
 
             Row {
@@ -128,19 +128,16 @@ Rectangle {
                     Accessible.name: "View in folder"
                     onClicked: pane.controller.downloads.showInFolder(targetPath)
                 }
-
             }
-
         }
-
     }
 
     Text {
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         visible: downloadsView.count === 0
         text: "No downloads yet"
         color: Theme.surfaceVariantText
         font: Theme.bodyFont
     }
-
 }

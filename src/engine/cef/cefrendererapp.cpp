@@ -1,6 +1,8 @@
 #include "engine/cef/cefrendererapp.h"
+#include "engine/mediaactivityscript.h"
 
 #include <cstdlib>
+#include <ctime>
 
 #include "include/cef_command_line.h"
 #include "include/cef_v8.h"
@@ -19,6 +21,17 @@ namespace eden::engine::cef {
             CefRefPtr<CefV8Value> &returnValue,
             CefString &exception
         ) override {
+            if (name == "finishDisplayCapture" && arguments.size() == 1 && arguments[0]->IsInt()) {
+                const CefRefPtr<CefV8Context> context = CefV8Context::GetCurrentContext();
+                const CefRefPtr<CefFrame> frame = context ? context->GetFrame() : nullptr;
+                if (frame) {
+                    const CefRefPtr<CefProcessMessage> message =
+                        CefProcessMessage::Create("eden_display_capture_finished");
+                    message->GetArgumentList()->SetInt(0, arguments[0]->GetIntValue());
+                    frame->SendProcessMessage(PID_BROWSER, message);
+                }
+                return true;
+            }
             if (name != "requestDisplayCapture" || arguments.size() != 1 || !arguments[0]->IsBool()) {
                 exception = "Invalid display capture request";
                 return true;
@@ -39,16 +52,43 @@ namespace eden::engine::cef {
 
     namespace {
 
-        class ClipboardReportHandler final : public CefV8Handler {
+        class MediaActivityHandler final : public CefV8Handler {
           public:
             bool Execute(
-                const CefString &name,
+                const CefString &,
                 CefRefPtr<CefV8Value>,
                 const CefV8ValueList &arguments,
                 CefRefPtr<CefV8Value> &,
                 CefString &
             ) override {
-                if (name != "reportCopy" || arguments.size() != 1 || !arguments[0]->IsString()) {
+                const auto context = CefV8Context::GetCurrentContext();
+                const auto frame = context ? context->GetFrame() : nullptr;
+                if (!frame || !context->IsSame(frame->GetV8Context()) || arguments.size() != 1 ||
+                    !arguments[0]->IsInt()) {
+                    return false;
+                }
+                const auto message = CefProcessMessage::Create("eden_media_activity");
+                message->GetArgumentList()->SetInt(0, arguments[0]->GetIntValue() & 15);
+                frame->SendProcessMessage(PID_BROWSER, message);
+                return true;
+            }
+            IMPLEMENT_REFCOUNTING(MediaActivityHandler);
+        };
+
+        class ClipboardReportHandler final : public CefV8Handler {
+          public:
+            explicit ClipboardReportHandler(std::string documentId)
+                : m_documentId(std::move(documentId)) {}
+
+            bool Execute(
+                const CefString &name,
+                CefRefPtr<CefV8Value>,
+                const CefV8ValueList &arguments,
+                CefRefPtr<CefV8Value> &returnValue,
+                CefString &
+            ) override {
+                if (name != "reportCopy" || arguments.size() > 2 || (!arguments.empty() && !arguments[0]->IsString()) ||
+                    (arguments.size() == 2 && !arguments[1]->IsString())) {
                     return false;
                 }
                 CefRefPtr<CefV8Context> context = CefV8Context::GetCurrentContext();
@@ -56,13 +96,28 @@ namespace eden::engine::cef {
                 if (!frame) {
                     return true;
                 }
-                CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_clipboard_copy");
-                message->GetArgumentList()->SetString(0, arguments[0]->GetStringValue());
+                CefRefPtr<CefProcessMessage> message;
+                if (arguments.empty()) {
+                    const std::string token = m_documentId + ":" + std::to_string(++m_nextOperation);
+                    message = CefProcessMessage::Create("eden_clipboard_begin");
+                    message->GetArgumentList()->SetString(0, token);
+                    returnValue = CefV8Value::CreateString(token);
+                } else {
+                    message = CefProcessMessage::Create("eden_clipboard_copy");
+                    message->GetArgumentList()->SetString(
+                        0,
+                        arguments.size() == 2 ? arguments[0]->GetStringValue() : CefString()
+                    );
+                    message->GetArgumentList()->SetString(1, arguments.back()->GetStringValue());
+                }
                 frame->SendProcessMessage(PID_BROWSER, message);
                 return true;
             }
 
           private:
+            std::string m_documentId;
+            uint64_t m_nextOperation = 0;
+
             IMPLEMENT_REFCOUNTING(ClipboardReportHandler);
         };
 
@@ -162,14 +217,19 @@ if (navigator.clipboard) {
             } catch (error) { return reject(error); }
             var pending = write(snapshot);
             then(pending, function(){
+                if (!snapshot.length) { return; }
+                var token;
+                try { token = report(); } catch (error) { return; }
                 if (!getItemType || !blobText) { return; }
-                for (var index = 0; index < snapshot.length; ++index) {
-                    try {
-                        then(getItemType(snapshot[index], 'text/plain'), function(blob){
-                            try { then(blobText(blob), forward, function(){}); } catch (error) {}
-                        }, function(){});
-                    } catch (error) {}
-                }
+                try {
+                    then(getItemType(snapshot[0], 'text/plain'), function(blob){
+                        try {
+                            then(blobText(blob), function(text){
+                                try { report(token, textValue(text)); } catch (error) {}
+                            }, function(){});
+                        } catch (error) {}
+                    }, function(){});
+                } catch (error) {}
             }, function(){});
             return pending;
         };
@@ -318,12 +378,17 @@ window.addEventListener('blur', clearField);
 
         constexpr const char *kDisplayCaptureHookScript = R"JS((function(){
 var requestDisplayCapture = window.__edenRequestDisplayCapture;
+var finishDisplayCapture = window.__edenFinishDisplayCapture;
+var portalCapture = window.__edenPortalCapture === true;
 delete window.__edenRequestDisplayCapture;
+delete window.__edenFinishDisplayCapture;
+delete window.__edenPortalCapture;
 var mediaDevices = navigator.mediaDevices;
 if (!requestDisplayCapture || !mediaDevices ||
     typeof mediaDevices.getDisplayMedia !== 'function') {
     return;
 }
+
 var nativeGetDisplayMedia = mediaDevices.getDisplayMedia.bind(mediaDevices);
 var delegatedSourceId = function(){
     var values = new Uint32Array(1);
@@ -332,41 +397,66 @@ var delegatedSourceId = function(){
     }
     return String(values[0] || Math.floor(Date.now() % 2147483646) + 1);
 };
-var windowConstraints = function(requested){
-    var constraints = requested && typeof requested === 'object' ? Object.assign({}, requested) : {};
-    constraints.mandatory = Object.assign({}, constraints.mandatory || {}, {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: 'window:' + delegatedSourceId() + ':0'
+var snapshotConstraints = function(requested, audio){
+    var constraints = {};
+    if (!requested || typeof requested !== 'object') { return constraints; }
+    if (requested.advanced !== undefined) { throw new TypeError('Display capture does not support advanced constraints'); }
+    (audio ? Object.keys(requested) : ['width', 'height', 'frameRate', 'aspectRatio', 'resizeMode', 'displaySurface', 'cursor', 'logicalSurface']).forEach(function(key){
+        var value = requested[key];
+        if (value && typeof value === 'object') {
+            if (value.min !== undefined || value.exact !== undefined) {
+                throw new TypeError('Display capture does not support min or exact constraints');
+            }
+            value = Object.assign({}, value);
+            if (Array.isArray(value.ideal)) { value.ideal = value.ideal.slice(); }
+        }
+        if (value !== undefined) { constraints[key] = value; }
     });
-    delete constraints.displaySurface;
-    delete constraints.monitorTypeSurfaces;
-    delete constraints.preferCurrentTab;
-    delete constraints.selfBrowserSurface;
-    delete constraints.surfaceSwitching;
-    delete constraints.systemAudio;
     return constraints;
 };
-var captureWindow = function(options){
+var captureDesktop = function(source, video){
     if (typeof mediaDevices.getUserMedia !== 'function') {
         return Promise.reject(new DOMException('Window capture is unavailable.', 'NotSupportedError'));
     }
-    var video = options.video === undefined ? true : options.video;
-    if (video === false) {
-        return Promise.reject(new TypeError('Display capture requires video'));
-    }
-    return mediaDevices.getUserMedia({
-        audio: false,
-        video: windowConstraints(video)
+    return mediaDevices.getUserMedia({audio: false, video: {mandatory: {
+        chromeMediaSource: 'desktop', chromeMediaSourceId: source + ':' + delegatedSourceId() + ':0'
+    }}}).then(function(stream){
+        return Promise.all(stream.getVideoTracks().map(function(track){
+            return Promise.resolve().then(function(){ return track.applyConstraints(video); });
+        })).then(function(){ return stream; }, function(error){
+            stream.getTracks().forEach(function(track){ track.stop(); });
+            throw error;
+        });
     });
 };
 var getDisplayMedia = function(options){
-    var requestOptions = options && typeof options === 'object' ? options : {};
-    var audioRequested = Boolean(requestOptions.audio);
-    return requestDisplayCapture(audioRequested).then(function(source){
+    var requestOptions;
+    var video;
+    try {
+        requestOptions = options && typeof options === 'object' ? Object.assign({}, options) : {};
+        if (requestOptions.video === false) { throw new TypeError('Display capture requires video'); }
+        video = snapshotConstraints(requestOptions.video);
+        if (requestOptions.video && typeof requestOptions.video === 'object') { requestOptions.video = video; }
+        if (requestOptions.audio && typeof requestOptions.audio === 'object') {
+            requestOptions.audio = snapshotConstraints(requestOptions.audio, true);
+        }
+        if (!navigator.userActivation || !navigator.userActivation.isActive || !document.hasFocus()) {
+            throw new DOMException('Display capture requires an active user gesture in a focused document.', 'InvalidStateError');
+        }
+        var policy = document.permissionsPolicy || document.featurePolicy;
+        if (policy && !policy.allowsFeature('display-capture')) {
+            throw new DOMException('Display capture is blocked by this document policy.', 'NotAllowedError');
+        }
+    } catch (error) { return Promise.reject(error); }
+    return requestDisplayCapture(Boolean(requestOptions.audio)).then(function(choice){
+        var source = choice.source;
         if (source !== 'window' && source !== 'screen') {
             throw new DOMException('The display capture request was cancelled.', 'NotAllowedError');
         }
-        return source === 'window' ? captureWindow(requestOptions) : nativeGetDisplayMedia(requestOptions);
+        return Promise.resolve().then(function(){
+            if (source === 'screen' && !portalCapture) { return nativeGetDisplayMedia(requestOptions); }
+            return captureDesktop(source, video);
+        }).finally(function(){ finishDisplayCapture(choice.id); });
     }, function(){
         throw new DOMException('The display capture request was cancelled.', 'NotAllowedError');
     });
@@ -383,6 +473,23 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
 
     CefRefPtr<CefRenderProcessHandler> CefRendererApp::GetRenderProcessHandler() {
         return this;
+    }
+
+    void
+    CefRendererApp::OnFocusedNodeChanged(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, CefRefPtr<CefDOMNode> node) {
+        if (!frame) {
+            return;
+        }
+        const bool editable = node && node->IsEditable();
+        CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("eden_text_input_state");
+        CefRefPtr<CefListValue> values = message->GetArgumentList();
+        values->SetBool(0, editable);
+        values->SetBool(
+            1,
+            editable && node->IsFormControlElement() &&
+                node->GetFormControlElementType() == DOM_FORM_CONTROL_TYPE_INPUT_PASSWORD
+        );
+        frame->SendProcessMessage(PID_BROWSER, message);
     }
 
     void CefRendererApp::OnContextCreated(
@@ -410,11 +517,19 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
             clientMessage->GetArgumentList()->SetInt(0, std::atoi(clientId.c_str()));
             frame->SendProcessMessage(PID_BROWSER, clientMessage);
         }
-        context->GetGlobal()->SetValue(
-            "__edenReportCopy",
-            CefV8Value::CreateFunction("reportCopy", new ClipboardReportHandler()),
-            V8_PROPERTY_ATTRIBUTE_DONTENUM
-        );
+        const bool mainWorld = context->IsSame(frame->GetV8Context());
+        if (mainWorld) {
+            context->GetGlobal()->SetValue(
+                "__edenReportCopy",
+                CefV8Value::CreateFunction(
+                    "reportCopy",
+                    new ClipboardReportHandler(
+                        frame->GetIdentifier().ToString() + ":" + std::to_string(++m_nextClipboardDocumentId)
+                    )
+                ),
+                V8_PROPERTY_ATTRIBUTE_DONTENUM
+            );
+        }
         CefRefPtr<FormReportHandler> formHandler = new FormReportHandler();
         context->GetGlobal()->SetValue(
             "__edenReportCredential",
@@ -427,13 +542,37 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
             V8_PROPERTY_ATTRIBUTE_DONTENUM
         );
         context->GetGlobal()->SetValue(
+            "__edenFinishDisplayCapture",
+            CefV8Value::CreateFunction("finishDisplayCapture", new DisplayCaptureRequestHandler(this)),
+            V8_PROPERTY_ATTRIBUTE_DONTENUM
+        );
+        context->GetGlobal()->SetValue(
             "__edenRequestDisplayCapture",
             CefV8Value::CreateFunction("requestDisplayCapture", new DisplayCaptureRequestHandler(this)),
             V8_PROPERTY_ATTRIBUTE_DONTENUM
         );
-        frame->ExecuteJavaScript(kClipboardHookScript, frame->GetURL(), 0);
+        if (mainWorld) {
+            frame->ExecuteJavaScript(kClipboardHookScript, frame->GetURL(), 0);
+        }
         frame->ExecuteJavaScript(kFormHookScript, frame->GetURL(), 0);
-        frame->ExecuteJavaScript(kDisplayCaptureHookScript, frame->GetURL(), 0);
+        if (mainWorld) {
+            const char *waylandDisplay = std::getenv("WAYLAND_DISPLAY");
+            context->GetGlobal()->SetValue(
+                "__edenPortalCapture",
+                CefV8Value::CreateBool(waylandDisplay && *waylandDisplay),
+                V8_PROPERTY_ATTRIBUTE_DONTENUM
+            );
+            frame->ExecuteJavaScript(kDisplayCaptureHookScript, frame->GetURL(), 0);
+            context->GetGlobal()->SetValue(
+                "__edenMediaActivity",
+                CefV8Value::CreateFunction("mediaActivity", new MediaActivityHandler()),
+                V8_PROPERTY_ATTRIBUTE_DONTENUM
+            );
+            const std::string script =
+                std::string("(function(){const report=window.__edenMediaActivity;delete window.__edenMediaActivity;") +
+                mediaActivityScript + "(report);})();";
+            frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+        }
     }
 
     void CefRendererApp::OnContextReleased(
@@ -462,8 +601,31 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
         CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
+        if (browser && frame && message && sourceProcess == PID_BROWSER && message->GetName() == "eden_gc_sample") {
+            const CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+            if (!frame->IsMain() || arguments->GetSize() != 1 || arguments->GetType(0) != VTYPE_STRING) {
+                return true;
+            }
+            const CefRefPtr<CefProcessMessage> response = CefProcessMessage::Create("eden_gc_sample");
+            const CefRefPtr<CefListValue> values = response->GetArgumentList();
+            values->SetString(0, arguments->GetString(0));
+            const auto document = m_autofillDocuments.find(frame->GetIdentifier().ToString());
+            const CefRefPtr<CefV8Context> context = frame->GetV8Context();
+            timespec cpu{};
+            timespec wall{};
+            if (document != m_autofillDocuments.end() && context && context->IsValid() &&
+                document->second.context->IsSame(context) && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu) == 0 &&
+                clock_gettime(CLOCK_MONOTONIC, &wall) == 0) {
+                values->SetString(1, document->second.id);
+                values->SetDouble(2, double(cpu.tv_sec) + double(cpu.tv_nsec) / 1000000000.0);
+                values->SetDouble(3, double(wall.tv_sec) + double(wall.tv_nsec) / 1000000000.0);
+            }
+            frame->SendProcessMessage(PID_BROWSER, response);
+            return true;
+        }
         if (browser && frame && message && sourceProcess == PID_BROWSER &&
-            (message->GetName() == "eden_get_autofill_target" || message->GetName() == "eden_fill_credential")) {
+            (message->GetName() == "eden_get_autofill_target" || message->GetName() == "eden_fill_credential" ||
+             message->GetName() == "eden_fill_form")) {
             const auto document = m_autofillDocuments.find(frame->GetIdentifier().ToString());
             const CefRefPtr<CefV8Context> current = frame->GetV8Context();
             const bool valid = frame->IsMain() && document != m_autofillDocuments.end() && current &&
@@ -507,7 +669,10 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
             return true;
         }
         if (source == "window" || source == "screen") {
-            pending.promise->ResolvePromise(CefV8Value::CreateString(source));
+            const CefRefPtr<CefV8Value> choice = CefV8Value::CreateObject(nullptr, nullptr);
+            choice->SetValue("source", CefV8Value::CreateString(source), V8_PROPERTY_ATTRIBUTE_NONE);
+            choice->SetValue("id", CefV8Value::CreateInt(requestId), V8_PROPERTY_ATTRIBUTE_NONE);
+            pending.promise->ResolvePromise(choice);
         } else {
             pending.promise->RejectPromise("The display capture request was cancelled");
         }

@@ -47,6 +47,9 @@ namespace eden::engine::cef {
 
     void
     CefApplication::OnBeforeCommandLineProcessing(const CefString &processType, CefRefPtr<CefCommandLine> commandLine) {
+        if (processType.empty()) {
+            commandLine->AppendSwitch("no-first-run");
+        }
         const bool osr = commandLine->GetSwitchValue("engine-compositing") != "windowed";
         const bool sharedTextureProbe = qEnvironmentVariableIntValue("EDEN_CEF_SHARED_TEXTURE_PROBE") == 1;
         const bool wayland = qEnvironmentVariable("QT_QPA_PLATFORM") == "wayland";

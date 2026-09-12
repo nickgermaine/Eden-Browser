@@ -51,15 +51,18 @@ namespace eden::engine {
         void findInPage(const QString &text, FindFlags flags) override;
         void attach(QQuickItem *viewport) override;
         void releaseFocus() override;
+        void exitFullscreen() override;
         void setMuted(bool muted) override;
         void executeContextMenuCommand(const QString &command) override;
         void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
         void requestAutofillTarget(AutofillTargetCallback callback) override;
         void fillCredential(const AutofillTarget &target, const QString &username, const QString &password) override;
-        void fillForm(const QVariantMap &fields) override;
+        void fillForm(const AutofillTarget &target, const QVariantMap &fields) override;
         void resolvePermissionRequest(quint64 id, bool allowed) override;
         void dismissPermissionRequest(quint64 id) override;
 
+        Q_INVOKABLE void handleMediaActivity(const QString &message);
+        Q_INVOKABLE void clearMediaActivity();
         Q_INVOKABLE void handleNewWindow(QObject *requestObject);
         Q_INVOKABLE void handleFullScreen(bool fullscreen);
         Q_INVOKABLE void handleContextMenu(
@@ -71,7 +74,6 @@ namespace eden::engine {
         );
         Q_INVOKABLE void handleCertificateError();
         Q_INVOKABLE void handlePermission(const QVariant &permissionValue);
-        Q_INVOKABLE void handleJavaScriptConsoleMessage(const QString &message);
         Q_INVOKABLE void handleAutofillTarget(const QString &requestId, const QVariant &result);
 
       private slots:
@@ -79,6 +81,17 @@ namespace eden::engine {
 
       private:
         friend class QtWebEngineNewViewRequest;
+        friend class QtFormReportBridge;
+
+        QUrl committedMainFrameUrl() const;
+        QVariantMap registerFormDocument(const QString &origin, const QString &documentId);
+        void handleFormReport(
+            const QString &token,
+            const QString &documentId,
+            const QString &origin,
+            const QString &kind,
+            const QVariantList &values
+        );
 
         bool ensureView(QQmlEngine *engine);
         bool acceptNewWindowRequest(QWebEngineNewWindowRequest *request, QQmlEngine *engine);
@@ -107,6 +120,10 @@ namespace eden::engine {
         quint64 m_nextPermissionId = 1;
         QHash<quint64, QVariant> m_permissions;
         QHash<QString, AutofillTargetCallback> m_autofillRequests;
+        QString m_mediaReportToken;
+        QString m_formReportToken;
+        QString m_formDocumentId;
+        QUrl m_formOrigin;
     };
 
 }

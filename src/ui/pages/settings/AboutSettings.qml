@@ -83,6 +83,8 @@ Item {
                     }
 
                     Text {
+
+                        textFormat: Text.PlainText
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "Eden Browser"
                         color: Theme.surfaceText
@@ -101,6 +103,8 @@ Item {
                         Text {
                             id: versionLabel
 
+                            textFormat: Text.PlainText
+
                             anchors.centerIn: parent
                             text: Qt.application.version.length > 0 ? Qt.application.version : "dev"
                             color: Theme.primaryContainerText
@@ -109,6 +113,8 @@ Item {
                     }
 
                     Text {
+
+                        textFormat: Text.PlainText
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "A performance-obsessed web browser."
                         color: Theme.surfaceVariantText
@@ -190,6 +196,8 @@ Item {
                 }
 
                 Text {
+
+                    textFormat: Text.PlainText
                     text: "Open source licenses"
                     color: Theme.surfaceText
                     font.family: Themes.fontFamily
@@ -198,6 +206,8 @@ Item {
                 }
 
                 Text {
+
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: "Eden Browser is built with these open source components."
                     color: Theme.surfaceVariantText
@@ -264,6 +274,8 @@ Item {
                     spacing: 4
 
                     Text {
+
+                        textFormat: Text.PlainText
                         text: page.currentLicense ? page.currentLicense.name : ""
                         color: Theme.surfaceText
                         font.family: Themes.fontFamily
@@ -272,6 +284,8 @@ Item {
                     }
 
                     Text {
+
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: page.currentLicense ? page.currentLicense.license : ""
                         color: Theme.surfaceVariantText
@@ -350,6 +364,8 @@ Item {
                 spacing: 2
 
                 Text {
+
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: aboutRow.label
                     color: Theme.surfaceText
@@ -358,6 +374,8 @@ Item {
                 }
 
                 Text {
+
+                    textFormat: Text.PlainText
                     width: parent.width
                     visible: aboutRow.detail.length > 0
                     text: aboutRow.detail
@@ -370,6 +388,8 @@ Item {
 
             Text {
                 id: rowValue
+
+                textFormat: Text.PlainText
 
                 anchors.verticalCenter: parent.verticalCenter
                 visible: aboutRow.value.length > 0

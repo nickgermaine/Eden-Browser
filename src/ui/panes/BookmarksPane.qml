@@ -22,6 +22,7 @@ Rectangle {
         height: 52
 
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: "Bookmarks"
@@ -35,7 +36,6 @@ Rectangle {
             iconName: "close"
             onClicked: pane.controller.openPane = ""
         }
-
     }
 
     ListView {
@@ -65,15 +65,14 @@ Rectangle {
                 pane.controller.openPane = "";
             }
         }
-
     }
 
     Text {
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         visible: bookmarksView.count === 0
         text: "No bookmarks yet"
         color: Theme.surfaceVariantText
         font: Theme.bodyFont
     }
-
 }

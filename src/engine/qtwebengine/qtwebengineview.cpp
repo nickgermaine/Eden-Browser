@@ -1,21 +1,27 @@
 #include "engine/qtwebengine/qtwebengineview.h"
 #include "engine/engineprofile.h"
+#include "engine/mediaactivityscript.h"
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaEnum>
+#include <QMetaProperty>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
 #include <QUuid>
+#include <QWebChannel>
 #include <QWebEngineHistory>
 #include <QWebEngineNewWindowRequest>
 #include <QWebEnginePermission>
+#include <QWebEngineScript>
 
 #include <algorithm>
+#include <cmath>
 
 namespace eden::engine {
 
@@ -43,15 +49,112 @@ namespace eden::engine {
         QPointer<QQmlEngine> m_engine;
     };
 
+    class QtFormReportBridge final : public QObject {
+        Q_OBJECT
+
+      public:
+        explicit QtFormReportBridge(QtWebEngineView *view)
+            : QObject(view),
+              m_view(view) {}
+
+        Q_INVOKABLE QVariantMap registerDocument(const QString &origin, const QString &documentId) {
+            return m_view->registerFormDocument(origin, documentId);
+        }
+
+        Q_INVOKABLE void report(
+            const QString &token,
+            const QString &documentId,
+            const QString &origin,
+            const QString &kind,
+            const QVariantList &values
+        ) {
+            m_view->handleFormReport(token, documentId, origin, kind, values);
+        }
+
+      private:
+        QtWebEngineView *m_view;
+    };
+
     static const QString formHookScript = QStringLiteral(R"JS((function(){
 'use strict';
-if (window.__edenFormHooksInstalled) { return; }
-window.__edenFormHooksInstalled = true;
+if (window.top !== window || globalThis.origin === 'null') { return; }
+if (window.__edenReconnectFormReports) { window.__edenReconnectFormReports(); return; }
+var currentTransport = null;
+var channel = null;
+var initializing = false;
+var authorizing = false;
+var registration = null;
+var pendingCredential = null;
+var pendingReport = null;
+var transportNow = function(){ return globalThis.qt && globalThis.qt.webChannelTransport; };
+var documentId = function(){ return globalThis.__edenAutofillDocument || ''; };
+var send = function(kind, values){
+    if (!registration || currentTransport !== transportNow()) { return false; }
+    channel.objects.forms.report(registration.token, documentId(), globalThis.origin, kind, values);
+    return true;
+};
+var authorize = function(transport){
+    if (!channel || authorizing) { return; }
+    authorizing = true;
+    var id = documentId();
+    channel.objects.forms.registerDocument(globalThis.origin, id, function(result){
+        if (currentTransport !== transport || transportNow() !== transport) { return; }
+        authorizing = false;
+        if (documentId() !== id) { authorize(transport); return; }
+        if (!result || !result.token || result.origin !== globalThis.origin || !result.documentId) {
+            pendingCredential = null;
+            pendingReport = null;
+            return;
+        }
+        if (!id) {
+            Object.defineProperty(globalThis, '__edenAutofillDocument', {value:result.documentId});
+        }
+        registration = result;
+        if (pendingCredential) { send('credential', pendingCredential); pendingCredential = null; }
+        if (pendingReport) { send('field', pendingReport); pendingReport = null; }
+        var field = document.activeElement;
+        if (document.hasFocus() && relevantField(field)) {
+            pendingField = field;
+            if (pendingFrame === null) { pendingFrame = requestFrame(flushField); }
+        }
+    });
+};
+var connectBridge = function(force){
+    var transport = transportNow();
+    if (currentTransport !== transport) {
+        currentTransport = transport;
+        channel = null;
+        initializing = false;
+        authorizing = false;
+        registration = null;
+        pendingCredential = null;
+        pendingReport = null;
+        lastReport = null;
+    }
+    if (!transport || initializing || authorizing) { return; }
+    if (force) { registration = null; }
+    if (channel) {
+        if (!registration) { authorize(transport); }
+        return;
+    }
+    initializing = true;
+    new QWebChannel(transport, function(connected){
+        if (currentTransport !== transport || transportNow() !== transport) { return; }
+        initializing = false;
+        channel = connected;
+        authorize(transport);
+    });
+};
+window.__edenReconnectFormReports = connectBridge;
 var reportCredential = function(username, password){
-    console.info('EDEN_CREDENTIAL:' + JSON.stringify([username, password]));
+    connectBridge();
+    var values = [username, password];
+    if (!send('credential', values)) { pendingCredential = values; }
 };
 var reportFormField = function(type, name, autocomplete, value, x, y, width, height){
-    console.info('EDEN_FIELD:' + JSON.stringify([type, name, autocomplete, value, x, y, width, height]));
+    connectBridge();
+    var values = [type, name, autocomplete, value, x, y, width, height];
+    if (!send('field', values)) { pendingReport = values; }
 };
 var visible = function(field){ return field && !field.disabled && !field.readOnly && field.getClientRects().length > 0; };
 var fieldsFor = function(root){ return Array.prototype.slice.call((root || document).querySelectorAll('input,textarea')); };
@@ -145,8 +248,8 @@ var flushField = function(){
     if (!relevantField(field) || document.activeElement !== field) { clearField(); return; }
     var rect = field.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) { clearField(); return; }
-    var value = secretType(field) ? '' : field.value || '';
     var type = field.type || 'text';
+    var value = type === 'password' || secretType(field) ? '' : field.value || '';
     var name = field.name || field.id || '';
     var autocomplete = field.autocomplete || '';
     var values = [type, name, autocomplete, value, rect.x, rect.y, rect.width, rect.height];
@@ -176,7 +279,22 @@ document.addEventListener('input', function(event){
     queueField(event);
 }, true);
 window.addEventListener('blur', clearField);
+window.addEventListener('pageshow', function(event){
+    if (!event.isTrusted) { return; }
+    connectBridge(event.persisted);
+    if (event.persisted) { requestFrame(function(){ connectBridge(); }); }
+});
+connectBridge();
 })();)JS");
+
+    static QString formReportBootstrap() {
+        static const QString bootstrap = [] {
+            QFile source(QStringLiteral(":/qtwebchannel/qwebchannel.js"));
+            return source.open(QIODevice::ReadOnly) ? QString::fromUtf8(source.readAll()) + '\n' + formHookScript
+                                                    : QString();
+        }();
+        return bootstrap;
+    }
 
     QtWebEngineView::QtWebEngineView(EngineProfile *profile, QObject *parent)
         : EngineView(parent),
@@ -190,8 +308,11 @@ window.addEventListener('blur', clearField);
     }
 
     QtWebEngineView::~QtWebEngineView() {
+        delete m_devToolsView.data();
         if (m_view) {
+            QObject::disconnect(m_view, nullptr, this, nullptr);
             m_view->setProperty("edenBridge", QVariant::fromValue<QObject *>(nullptr));
+            delete m_view.data();
         }
     }
 
@@ -436,6 +557,10 @@ WebEngineView {
 
     void QtWebEngineView::attach(QQuickItem *viewport) {
         if (!viewport) {
+            if (auto *item = qobject_cast<QQuickItem *>(m_view.data())) {
+                item->setVisible(false);
+                item->setParentItem(nullptr);
+            }
             return;
         }
         if (!ensureView(qmlEngine(viewport))) {
@@ -443,6 +568,7 @@ WebEngineView {
         }
         if (QQuickItem *item = qobject_cast<QQuickItem *>(m_view.data())) {
             item->setParentItem(viewport);
+            item->setVisible(true);
         }
     }
 
@@ -463,10 +589,13 @@ WebEngineView {
         component.setData(
             R"QML(import QtQuick
 import QtWebEngine
+import QtWebChannel
 WebEngineView {
     id: webView
     anchors.fill: parent
     property var edenBridge
+    webChannelWorld: WebEngineScript.ApplicationWorld
+    webChannel: WebChannel {}
     function edenFind(text, flags) {
         findText(text, flags)
     }
@@ -482,6 +611,9 @@ WebEngineView {
     function edenFillCredential(script) {
         runJavaScript(script, 1)
     }
+    function edenInstallFormReports(script) {
+        runJavaScript(script, WebEngineScript.ApplicationWorld)
+    }
     onNewWindowRequested: request => { if (edenBridge) edenBridge.handleNewWindow(request) }
     onFullScreenRequested: request => {
         request.accept()
@@ -491,8 +623,9 @@ WebEngineView {
         request.accepted = true
         if (edenBridge) edenBridge.handleContextMenu(request.position, request.linkUrl, request.mediaUrl, request.selectedText, request.isContentEditable)
     }
-    onJavaScriptConsoleMessage: (level, message, lineNumber, sourceId) => { if (edenBridge) edenBridge.handleJavaScriptConsoleMessage(message) }
     onCertificateError: error => { if (edenBridge) edenBridge.handleCertificateError() }
+    onJavaScriptConsoleMessage: (level, message, lineNumber, sourceID) => { if (edenBridge) edenBridge.handleMediaActivity(message) }
+    onRenderProcessTerminated: (status, code) => { if (edenBridge) edenBridge.clearMediaActivity() }
     onPermissionRequested: permission => { if (edenBridge) edenBridge.handlePermission(permission) }
 }
 )QML",
@@ -512,6 +645,41 @@ WebEngineView {
         if (m_profile) {
             item->setProperty("profile", QVariant::fromValue(m_profile->nativeProfile()));
         }
+        const QString bootstrap = formReportBootstrap();
+        auto *channel = qobject_cast<QWebChannel *>(item->property("webChannel").value<QObject *>());
+        QObject *scripts = item->property("userScripts").value<QObject *>();
+        if (!channel || !scripts || bootstrap.isEmpty()) {
+            delete item;
+            return false;
+        }
+        QWebEngineScript script;
+        script.setName(QStringLiteral("eden-form-reports"));
+        script.setInjectionPoint(QWebEngineScript::DocumentReady);
+        script.setWorldId(QWebEngineScript::ApplicationWorld);
+        script.setRunsOnSubFrames(false);
+        script.setSourceCode(bootstrap);
+        if (!QMetaObject::invokeMethod(scripts, "insert", Qt::DirectConnection, Q_ARG(QWebEngineScript, script))) {
+            delete item;
+            return false;
+        }
+        m_mediaReportToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QWebEngineScript mediaScript;
+        mediaScript.setName(QStringLiteral("eden-media-activity"));
+        mediaScript.setInjectionPoint(QWebEngineScript::DocumentCreation);
+        mediaScript.setWorldId(QWebEngineScript::MainWorld);
+        mediaScript.setRunsOnSubFrames(true);
+        mediaScript.setSourceCode(QStringLiteral(
+                                      "(function(){const send=console.debug.bind(console);const id=crypto.randomUUID();"
+                                      "const main=window===window.top;let first=true;const "
+                                      "report=function(value){send('%1'+JSON.stringify([id,value,main&&first]));first="
+                                      "false;};%2(report);})();"
+        )
+                                      .arg(m_mediaReportToken, QString::fromUtf8(mediaActivityScript)));
+        if (!QMetaObject::invokeMethod(scripts, "insert", Qt::DirectConnection, Q_ARG(QWebEngineScript, mediaScript))) {
+            delete item;
+            return false;
+        }
+        channel->registerObject(QStringLiteral("forms"), new QtFormReportBridge(this));
         m_view = item;
         connect(m_view, SIGNAL(urlChanged()), this, SLOT(syncState()));
         connect(m_view, SIGNAL(titleChanged()), this, SLOT(syncState()));
@@ -688,11 +856,27 @@ WebEngineView {
         QMetaObject::invokeMethod(m_view, "edenFillCredential", Q_ARG(QVariant, script));
     }
 
-    void QtWebEngineView::fillForm(const QVariantMap &fields) {
-        const QByteArray values = QJsonDocument(QJsonObject::fromVariantMap(fields)).toJson(QJsonDocument::Compact);
-        runJavaScript(
+    void QtWebEngineView::exitFullscreen() {
+        triggerWebAction("ExitFullScreen");
+    }
+
+    void QtWebEngineView::fillForm(const AutofillTarget &target, const QVariantMap &fields) {
+        if (!m_view || !target.isValid()) {
+            return;
+        }
+        const QByteArray values = QJsonDocument(
+                                      QJsonArray{
+                                          QJsonObject::fromVariantMap(fields),
+                                          target.documentId,
+                                          target.origin.toString(QUrl::FullyEncoded)
+                                      }
+        )
+                                      .toJson(QJsonDocument::Compact);
+        const QString script =
             QStringLiteral(
-                "(function(values){var aliases={name:['name','full-name'],email:['email'],phone:['tel','phone'],"
+                "(function(payload){if(globalThis.__edenAutofillDocument!==payload[1]||globalThis.origin!==payload[2])"
+                "return;var values=payload[0];var "
+                "aliases={name:['name','full-name'],email:['email'],phone:['tel','phone'],"
                 "addressLine1:['address-line1','street-address'],addressLine2:['address-line2'],city:["
                 "'address-level2','city'],region:['address-level1','state','province'],postalCode:['postal-code',"
                 "'zip'],country:['country','country-name']};var normalize=function(v){return String(v||'')."
@@ -706,8 +890,8 @@ WebEngineView {
                 "candidate){return names.some(function(name){return candidate.indexOf(name)>=0;});});});set(field,"
                 "values[key]);});})(%1)"
             )
-                .arg(QString::fromUtf8(values))
-        );
+                .arg(QString::fromUtf8(values));
+        QMetaObject::invokeMethod(m_view, "edenFillCredential", Q_ARG(QVariant, script));
     }
 
     void QtWebEngineView::resolvePermissionRequest(quint64 id, bool allowed) {
@@ -796,6 +980,24 @@ WebEngineView {
         }
     }
 
+    void QtWebEngineView::clearMediaActivity() {
+        clearCaptureDetails();
+    }
+
+    void QtWebEngineView::handleMediaActivity(const QString &message) {
+        if (m_mediaReportToken.isEmpty() || !message.startsWith(m_mediaReportToken) || message.size() > 256) {
+            return;
+        }
+        const QJsonArray values = QJsonDocument::fromJson(message.mid(m_mediaReportToken.size()).toUtf8()).array();
+        if (values.size() != 3 || !values[0].isString() || !values[1].isDouble() || !values[2].isBool()) {
+            return;
+        }
+        if (values[2].toBool()) {
+            clearCaptureDetails();
+        }
+        setCaptureDetails(values[0].toString(), values[1].toInt());
+    }
+
     void QtWebEngineView::handleNewWindow(QObject *requestObject) {
         QWebEngineNewWindowRequest *request = qobject_cast<QWebEngineNewWindowRequest *>(requestObject);
         QQuickItem *item = qobject_cast<QQuickItem *>(m_view.data());
@@ -864,34 +1066,82 @@ WebEngineView {
         emit permissionRequested(info);
     }
 
-    void QtWebEngineView::handleJavaScriptConsoleMessage(const QString &message) {
-        const qsizetype separator = message.indexOf(':');
-        if (separator <= 0) {
+    QUrl QtWebEngineView::committedMainFrameUrl() const {
+        const QVariant frame = value("mainFrame");
+        const QMetaObject *metaObject = frame.metaType().metaObject();
+        const int index = metaObject ? metaObject->indexOfProperty("url") : -1;
+        return index >= 0 ? metaObject->property(index).readOnGadget(frame.constData()).toUrl() : QUrl();
+    }
+
+    QVariantMap QtWebEngineView::registerFormDocument(const QString &originText, const QString &documentId) {
+        const QUrl origin(originText);
+        if (origin.isEmpty() || origin != autofillOrigin(origin) || origin != autofillOrigin(committedMainFrameUrl()) ||
+            (!documentId.isEmpty() && QUuid(documentId).isNull())) {
+            return {};
+        }
+        const QString nextDocumentId =
+            documentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : documentId;
+        const bool changedDocument =
+            !m_formDocumentId.isEmpty() && (m_formDocumentId != nextDocumentId || m_formOrigin != origin);
+        m_formDocumentId = nextDocumentId;
+        m_formOrigin = origin;
+        m_formReportToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        if (changedDocument) {
+            emit formFieldFocused({});
+        }
+        return {
+            {"token", m_formReportToken},
+            {"documentId", m_formDocumentId},
+            {"origin", m_formOrigin.toString(QUrl::FullyEncoded)}
+        };
+    }
+
+    void QtWebEngineView::handleFormReport(
+        const QString &token,
+        const QString &documentId,
+        const QString &originText,
+        const QString &kind,
+        const QVariantList &values
+    ) {
+        const QUrl origin(originText);
+        if (token.isEmpty() || token != m_formReportToken || documentId != m_formDocumentId || origin != m_formOrigin ||
+            origin != autofillOrigin(committedMainFrameUrl())) {
             return;
         }
-        const QString kind = message.first(separator);
-        const QJsonArray values = QJsonDocument::fromJson(message.sliced(separator + 1).toUtf8()).array();
-        QUrl origin = m_url;
-        origin.setPath(QString());
-        origin.setQuery(QString());
-        origin.setFragment(QString());
-        if (kind == QStringLiteral("EDEN_CREDENTIAL") && values.size() == 2) {
+        if (kind == QStringLiteral("credential") && values.size() == 2) {
+            if (values.at(0).metaType().id() != QMetaType::QString ||
+                values.at(1).metaType().id() != QMetaType::QString) {
+                return;
+            }
             CredentialSubmissionInfo info;
             info.origin = origin;
             info.username = values.at(0).toString();
             info.password = values.at(1).toString();
             emit credentialSubmitted(info);
-        } else if (kind == QStringLiteral("EDEN_FIELD") && values.size() == 8) {
-            if (values.at(0).toString().isEmpty()) {
+        } else if (kind == QStringLiteral("field") && values.size() == 8) {
+            for (int index = 0; index < 4; ++index) {
+                if (values.at(index).metaType().id() != QMetaType::QString) {
+                    return;
+                }
+            }
+            for (int index = 4; index < 8; ++index) {
+                bool valid = false;
+                const double value = values.at(index).toDouble(&valid);
+                if (!valid || !std::isfinite(value)) {
+                    return;
+                }
+            }
+            const QString type = values.at(0).toString();
+            if (type.isEmpty()) {
                 emit formFieldFocused({});
                 return;
             }
             emit formFieldFocused(
                 {{"origin", origin},
-                 {"type", values.at(0).toString()},
+                 {"type", type},
                  {"name", values.at(1).toString()},
                  {"autocomplete", values.at(2).toString()},
-                 {"value", values.at(3).toString()},
+                 {"value", type == QStringLiteral("password") ? QString() : values.at(3).toString()},
                  {"x", values.at(4).toDouble()},
                  {"y", values.at(5).toDouble()},
                  {"width", values.at(6).toDouble()},
@@ -921,7 +1171,9 @@ WebEngineView {
     }
 
     void QtWebEngineView::installFormHooks() {
-        runJavaScript(formHookScript);
+        if (m_view) {
+            QMetaObject::invokeMethod(m_view, "edenInstallFormReports", Q_ARG(QVariant, formReportBootstrap()));
+        }
     }
 
     void QtWebEngineView::runJavaScript(const QString &script) {
@@ -937,3 +1189,5 @@ WebEngineView {
     }
 
 }
+
+#include "qtwebengineview.moc"

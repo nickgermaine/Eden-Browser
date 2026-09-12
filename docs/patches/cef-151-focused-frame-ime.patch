@@ -1,0 +1,154 @@
+--- a/cef/libcef/browser/osr/render_widget_host_view_osr.cc
++++ b/cef/libcef/browser/osr/render_widget_host_view_osr.cc
+@@ -840 +840,2 @@
+-  if (!render_widget_host_) {
++  auto* target_host = GetFocusedTextInputWidget();
++  if (!target_host) {
+@@ -859 +860 @@
+-  render_widget_host_->ImeSetComposition(
++  target_host->ImeSetComposition(
+@@ -868 +869,2 @@
+-  if (!render_widget_host_) {
++  auto* target_host = GetFocusedTextInputWidget();
++  if (!target_host) {
+@@ -873 +875 @@
+-  render_widget_host_->ImeCommitText(text, std::vector<ui::ImeTextSpan>(),
++  target_host->ImeCommitText(text, std::vector<ui::ImeTextSpan>(),
+@@ -882,5 +884,6 @@
+-  if (!render_widget_host_) {
+-    return;
+-  }
+-
+-  render_widget_host_->ImeFinishComposingText(keep_selection);
++  auto* target_host = GetFocusedTextInputWidget();
++  if (!target_host) {
++    return;
++  }
++
++  target_host->ImeFinishComposingText(keep_selection);
+@@ -894,5 +897,6 @@
+-  if (!render_widget_host_) {
+-    return;
+-  }
+-
+-  render_widget_host_->ImeCancelComposition();
++  auto* target_host = GetFocusedTextInputWidget();
++  if (!target_host) {
++    return;
++  }
++
++  target_host->ImeCancelComposition();
+@@ -909 +913 @@
+-  if (!browser_impl_.get()) {
++  if (!browser_impl_.get() || GetFocusedTextInputWidget() != render_widget_host_) {
+@@ -1505,0 +1510 @@
++  OnSelectionBoundsChanged(text_input_manager, updated_view);
+@@ -1893,0 +1899,9 @@
++content::RenderWidgetHostImpl*
++CefRenderWidgetHostViewOSR::GetFocusedTextInputWidget() const {
++  if (!render_widget_host_ || !render_widget_host_->delegate()) {
++    return render_widget_host_;
++  }
++  return render_widget_host_->delegate()->GetFocusedRenderWidgetHost(
++      render_widget_host_);
++}
++
+@@ -1896,4 +1910,74 @@
+-  if (!render_widget_host_) {
+-    return;
+-  }
+-  render_widget_host_->RequestCompositionUpdates(false, start_monitoring);
++  if (auto* target_host = GetFocusedTextInputWidget()) {
++    target_host->RequestCompositionUpdates(false, start_monitoring);
++  }
++}
++
++void CefRenderWidgetHostViewOSR::OnImeCompositionRangeChanged(
++    content::TextInputManager* text_input_manager,
++    content::RenderWidgetHostViewBase* updated_view,
++    bool character_bounds_changed) {
++  if (updated_view == this || !browser_impl_ ||
++      text_input_manager->GetActiveWidget() != updated_view->host() ||
++      GetFocusedTextInputWidget() != updated_view->host()) {
++    return;
++  }
++  const auto* composition = text_input_manager->GetCompositionRangeInfo();
++  if (!composition) {
++    return;
++  }
++  CefRenderHandler::RectList bounds;
++  if (character_bounds_changed) {
++    bounds.reserve(composition->character_bounds.size());
++    for (const auto& rect : composition->character_bounds) {
++      bounds.emplace_back(rect.x(), rect.y(), rect.width(), rect.height());
++    }
++  }
++  CefRefPtr<CefRenderHandler> handler = browser_impl_->GetClient()->GetRenderHandler();
++  CHECK(handler);
++  handler->OnImeCompositionRangeChanged(
++      browser_impl_->GetBrowser(),
++      CefRange(composition->range.start(), composition->range.end()), bounds);
++}
++
++void CefRenderWidgetHostViewOSR::OnSelectionBoundsChanged(
++    content::TextInputManager* text_input_manager,
++    content::RenderWidgetHostViewBase* updated_view) {
++  const auto* state = text_input_manager->GetTextInputState();
++  if (!browser_impl_ || !state || state->type == ui::TEXT_INPUT_TYPE_NONE ||
++      GetFocusedTextInputWidget() != text_input_manager->GetActiveWidget()) {
++    return;
++  }
++  const auto* selection = text_input_manager->GetSelectionRegion();
++  if (!selection) {
++    return;
++  }
++  const auto& focus = selection->focus;
++  if (focus.edge_start() == focus.edge_end()) {
++    return;
++  }
++  gfx::Rect caret = gfx::BoundingRect(focus.edge_start_rounded(), focus.edge_end_rounded());
++  caret.set_width(std::max(1, caret.width()));
++  caret.set_height(std::max(1, caret.height()));
++  CefRefPtr<CefRenderHandler> handler = browser_impl_->GetClient()->GetRenderHandler();
++  CHECK(handler);
++  handler->OnImeCompositionRangeChanged(
++      browser_impl_->GetBrowser(), CefRange::InvalidRange(),
++      {CefRect(caret.x(), caret.y(), caret.width(), caret.height())});
++}
++
++void CefRenderWidgetHostViewOSR::OnTextSelectionChanged(
++    content::TextInputManager* text_input_manager,
++    content::RenderWidgetHostViewBase* updated_view) {
++  if (updated_view == this || !browser_impl_ ||
++      GetFocusedTextInputWidget() != updated_view->host()) {
++    return;
++  }
++  const auto* selection = text_input_manager->GetTextSelection(updated_view);
++  if (!selection) {
++    return;
++  }
++  CefRefPtr<CefRenderHandler> handler = browser_impl_->GetClient()->GetRenderHandler();
++  CHECK(handler);
++  handler->OnTextSelectionChanged(
++      browser_impl_->GetBrowser(), selection->selected_text(),
++      CefRange(selection->range().start(), selection->range().end()));
+@@ -1905 +1989 @@
+-  if (browser_impl_.get()) {
++  if (browser_impl_.get() && GetFocusedTextInputWidget() == render_widget_host_) {
+--- a/cef/libcef/browser/osr/render_widget_host_view_osr.h
++++ b/cef/libcef/browser/osr/render_widget_host_view_osr.h
+@@ -241,0 +242,11 @@
++  void OnImeCompositionRangeChanged(
++      content::TextInputManager* text_input_manager,
++      content::RenderWidgetHostViewBase* updated_view,
++      bool character_bounds_changed) override;
++  void OnSelectionBoundsChanged(
++      content::TextInputManager* text_input_manager,
++      content::RenderWidgetHostViewBase* updated_view) override;
++  void OnTextSelectionChanged(
++      content::TextInputManager* text_input_manager,
++      content::RenderWidgetHostViewBase* updated_view) override;
++
+@@ -327,0 +339,2 @@
++  content::RenderWidgetHostImpl* GetFocusedTextInputWidget() const;
++

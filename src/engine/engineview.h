@@ -2,6 +2,7 @@
 
 #include "engine/enginenewviewrequest.h"
 
+#include <QHash>
 #include <QImage>
 #include <QObject>
 #include <QPoint>
@@ -125,6 +126,9 @@ namespace eden::engine {
         Q_PROPERTY(bool canGoForward READ canGoForward NOTIFY canGoForwardChanged)
         Q_PROPERTY(bool audible READ isAudible NOTIFY audibleChanged)
         Q_PROPERTY(bool muted READ isMuted WRITE setMuted NOTIFY mutedChanged)
+        Q_PROPERTY(bool capturing READ isCapturing NOTIFY captureChanged)
+        Q_PROPERTY(QString captureDescription READ captureDescription NOTIFY captureChanged)
+        Q_PROPERTY(QVariantList activityIndicators READ activityIndicators NOTIFY activityIndicatorsChanged)
         Q_PROPERTY(QString securityState READ securityState NOTIFY securityStateChanged)
         Q_PROPERTY(QVariantMap certificateDetails READ certificateDetails NOTIFY certificateDetailsChanged)
         Q_PROPERTY(QString backendName READ backendName CONSTANT)
@@ -169,6 +173,9 @@ namespace eden::engine {
         virtual bool canGoForward() const = 0;
         virtual bool isAudible() const = 0;
         virtual bool isMuted() const = 0;
+        bool isCapturing() const;
+        QString captureDescription() const;
+        QVariantList activityIndicators() const;
         virtual QString securityState() const = 0;
         virtual QVariantMap certificateDetails() const;
         virtual QString backendName() const = 0;
@@ -193,6 +200,7 @@ namespace eden::engine {
         Q_INVOKABLE virtual void findInPage(const QString &text, FindFlags flags = {}) = 0;
         Q_INVOKABLE virtual void attach(QQuickItem *viewport) = 0;
         Q_INVOKABLE virtual void releaseFocus();
+        Q_INVOKABLE virtual void exitFullscreen();
         Q_INVOKABLE virtual void setMuted(bool muted) = 0;
         Q_INVOKABLE virtual void executeContextMenuCommand(const QString &command);
         Q_INVOKABLE virtual void dismissContextMenu();
@@ -204,7 +212,7 @@ namespace eden::engine {
         using AutofillTargetCallback = std::function<void(AutofillTarget)>;
         virtual void requestAutofillTarget(AutofillTargetCallback callback);
         virtual void fillCredential(const AutofillTarget &target, const QString &username, const QString &password);
-        Q_INVOKABLE virtual void fillForm(const QVariantMap &fields);
+        virtual void fillForm(const AutofillTarget &target, const QVariantMap &fields);
         void setDevToolsPlacement(DevToolsPlacement placement);
         virtual QUrl internalUrlFor(const QUrl &url) const;
         virtual void requestThumbnail(const QSize &size, ThumbnailCallback callback);
@@ -224,6 +232,8 @@ namespace eden::engine {
         void canGoBackChanged();
         void canGoForwardChanged();
         void audibleChanged();
+        void captureChanged();
+        void activityIndicatorsChanged();
         void mutedChanged();
         void securityStateChanged();
         void certificateDetailsChanged();
@@ -247,9 +257,15 @@ namespace eden::engine {
 
       protected:
         void setDevToolsOpen(bool open);
+        void setMediaCapture(bool video, bool audio);
+        void setCaptureDetails(const QString &document, int activities);
+        void clearCaptureDetails();
 
       private:
         bool m_devToolsOpen = false;
+        bool m_capturingVideo = false;
+        bool m_capturingAudio = false;
+        QHash<QString, int> m_captureDetails;
         DevToolsPlacement m_devToolsPlacement = DevToolsRight;
         DevToolsPlacement m_lastDockedPlacement = DevToolsRight;
     };

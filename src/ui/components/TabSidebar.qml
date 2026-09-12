@@ -51,7 +51,6 @@ Rectangle {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutBack
             }
-
         }
 
         add: Transition {
@@ -62,7 +61,6 @@ Rectangle {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutCubic
             }
-
         }
 
         remove: Transition {
@@ -72,7 +70,6 @@ Rectangle {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutCubic
             }
-
         }
 
         move: Transition {
@@ -81,7 +78,6 @@ Rectangle {
                 duration: Theme.shortDuration
                 easing.type: Easing.OutBack
             }
-
         }
 
         delegate: Rectangle {
@@ -93,6 +89,7 @@ Rectangle {
             required property url favicon
             required property bool isLoading
             required property bool isPinned
+            required property var activityIndicators
             required property bool isAudible
             required property bool isMuted
             required property var engineView
@@ -121,9 +118,7 @@ Rectangle {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Rectangle {
@@ -137,9 +132,7 @@ Rectangle {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
 
             Row {
@@ -160,13 +153,22 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     visible: sidebar.controller.sidebarExpanded
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - tabIcon.width - 48)
+                    width: Math.max(0, parent.width - tabIcon.width - activity.width - 58)
                     text: tab.title.length > 0 ? tab.title : tab.url.toString()
                     color: Theme.surfaceText
                     font: Theme.bodyFont
                     elide: Text.ElideRight
+                }
+
+                TabActivity {
+                    id: activity
+                    anchors.verticalCenter: parent.verticalCenter
+                    indicators: tab.activityIndicators
+                    visible: sidebar.controller.sidebarExpanded && indicators.length > 0
+                    width: visible ? implicitWidth : 0
                 }
 
                 EdenButton {
@@ -177,7 +179,17 @@ Rectangle {
                     iconName: "close"
                     onClicked: sidebar.controller.closeTab(tab.index)
                 }
+            }
 
+            TabActivity {
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 2
+                indicators: tab.activityIndicators
+                compact: true
+                iconSize: 12
+                spacing: 1
+                visible: !sidebar.controller.sidebarExpanded && indicators.length > 0
             }
 
             HoverHandler {
@@ -186,7 +198,6 @@ Rectangle {
                 onHoveredChanged: {
                     if (!hovered)
                         tab.previewSuppressed = false;
-
                 }
             }
 
@@ -195,7 +206,6 @@ Rectangle {
                 onPressedChanged: {
                     if (pressed)
                         tab.previewSuppressed = true;
-
                 }
                 onTapped: (_, button) => {
                     if (button === Qt.MiddleButton)
@@ -210,7 +220,6 @@ Rectangle {
                 onPressedChanged: {
                     if (pressed)
                         tab.previewSuppressed = true;
-
                 }
                 onTapped: tabMenu.open()
             }
@@ -224,7 +233,6 @@ Rectangle {
                 onActiveChanged: {
                     if (active)
                         sidebar.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
-
                 }
             }
 
@@ -233,7 +241,7 @@ Rectangle {
 
                 x: tab.width
                 onAboutToShow: actions = sidebar.controller.tabContextMenuActions(tab.index)
-                onTriggered: (actionId) => {
+                onTriggered: actionId => {
                     return sidebar.controller.executeTabContextMenuCommand(tab.index, actionId);
                 }
             }
@@ -256,13 +264,9 @@ Rectangle {
                         duration: Theme.shortDuration
                         easing.type: Easing.OutCubic
                     }
-
                 }
-
             }
-
         }
-
     }
 
     EdenButton {
@@ -279,17 +283,16 @@ Rectangle {
     DropArea {
         anchors.fill: parent
         keys: ["application/x-eden-tab"]
-        onEntered: (drag) => {
+        onEntered: drag => {
             return sidebar.controller.tabDragEntered(sidebar, drag.x, drag.y);
         }
-        onPositionChanged: (drag) => {
+        onPositionChanged: drag => {
             return sidebar.controller.tabDragMoved(sidebar, drag.x, drag.y);
         }
         onExited: sidebar.controller.tabDragLeft()
-        onDropped: (drop) => {
+        onDropped: drop => {
             if (sidebar.controller.tabDragDropped(sidebar, drop.x, drop.y))
                 drop.acceptProposedAction();
-
         }
     }
 
@@ -298,7 +301,5 @@ Rectangle {
             duration: Theme.mediumDuration
             easing.type: Easing.OutCubic
         }
-
     }
-
 }

@@ -1,0 +1,29 @@
+include(FetchContent)
+
+if(NOT DEFINED EDEN_SOURCE_ROOT)
+    set(EDEN_SOURCE_ROOT "${CMAKE_SOURCE_DIR}")
+endif()
+
+set(EDEN_SERVO_THIRD_PARTY_DIR "${EDEN_SOURCE_ROOT}/third_party/servo")
+set(FETCHCONTENT_QUIET OFF)
+
+FetchContent_Declare(
+    eden_servo_shell
+    URL "${EDEN_SERVO_RELEASE_BASE}/${EDEN_SERVO_LINUX_X86_64_ARCHIVE}"
+    URL_HASH "SHA256=${EDEN_SERVO_LINUX_X86_64_SHA256}"
+    SOURCE_DIR "${EDEN_SERVO_THIRD_PARTY_DIR}/servo-v${EDEN_SERVO_VERSION}-linux-x86_64"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_Declare(
+    eden_servo_source
+    URL "${EDEN_SERVO_RELEASE_BASE}/${EDEN_SERVO_SOURCE_ARCHIVE}"
+    URL_HASH "SHA256=${EDEN_SERVO_SOURCE_SHA256}"
+    SOURCE_DIR "${EDEN_SERVO_THIRD_PARTY_DIR}/servo-v${EDEN_SERVO_VERSION}-source"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_MakeAvailable(eden_servo_shell eden_servo_source)
+
+set(EDEN_SERVO_SHELL_DIR "${eden_servo_shell_SOURCE_DIR}" CACHE INTERNAL "")
+set(EDEN_SERVO_SOURCE_DIR "${eden_servo_source_SOURCE_DIR}" CACHE INTERNAL "")

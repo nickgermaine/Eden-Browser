@@ -10,6 +10,11 @@ namespace eden::engine::cef {
     class CefRendererApp final : public CefApp, public CefRenderProcessHandler {
       public:
         CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override;
+        void OnFocusedNodeChanged(
+            CefRefPtr<CefBrowser> browser,
+            CefRefPtr<CefFrame> frame,
+            CefRefPtr<CefDOMNode> node
+        ) override;
         void OnContextCreated(
             CefRefPtr<CefBrowser> browser,
             CefRefPtr<CefFrame> frame,
@@ -50,6 +55,7 @@ namespace eden::engine::cef {
 
         int m_nextDisplayCaptureRequestId = 1;
         std::map<std::pair<int, int>, DisplayCapturePromise> m_displayCapturePromises;
+        uint64_t m_nextClipboardDocumentId = 0;
         uint64_t m_nextAutofillDocumentId = 0;
         std::map<std::string, AutofillDocument> m_autofillDocuments;
 

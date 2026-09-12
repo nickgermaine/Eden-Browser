@@ -45,6 +45,7 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 - CMake ≥ 3.21, GCC 13+ or Clang 16+ (C++20)
 - Qt ≥ 6.8: Core, Gui, Network, Qml, Quick, QuickControls2, QuickEffects, QuickShapes, Sql, Test
 - Qt WebEngine ≥ 6.8 for the Blink (Qt) engine; on by default, skip with `-DEDEN_ENGINE_QTWEBENGINE=OFF`
+- libpsl for recognizing complete domain suffixes in the address bar
 - Network access on first configure: CMake fetches the pinned CEF distribution (~300 MB) and the Solar icon set into `third_party/`, checksum-verified, no manual steps
 - Optional: Rust toolchain for the experimental Servo scaffold (`-DEDEN_ENGINE_SERVO=ON`, off by default), Python ≥ 3.10 for the benchmark harness in `scripts/bench/`
 
@@ -57,7 +58,7 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
 - GnuCOBOL ≥ 3.1 (`cobc`) for the Records Office batch programs (v0.6.0)
 - libsodium + qtkeychain for the password vault, NSS for Firefox password import
-- Rust adblock engine, libpsl for public-suffix handling, md4c for AI pane markdown
+- Rust adblock engine, md4c for AI pane markdown
 - Secret Service keyring, D-Bus notifications, GeoClue2 at runtime as those features land
 
 ### Building

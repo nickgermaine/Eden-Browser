@@ -22,6 +22,7 @@ Item {
             spacing: 20
 
             Text {
+                textFormat: Text.PlainText
                 text: page.title
                 color: Theme.surfaceText
                 font.family: Themes.fontFamily
@@ -43,19 +44,15 @@ Item {
                     spacing: 8
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: page.body
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
                         wrapMode: Text.Wrap
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }

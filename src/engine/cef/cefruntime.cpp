@@ -85,8 +85,14 @@ namespace eden::engine::cef {
                 arguments.emplace_back(argv[index]);
             }
         }
+        std::error_code executableError;
+        const std::filesystem::path executablePath = std::filesystem::read_symlink("/proc/self/exe", executableError);
+        if (executableError || !executablePath.is_absolute()) {
+            m_exitCode = 1;
+            return false;
+        }
         const CefProcessSettingsResult processSettings = createCefProcessSettings(
-            std::filesystem::absolute(argv[0]),
+            executablePath,
             product,
             version,
             std::span<const std::string_view>(arguments),

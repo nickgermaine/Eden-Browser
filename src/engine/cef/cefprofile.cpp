@@ -5,8 +5,12 @@
 #include "include/cef_cookie.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QPointer>
+#include <QSet>
+#include <QUrl>
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -86,13 +90,19 @@ namespace eden::engine::cef {
     }
 
     static CefString cookieOriginUrl(const PortableCookie &portable) {
-        const QByteArray scheme = portable.secure ? QByteArrayLiteral("https://") : QByteArrayLiteral("http://");
-        return CefString((scheme + portable.domain + portable.path).toStdString());
+        QUrl url;
+        url.setScheme(portable.secure ? QStringLiteral("https") : QStringLiteral("http"));
+        url.setHost(QString::fromLatin1(portable.domain));
+        url.setPath(QString::fromUtf8(portable.path));
+        return CefString(url.toEncoded().toStdString());
     }
 
     class CollectingCookieVisitor final : public CefCookieVisitor {
       public:
-        CollectingCookieVisitor(bool deleteVisited, std::function<void(QList<PortableCookie>, qsizetype)> completion)
+        CollectingCookieVisitor(
+            bool deleteVisited,
+            std::function<void(QList<PortableCookie>, qsizetype, bool)> completion
+        )
             : m_deleteVisited(deleteVisited),
               m_completion(std::move(completion)) {}
 
@@ -101,16 +111,29 @@ namespace eden::engine::cef {
                 auto completion = std::move(m_completion);
                 auto cookies = std::move(m_cookies);
                 const qsizetype skipped = m_skipped;
-                CefUiBridge::runOnUiThread([completion = std::move(completion),
-                                            cookies = std::move(cookies),
-                                            skipped]() mutable { completion(std::move(cookies), skipped); });
+                const bool failed = m_failed;
+                CefUiBridge::runOnUiThread(
+                    [completion = std::move(completion), cookies = std::move(cookies), skipped, failed]() mutable {
+                        completion(std::move(cookies), skipped, failed);
+                    }
+                );
             }
+        }
+
+        void fail() {
+            m_failed = true;
         }
 
         bool Visit(const CefCookie &cookie, int, int, bool &deleteCookie) override {
             PortableCookie portable = portableFromCef(cookie);
             if (canonicalizePortableCookie(portable, QDateTime::currentMSecsSinceEpoch())) {
-                m_cookies.append(std::move(portable));
+                const QByteArray identity = portableCookieIdentity(portable);
+                if (!m_identities.contains(identity)) {
+                    m_identities.insert(identity);
+                    m_cookies.append(std::move(portable));
+                } else {
+                    wipePortableCookie(portable);
+                }
             } else {
                 wipePortableCookie(portable);
                 ++m_skipped;
@@ -120,13 +143,41 @@ namespace eden::engine::cef {
         }
 
       private:
+        std::atomic_bool m_failed = false;
         bool m_deleteVisited;
-        std::function<void(QList<PortableCookie>, qsizetype)> m_completion;
+        std::function<void(QList<PortableCookie>, qsizetype, bool)> m_completion;
         QList<PortableCookie> m_cookies;
+        QSet<QByteArray> m_identities;
         qsizetype m_skipped = 0;
 
         IMPLEMENT_REFCOUNTING(CollectingCookieVisitor);
     };
+
+    static void visitOrdinaryCookies(CefRefPtr<CefCookieManager> manager, CefRefPtr<CollectingCookieVisitor> visitor) {
+        CefRefPtr<CollectingCookieVisitor> inventory = new CollectingCookieVisitor(
+            false,
+            [manager, visitor](QList<PortableCookie> cookies, qsizetype, bool failed) {
+                if (failed) {
+                    visitor->fail();
+                    wipePortableCookies(cookies);
+                    return;
+                }
+                QSet<QString> urls;
+                for (const PortableCookie &cookie : cookies) {
+                    urls.insert(QString::fromStdString(cookieOriginUrl(cookie).ToString()));
+                }
+                wipePortableCookies(cookies);
+                for (const QString &url : urls) {
+                    if (!manager->VisitUrlCookies(url.toStdString(), true, visitor)) {
+                        visitor->fail();
+                    }
+                }
+            }
+        );
+        if (!manager->VisitAllCookies(inventory)) {
+            inventory->fail();
+        }
+    }
 
     class CookieSetCompletion final : public CefSetCookieCallback {
       public:
@@ -237,6 +288,10 @@ namespace eden::engine::cef {
     }
 
     void CefProfile::exportPortableCookies(CookieSnapshotCallback callback) {
+        if (!supportsPortableCookies()) {
+            EngineProfile::exportPortableCookies(std::move(callback));
+            return;
+        }
         CefRefPtr<CefCookieManager> manager = cookieManager();
         if (!manager) {
             CookieSnapshotResult result;
@@ -249,7 +304,8 @@ namespace eden::engine::cef {
         QPointer<CefProfile> guard(this);
         CefRefPtr<CollectingCookieVisitor> visitor = new CollectingCookieVisitor(
             false,
-            [guard, callback = std::move(callback)](QList<PortableCookie> cookies, qsizetype skipped) mutable {
+            [guard,
+             callback = std::move(callback)](QList<PortableCookie> cookies, qsizetype skipped, bool failed) mutable {
                 CookieSnapshotResult result;
                 if (!guard) {
                     wipePortableCookies(cookies);
@@ -257,17 +313,23 @@ namespace eden::engine::cef {
                     callback(std::move(result));
                     return;
                 }
+                if (failed) {
+                    wipePortableCookies(cookies);
+                    result.errorCode = QStringLiteral("cookie_read_failed");
+                }
                 result.cookies = std::move(cookies);
                 result.skippedCookies = skipped;
                 callback(std::move(result));
             }
         );
-        if (!manager->VisitAllCookies(visitor)) {
-            visitor = nullptr;
-        }
+        visitOrdinaryCookies(manager, visitor);
     }
 
     void CefProfile::replacePortableCookies(const QList<PortableCookie> &cookies, CookieReplaceCallback callback) {
+        if (!supportsPortableCookies()) {
+            EngineProfile::replacePortableCookies(cookies, std::move(callback));
+            return;
+        }
         CefRefPtr<CefCookieManager> manager = cookieManager();
         if (!manager) {
             CookieReplaceResult result;
@@ -277,77 +339,94 @@ namespace eden::engine::cef {
             });
             return;
         }
+        if (m_replacingCookies) {
+            callback({0, 0, "cookie_store_busy"});
+            return;
+        }
         auto imported = std::make_shared<QList<PortableCookie>>(cookies);
+        for (PortableCookie &cookie : *imported) {
+            if (!canonicalizePortableCookie(cookie, QDateTime::currentMSecsSinceEpoch())) {
+                wipePortableCookies(*imported);
+                callback({0, 0, "invalid_cookie"});
+                return;
+            }
+        }
+        m_replacingCookies = true;
         auto sharedCallback = std::make_shared<CookieReplaceCallback>(std::move(callback));
         QPointer<CefProfile> guard(this);
-        const auto finish = [sharedCallback,
-                             imported](qsizetype importedCount, qsizetype skipped, const QString &errorCode) {
+        const auto finish = [guard, sharedCallback, imported](qsizetype importedCount, const QString &error) {
             wipePortableCookies(*imported);
-            CookieReplaceResult result;
-            result.importedCookies = importedCount;
-            result.skippedCookies = skipped;
-            result.errorCode = errorCode;
-            if (*sharedCallback) {
-                (*sharedCallback)(std::move(result));
+            if (guard) {
+                guard->m_replacingCookies = false;
+            }
+            auto callback = std::exchange(*sharedCallback, {});
+            if (callback) {
+                callback({importedCount, 0, guard ? error : QStringLiteral("profile_destroyed")});
             }
         };
-        CefRefPtr<CollectingCookieVisitor> snapshotVisitor = new CollectingCookieVisitor(
+        const auto flush = [manager, finish](qsizetype count, const QString &error) {
+            CefRefPtr<StoreFlushCompletion> completion =
+                new StoreFlushCompletion([finish, count, error] { finish(count, error); });
+            if (!manager->FlushStore(completion)) {
+                finish(0, QStringLiteral("cookie_flush_failed"));
+            }
+        };
+        CefRefPtr<CollectingCookieVisitor> snapshot = new CollectingCookieVisitor(
             false,
-            [guard, manager, imported, finish](QList<PortableCookie> rollbackSnapshot, qsizetype) {
-                if (!guard) {
-                    wipePortableCookies(rollbackSnapshot);
-                    finish(0, 0, QStringLiteral("profile_destroyed"));
+            [guard, manager, imported, finish, flush](QList<PortableCookie> before, qsizetype, bool failed) {
+                if (!guard || failed) {
+                    wipePortableCookies(before);
+                    finish(0, QStringLiteral("cookie_read_failed"));
                     return;
                 }
-                auto rollback = std::make_shared<QList<PortableCookie>>(std::move(rollbackSnapshot));
-                CefRefPtr<CollectingCookieVisitor> deletingVisitor = new CollectingCookieVisitor(
+                auto rollback = std::make_shared<QList<PortableCookie>>(std::move(before));
+                const auto restore = [manager, rollback, flush](bool alreadyFailed) {
+                    insertCookies(manager, *rollback, [rollback, flush, alreadyFailed](qsizetype failures) {
+                        wipePortableCookies(*rollback);
+                        flush(
+                            0,
+                            failures == 0 && !alreadyFailed ? QStringLiteral("rolled_back")
+                                                            : QStringLiteral("rollback_failed")
+                        );
+                    });
+                };
+                CefRefPtr<CollectingCookieVisitor> deletion = new CollectingCookieVisitor(
                     true,
-                    [manager, imported, rollback, finish](QList<PortableCookie> deleted, qsizetype) {
+                    [manager,
+                     imported,
+                     rollback,
+                     restore,
+                     flush](QList<PortableCookie> deleted, qsizetype, bool failed) {
                         wipePortableCookies(deleted);
-                        insertCookies(manager, *imported, [manager, imported, rollback, finish](qsizetype failures) {
-                            if (failures == 0) {
-                                wipePortableCookies(*rollback);
-                                const qsizetype importedCount = imported->size();
-                                manager->FlushStore(new StoreFlushCompletion([finish, importedCount] {
-                                    finish(importedCount, 0, QString());
-                                }));
-                                return;
-                            }
-                            CefRefPtr<CollectingCookieVisitor> undoVisitor = new CollectingCookieVisitor(
-                                true,
-                                [manager, rollback, finish](QList<PortableCookie> undone, qsizetype) {
-                                    wipePortableCookies(undone);
-                                    insertCookies(
-                                        manager,
-                                        *rollback,
-                                        [manager, rollback, finish](qsizetype rollbackFailures) {
-                                            wipePortableCookies(*rollback);
-                                            manager->FlushStore(new StoreFlushCompletion([finish, rollbackFailures] {
-                                                finish(
-                                                    0,
-                                                    0,
-                                                    rollbackFailures == 0 ? QStringLiteral("rolled_back")
-                                                                          : QStringLiteral("rollback_failed")
-                                                );
-                                            }));
-                                        }
-                                    );
+                        if (failed) {
+                            restore(false);
+                            return;
+                        }
+                        insertCookies(
+                            manager,
+                            *imported,
+                            [manager, imported, rollback, restore, flush](qsizetype failures) {
+                                if (failures == 0) {
+                                    wipePortableCookies(*rollback);
+                                    flush(imported->size(), {});
+                                    return;
                                 }
-                            );
-                            if (!manager->VisitAllCookies(undoVisitor)) {
-                                undoVisitor = nullptr;
+                                CefRefPtr<CollectingCookieVisitor> undo = new CollectingCookieVisitor(
+                                    true,
+                                    [restore](QList<PortableCookie> undone, qsizetype, bool failed) {
+                                        wipePortableCookies(undone);
+                                        restore(failed);
+                                    }
+                                );
+                                visitOrdinaryCookies(manager, undo);
                             }
-                        });
+                        );
                     }
                 );
-                if (!manager->VisitAllCookies(deletingVisitor)) {
-                    deletingVisitor = nullptr;
-                }
+                visitOrdinaryCookies(manager, deletion);
             }
         );
-        if (!manager->VisitAllCookies(snapshotVisitor)) {
-            snapshotVisitor = nullptr;
-        }
+        visitOrdinaryCookies(manager, snapshot);
     }
 
     void CefProfile::flushStorage(std::function<void()> completion) {

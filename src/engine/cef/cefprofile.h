@@ -20,12 +20,14 @@ namespace eden::engine::cef {
         bool supportsPortableCookies() const override;
         void exportPortableCookies(CookieSnapshotCallback callback) override;
         void replacePortableCookies(const QList<PortableCookie> &cookies, CookieReplaceCallback callback) override;
+
         void flushStorage(std::function<void()> completion) override;
 
       private:
         CefRefPtr<CefCookieManager> cookieManager() const;
 
         CefRefPtr<CefRequestContext> m_requestContext;
+        bool m_replacingCookies = false;
     };
 
 }

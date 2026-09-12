@@ -18,10 +18,10 @@ Popup {
     function toggle() {
         if (opened) {
             close();
-            return ;
+            return;
         }
         if (Date.now() - dismissedAt < 250)
-            return ;
+            return;
 
         open();
     }
@@ -38,7 +38,6 @@ Popup {
         function onCurrentUrlChanged() {
             if (popover.opened)
                 popover.refreshPermissions();
-
         }
 
         target: popover.controller
@@ -48,7 +47,6 @@ Popup {
         function onPermissionsChanged(origin) {
             if (popover.opened)
                 popover.refreshPermissions();
-
         }
 
         target: popover.store
@@ -82,6 +80,7 @@ Popup {
                     width: parent.width
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width - closeCertificate.width
                         anchors.verticalCenter: parent.verticalCenter
                         text: "Certificate details"
@@ -96,29 +95,35 @@ Popup {
                         Accessible.name: "Close certificate details"
                         onClicked: certificatePopup.close()
                     }
-
                 }
 
                 Repeater {
-                    model: [{
-                        "label": "Issued to",
-                        "value": popover.engine ? popover.engine.certificateDetails.subject || popover.engine.certificateDetails.commonName || "Unknown" : "Unknown"
-                    }, {
-                        "label": "Issued by",
-                        "value": popover.engine ? popover.engine.certificateDetails.issuer || "Unknown" : "Unknown"
-                    }, {
-                        "label": "Valid from",
-                        "value": popover.engine && popover.engine.certificateDetails.validFrom ? popover.engine.certificateDetails.validFrom.toLocaleString() : "Unknown"
-                    }, {
-                        "label": "Valid until",
-                        "value": popover.engine && popover.engine.certificateDetails.validUntil ? popover.engine.certificateDetails.validUntil.toLocaleString() : "Unknown"
-                    }, {
-                        "label": "Protocol",
-                        "value": popover.engine ? popover.engine.certificateDetails.protocol || "Unknown" : "Unknown"
-                    }, {
-                        "label": "Serial number",
-                        "value": popover.engine ? popover.engine.certificateDetails.serialNumber || "Unknown" : "Unknown"
-                    }]
+                    model: [
+                        {
+                            "label": "Issued to",
+                            "value": popover.engine ? popover.engine.certificateDetails.subject || popover.engine.certificateDetails.commonName || "Unknown" : "Unknown"
+                        },
+                        {
+                            "label": "Issued by",
+                            "value": popover.engine ? popover.engine.certificateDetails.issuer || "Unknown" : "Unknown"
+                        },
+                        {
+                            "label": "Valid from",
+                            "value": popover.engine && popover.engine.certificateDetails.validFrom ? popover.engine.certificateDetails.validFrom.toLocaleString() : "Unknown"
+                        },
+                        {
+                            "label": "Valid until",
+                            "value": popover.engine && popover.engine.certificateDetails.validUntil ? popover.engine.certificateDetails.validUntil.toLocaleString() : "Unknown"
+                        },
+                        {
+                            "label": "Protocol",
+                            "value": popover.engine ? popover.engine.certificateDetails.protocol || "Unknown" : "Unknown"
+                        },
+                        {
+                            "label": "Serial number",
+                            "value": popover.engine ? popover.engine.certificateDetails.serialNumber || "Unknown" : "Unknown"
+                        }
+                    ]
 
                     delegate: Column {
                         required property var modelData
@@ -127,24 +132,25 @@ Popup {
                         spacing: 3
 
                         Text {
+                            textFormat: Text.PlainText
                             text: modelData.label
                             color: Theme.surfaceVariantText
                             font: Theme.labelFont
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: modelData.value
                             color: Theme.surfaceText
                             font: Theme.bodyFont
                             wrapMode: Text.WrapAnywhere
                         }
-
                     }
-
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     visible: popover.engine && popover.engine.certificateDetails.chain && popover.engine.certificateDetails.chain.length > 0
                     text: "Certificate chain"
                     color: Theme.surfaceText
@@ -172,6 +178,7 @@ Popup {
                             spacing: 4
 
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 text: modelData.subject || "Unknown certificate"
                                 color: Theme.surfaceText
@@ -180,6 +187,7 @@ Popup {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 text: "Issued by " + (modelData.issuer || "Unknown")
                                 color: Theme.surfaceVariantText
@@ -188,23 +196,18 @@ Popup {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 text: "SHA-256 " + (modelData.sha256 || "Unknown")
                                 color: Theme.surfaceVariantText
                                 font: Theme.bodyFont
                                 wrapMode: Text.WrapAnywhere
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
 
     background: OverlaySurface {
@@ -235,6 +238,7 @@ Popup {
                     spacing: 2
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: popover.engine && popover.engine.securityState === "secure" ? "Connection is secure" : popover.engine && popover.engine.securityState === "insecure" ? "Connection is not secure" : "Page details"
                         color: Theme.surfaceText
@@ -242,15 +246,14 @@ Popup {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: popover.controller.currentUrl.host || popover.controller.currentUrl.toString()
                         color: Theme.surfaceVariantText
                         font: Theme.bodyFont
                         elide: Text.ElideRight
                     }
-
                 }
-
             }
 
             EdenButton {
@@ -271,6 +274,7 @@ Popup {
                 width: parent.width
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width - siteSettingsButton.width
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Site permissions"
@@ -287,10 +291,10 @@ Popup {
                         popover.close();
                     }
                 }
-
             }
 
             Text {
+                textFormat: Text.PlainText
                 visible: popover.sitePermissions.length === 0
                 width: parent.width
                 text: "This site has not requested any permissions."
@@ -311,6 +315,7 @@ Popup {
                     color: Theme.surfaceContainerHigh
 
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         anchors.leftMargin: 12
                         anchors.right: permissionSwitch.left
@@ -332,16 +337,10 @@ Popup {
                         onToggled: {
                             if (popover.store)
                                 popover.store.setPermission(popover.controller.currentUrl, modelData.id, checked);
-
                         }
                     }
-
                 }
-
             }
-
         }
-
     }
-
 }
