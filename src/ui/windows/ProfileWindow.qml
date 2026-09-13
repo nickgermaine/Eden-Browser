@@ -18,8 +18,9 @@ Window {
 
     function showPassword(profileId, forgotten) {
         const row = Profiles.profiles.indexOfProfile(profileId);
-        if (row < 0)
+        if (row < 0) {
             return;
+        }
 
         const profile = Profiles.profiles.profileAt(row);
         selectedProfileId = profileId;
@@ -40,8 +41,9 @@ Window {
     }
 
     function backToChooser() {
-        if (verifying)
+        if (verifying) {
             return;
+        }
 
         passwordField.text = "";
         createPasswordField.text = "";
@@ -72,25 +74,29 @@ Window {
         }
 
         function onUnlockFailed(profileId, message, cooldown) {
-            if (profileId !== root.selectedProfileId)
+            if (profileId !== root.selectedProfileId) {
                 return;
+            }
 
             root.verifying = false;
             root.inlineError = message;
             root.cooldownSeconds = cooldown;
             passwordField.text = "";
-            if (cooldown === 0)
+            if (cooldown === 0) {
                 passwordField.forceActiveFocus();
+            }
         }
 
         function onCooldownFinished(profileId) {
-            if (profileId !== root.selectedProfileId)
+            if (profileId !== root.selectedProfileId) {
                 return;
+            }
 
             root.cooldownSeconds = 0;
             root.inlineError = "";
-            if (root.page === "password")
+            if (root.page === "password") {
                 passwordField.forceActiveFocus();
+            }
         }
 
         function onUnlockSucceeded(profileId) {
@@ -112,11 +118,18 @@ Window {
         }
 
         function onOperationFailed(profileId, message) {
-            if (profileId === root.selectedProfileId)
+            if (profileId === root.selectedProfileId) {
                 root.inlineError = message;
+            }
         }
 
         target: Profiles
+    }
+
+    WindowInputRegion {
+        window: root
+        rect: Qt.rect(shell.x, shell.y, shell.width, shell.height)
+        radius: shell.radius
     }
 
     RectangularShadow {
@@ -153,8 +166,9 @@ Window {
                 enabled: !root.transientParent
                 dragThreshold: 4
                 onActiveChanged: {
-                    if (active)
+                    if (active) {
                         root.startSystemMove();
+                    }
                 }
             }
 
@@ -166,10 +180,11 @@ Window {
                 iconName: "close"
                 Accessible.name: "Close"
                 onClicked: {
-                    if (Profiles.browserWindowCount === 0)
+                    if (Profiles.browserWindowCount === 0) {
                         Profiles.quitApplication();
-                    else
+                    } else {
                         root.close();
+                    }
                 }
             }
         }
@@ -219,13 +234,15 @@ Window {
                     model: Profiles.profiles
                     activeFocusOnTab: true
                     Keys.onReturnPressed: {
-                        if (currentIndex >= 0 && currentIndex < count)
+                        if (currentIndex >= 0 && currentIndex < count) {
                             root.activateEntry(Profiles.profiles.profileAt(currentIndex).profileId);
+                        }
                     }
                     Keys.onEnterPressed: Keys.returnPressed(event)
                     Keys.onEscapePressed: {
-                        if (Profiles.browserWindowCount > 0)
+                        if (Profiles.browserWindowCount > 0) {
                             root.close();
+                        }
                     }
 
                     footer: Item {
@@ -356,10 +373,11 @@ Window {
                             TapHandler {
                                 onTapped: {
                                     profileGrid.currentIndex = profileCard.index;
-                                    if (profileCard.lifecycle === "Creating")
+                                    if (profileCard.lifecycle === "Creating") {
                                         repairDialog.openFor(profileCard.profileId, profileCard.displayName);
-                                    else
+                                    } else {
                                         root.activateEntry(profileCard.profileId);
+                                    }
                                 }
                             }
                         }
@@ -439,8 +457,9 @@ Window {
                         text: root.verifying ? "" : "Sign in"
                         iconName: root.verifying ? "refresh" : ""
                         onClicked: {
-                            if (root.verifying || passwordField.text.length === 0)
+                            if (root.verifying || passwordField.text.length === 0) {
                                 return;
+                            }
 
                             root.verifying = true;
                             root.inlineError = "";

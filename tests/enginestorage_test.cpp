@@ -78,6 +78,7 @@ class EngineStorageTest final : public QObject {
     void keyringFailuresAreRetryable();
     void unreadableMigrationPreservesSource();
     void recoversDisconnectedMount();
+    void resumesInterruptedEncryption();
 };
 
 void EngineStorageTest::init() {
@@ -100,9 +101,27 @@ void EngineStorageTest::migrationPersistenceAndRevocation() {
     QVERIFY(writeFile(roots.cacheRoot + "/webengine/legacy-site-cache", marker));
     eden::core::EngineStorage storage;
     std::optional<QString> result;
-    storage.prepare(roots, [&](const QString &error) { result = error; });
+    QStringList progressMessages;
+    QList<qint64> progressBytes;
+    storage.prepare(
+        roots,
+        [&](const QString &error) { result = error; },
+        [&](const QString &message, qint64 bytes) {
+            QCOMPARE(QThread::currentThread(), storage.thread());
+            QVERIFY(!result.has_value());
+            progressMessages.append(message);
+            progressBytes.append(bytes);
+        }
+    );
+    QVERIFY(progressMessages.isEmpty());
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 40000);
     QVERIFY2(result->isEmpty(), qPrintable(*result));
+    QVERIFY(progressMessages.contains("Encrypting existing site data"));
+    QVERIFY(progressMessages.contains("Finishing verified storage migration"));
+    QVERIFY(progressBytes.last() >= marker.size() * 4);
+    for (qsizetype i = 1; i < progressBytes.size(); ++i) {
+        QVERIFY(progressBytes.at(i) >= progressBytes.at(i - 1));
+    }
     QVERIFY(storage.protects(file));
     QVERIFY(storage.protects(cache));
     QVERIFY(storage.protects(roots.dataRoot + "/webengine/legacy-site-data"));
@@ -305,6 +324,36 @@ void EngineStorageTest::recoversDisconnectedMount() {
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 40000);
     QVERIFY2(result->isEmpty(), qPrintable(*result));
     QCOMPARE(readFile(view + "/record"), QByteArray("survives-helper-crash"));
+    storage.shutdown();
+    allowCleanup(roots);
+}
+
+void EngineStorageTest::resumesInterruptedEncryption() {
+    QTemporaryDir directory;
+    const eden::core::ProfilePaths::Roots roots{directory.filePath("data"), directory.filePath("cache")};
+    const QString source = roots.dataRoot + "/engine-data";
+    const QString pending = source + ".plaintext-migration";
+    QVERIFY(writeFile(source + "/one", "first-preserved-record"));
+    QVERIFY(writeFile(source + "/sub/two", "second-preserved-record"));
+    QVERIFY(QFile::link(source + "/one", source + "/unsupported-link"));
+    eden::core::EngineStorage storage;
+    std::optional<QString> result;
+    storage.prepare(roots, [&](const QString &error) { result = error; });
+    QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 40000);
+    QVERIFY(!result->isEmpty());
+    QCOMPARE(readFile(pending + "/one"), QByteArray("first-preserved-record"));
+    QCOMPARE(readFile(pending + "/sub/two"), QByteArray("second-preserved-record"));
+    QCOMPARE(readFile(source + ".encryption-state"), QByteArray("migrate"));
+    QVERIFY(QFile::remove(pending + "/unsupported-link"));
+    result.reset();
+    storage.prepare(roots, [&](const QString &error) { result = error; });
+    QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 40000);
+    QVERIFY2(result->isEmpty(), qPrintable(*result));
+    QCOMPARE(readFile(source + "/one"), QByteArray("first-preserved-record"));
+    QCOMPARE(readFile(source + "/sub/two"), QByteArray("second-preserved-record"));
+    QCOMPARE(readFile(source + ".encryption-state"), QByteArray("ready"));
+    QVERIFY(!QFileInfo::exists(pending));
+    QCOMPARE(storeCalls, 1);
     storage.shutdown();
     allowCleanup(roots);
 }

@@ -1,5 +1,6 @@
 import Eden.Ui
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Effects
 
 Window {
@@ -13,6 +14,12 @@ Window {
     flags: Qt.Window | Qt.FramelessWindowHint
     color: "transparent"
     title: "Eden"
+
+    WindowInputRegion {
+        window: root
+        rect: Qt.rect(shell.x, shell.y, shell.width, shell.height)
+        radius: shell.radius
+    }
 
     RectangularShadow {
         anchors.fill: shell
@@ -36,6 +43,7 @@ Window {
 
         Column {
             anchors.centerIn: parent
+            width: Math.min(parent.width - 96, 480)
             spacing: 20
             visible: Profiles.startupState !== "recovery"
 
@@ -45,6 +53,37 @@ Window {
                 sourceSize: Qt.size(96, 96)
                 width: 96
                 height: 96
+            }
+
+            BusyIndicator {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 32
+                height: 32
+                running: root.visible && Profiles.startupState === "loading"
+            }
+
+            Text {
+                objectName: "startupMessage"
+                textFormat: Text.PlainText
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: Profiles.startupMessage
+                color: Theme.surfaceText
+                font: Theme.titleFont
+            }
+
+            Text {
+                objectName: "startupDetails"
+                textFormat: Text.PlainText
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: Profiles.startupDetails
+                color: Theme.surfaceVariantText
+                font: Theme.bodyFont
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
             }
         }
 
@@ -107,8 +146,9 @@ Window {
             target: null
             dragThreshold: 4
             onActiveChanged: {
-                if (active)
+                if (active) {
                     root.startSystemMove();
+                }
             }
         }
     }

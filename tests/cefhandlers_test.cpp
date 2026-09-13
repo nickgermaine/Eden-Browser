@@ -50,6 +50,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QSet>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -404,6 +405,20 @@ document.getElementById('frames').onclick = async () => {
                             )
                                 .arg(postValue)
                                 .toUtf8();
+                    } else if (path.startsWith("/resize")) {
+                        responseBody =
+                            R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body { margin:0; background:#182838; overflow:hidden; }
+#square { position:absolute; left:40px; top:40px; width:120px; height:120px; background:#c02040; }
+#corner { position:fixed; right:0; bottom:0; width:30px; height:30px; background:#208040; }
+@media (max-width:600px) { #square { background:#2040a0; } }
+</style><div id="square"></div><div id="corner"></div>
+<script>
+const reportSize = () => { document.title = 'Viewport ' + innerWidth + 'x' + innerHeight; };
+addEventListener('resize', reportSize);
+reportSize();
+</script>)HTML";
                     } else if (path == "/delayed") {
                         responseBody =
                             "<!doctype html><title>Delayed pending</title><body>delayed<script>document.title='Delayed "
@@ -523,6 +538,9 @@ class CefHandlersTest final : public QObject {
     void shellFullscreen();
     void shellCallIndicators();
     void resizeStress();
+    void resizeReflowsPage_data();
+    void resizeReflowsPage();
+    void resizePreservesPendingFrame();
     void preservesPaintAcrossCoalescedResizes();
     void popupMenus_data();
     void popupMenus();
@@ -2407,7 +2425,12 @@ class CefPaintSequence final : public CefTask {
                 handler->OnPaint(
                     browser,
                     PET_VIEW,
-                    {CefRect(0, 0, 1, 1)},
+                    {CefRect(
+                        0,
+                        0,
+                        m_frames.size() == 1 ? image.width() : 1,
+                        m_frames.size() == 1 ? image.height() : 1
+                    )},
                     image.constBits(),
                     image.width(),
                     image.height()
@@ -2448,15 +2471,16 @@ void CefHandlersTest::preservesPaintAcrossCoalescedResizes() {
         const QImage image = window.grabWindow();
         return image.isNull() ? QColor() : image.pixelColor((QPointF(100, 70) * window.devicePixelRatio()).toPoint());
     };
-    QImage initial(64, 48, QImage::Format_ARGB32_Premultiplied);
+    const QSize frameSize = (QSizeF(window.size()) * window.devicePixelRatio()).toSize();
+    QImage initial(frameSize, QImage::Format_ARGB32_Premultiplied);
     initial.fill(QColor("#c02040"));
     auto result = std::make_shared<std::atomic_int>(0);
     QVERIFY(CefPostTask(TID_UI, new CefPaintSequence(page, {initial}, result)));
     QTRY_COMPARE_WITH_TIMEOUT(result->load(), 1, 10000);
     QTRY_COMPARE_WITH_TIMEOUT(corner(), QColor("#c02040"), 10000);
-    QImage intermediate(32, 24, QImage::Format_ARGB32_Premultiplied);
+    QImage intermediate(frameSize / 2, QImage::Format_ARGB32_Premultiplied);
     intermediate.fill(QColor("#208040"));
-    QImage final(64, 48, QImage::Format_ARGB32_Premultiplied);
+    QImage final(frameSize, QImage::Format_ARGB32_Premultiplied);
     final.fill(QColor("#2040a0"));
     result = std::make_shared<std::atomic_int>(0);
     QVERIFY(CefPostTask(TID_UI, new CefPaintSequence(page, {intermediate, final}, result)));
@@ -2466,6 +2490,151 @@ void CefHandlersTest::preservesPaintAcrossCoalescedResizes() {
     }
     QCOMPARE(result->load(), 1);
     QTRY_COMPARE_WITH_TIMEOUT(corner(), QColor("#2040a0"), 10000);
+}
+
+void CefHandlersTest::resizeReflowsPage_data() {
+    hoverEntry_data();
+}
+
+void CefHandlersTest::resizeReflowsPage() {
+    QFETCH(bool, devTools);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    QObject::connect(&window, &QQuickWindow::widthChanged, &viewport, [&] { viewport.setWidth(window.width()); });
+    QObject::connect(&window, &QQuickWindow::heightChanged, &viewport, [&] { viewport.setHeight(window.height()); });
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    eden::engine::cef::CefEngineView view(&profile);
+    QQuickItem inspectedPage(window.contentItem());
+    inspectedPage.setSize(QSizeF(30, 30));
+    const QUrl fixture(
+        QString("http://127.0.0.1:%1/resize%2").arg(m_server.serverPort()).arg(devTools ? "?devtools" : "")
+    );
+    if (devTools) {
+        view.attach(&inspectedPage);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 10000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 10000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+    }
+    const auto matchesPage = [&] {
+        const QImage image = QGuiApplication::platformName() == "xcb"
+                                 ? window.screen()->grabWindow(window.winId()).toImage()
+                                 : window.grabWindow();
+        if (image.isNull() || image.size() != (QSizeF(window.size()) * window.devicePixelRatio()).toSize()) {
+            return false;
+        }
+        const auto pixelMatches = [&](int x, int y, const QColor &expected) {
+            const QColor actual = image.pixelColor((QPointF(x, y) * window.devicePixelRatio()).toPoint());
+            return std::abs(actual.red() - expected.red()) <= 4 && std::abs(actual.green() - expected.green()) <= 4 &&
+                   std::abs(actual.blue() - expected.blue()) <= 4;
+        };
+        const QColor square(window.width() <= 600 ? "#2040a0" : "#c02040");
+        return pixelMatches(42, 42, square) && pixelMatches(158, 158, square) &&
+               pixelMatches(38, 80, QColor("#182838")) && pixelMatches(162, 80, QColor("#182838")) &&
+               pixelMatches(80, 38, QColor("#182838")) && pixelMatches(80, 162, QColor("#182838")) &&
+               pixelMatches(window.width() - 5, window.height() - 5, QColor("#208040"));
+    };
+    const QList<QSize> sizes{{1000, 700}, {500, 700}, {1000, 350}, {750, 550}, {400, 800}, {1100, 400}};
+    for (const QSize &size : sizes) {
+        window.resize(size);
+        if (!devTools) {
+            QTRY_COMPARE_WITH_TIMEOUT(
+                view.title(),
+                QString("Viewport %1x%2").arg(size.width()).arg(size.height()),
+                10000
+            );
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(matchesPage(), 5000);
+    }
+    for (int batch = 0; batch < 12; ++batch) {
+        for (int step = 0; step < 12; ++step) {
+            window.resize(420 + ((batch * 137 + step * 97) % 700), 300 + ((batch * 73 + step * 113) % 500));
+            QTest::qWait(step % 3);
+        }
+        if (!devTools) {
+            QTRY_COMPARE_WITH_TIMEOUT(
+                view.title(),
+                QString("Viewport %1x%2").arg(window.width()).arg(window.height()),
+                10000
+            );
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(matchesPage(), 5000);
+    }
+    if (QGuiApplication::platformName().startsWith("wayland")) {
+        const QSize restoredSize = window.size();
+        window.showMaximized();
+        QTRY_COMPARE_WITH_TIMEOUT(window.visibility(), QWindow::Maximized, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(matchesPage(), 5000);
+        window.showNormal();
+        QTRY_COMPARE_WITH_TIMEOUT(window.visibility(), QWindow::Windowed, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(window.size(), restoredSize, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(matchesPage(), 5000);
+    }
+    window.hide();
+    window.resize(1000, 700);
+    QTest::qWait(50);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(matchesPage(), 5000);
+    QTest::qWait(250);
+    QSignalSpy settledFrames(&window, &QQuickWindow::frameSwapped);
+    QTest::qWait(300);
+    QVERIFY2(settledFrames.count() <= 2, "Resize refreshes kept the settled page repainting");
+}
+
+void CefHandlersTest::resizePreservesPendingFrame() {
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(window.size());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    eden::engine::cef::CefEngineView view(&profile);
+    view.attach(&viewport);
+    view.load(QUrl(QString("http://127.0.0.1:%1/resize").arg(m_server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Viewport 1000x700"), 10000);
+    const auto squareIsUnscaled = [&] {
+        const QImage image = window.grabWindow();
+        if (image.isNull()) {
+            return false;
+        }
+        const auto pixelMatches = [&](int x, int y, const QColor &expected) {
+            const QColor actual = image.pixelColor((QPointF(x, y) * window.devicePixelRatio()).toPoint());
+            return std::abs(actual.red() - expected.red()) <= 4 && std::abs(actual.green() - expected.green()) <= 4 &&
+                   std::abs(actual.blue() - expected.blue()) <= 4;
+        };
+        return pixelMatches(42, 42, QColor("#c02040")) && pixelMatches(158, 158, QColor("#c02040")) &&
+               pixelMatches(38, 80, QColor("#182838")) && pixelMatches(162, 80, QColor("#182838")) &&
+               pixelMatches(80, 38, QColor("#182838")) && pixelMatches(80, 162, QColor("#182838"));
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(squareIsUnscaled(), 10000);
+    CefRefPtr<CefUiPause> pause = new CefUiPause;
+    QVERIFY(CefPostTask(TID_UI, pause));
+    QTRY_VERIFY_WITH_TIMEOUT(pause->entered.load(), 1000);
+    viewport.setSize(QSizeF(600, 900));
+    QTest::qWait(50);
+    const bool preserved = squareIsUnscaled();
+    pause->resume();
+    QVERIFY2(preserved, "The previous frame stretched before the resized page arrived");
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Viewport 600x900"), 10000);
 }
 
 void CefHandlersTest::resizeStress() {

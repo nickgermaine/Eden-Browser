@@ -4,6 +4,7 @@
 #include "core/profiles/profilepaths.h"
 #include "core/profiles/profileregistry.h"
 #include "core/profiles/profiletypes.h"
+#include "core/profiles/windowlaunchserver.h"
 
 #include <QHash>
 #include <QObject>
@@ -33,6 +34,8 @@ namespace eden::core {
         Q_OBJECT
         Q_PROPERTY(eden::core::ProfileListModel *profiles READ profileModel CONSTANT)
         Q_PROPERTY(QString startupState READ startupState NOTIFY startupStateChanged)
+        Q_PROPERTY(QString startupMessage READ startupMessage NOTIFY startupProgressChanged)
+        Q_PROPERTY(QString startupDetails READ startupDetails NOTIFY startupProgressChanged)
         Q_PROPERTY(QString recoveryMessage READ recoveryMessage NOTIFY startupStateChanged)
         Q_PROPERTY(bool recoveryCanRetry READ recoveryCanRetry NOTIFY startupStateChanged)
         Q_PROPERTY(
@@ -56,12 +59,15 @@ namespace eden::core {
         void setQmlEngine(QQmlEngine *engine);
         void setLaunchWindow(QQuickWindow *window);
         void configureLaunch(bool privateWindow, const QString &engineName, const QList<QUrl> &urls);
+        bool requestWindow(const WindowLaunchRequest &request);
         void beginStartup();
         void handleAboutToQuit();
         void shutdownContexts();
 
         ProfileListModel *profileModel() const;
         QString startupState() const;
+        QString startupMessage() const;
+        QString startupDetails() const;
         QString recoveryMessage() const;
         bool recoveryCanRetry() const;
         bool showChooserOnStartup() const;
@@ -131,6 +137,7 @@ namespace eden::core {
 
       signals:
         void startupStateChanged();
+        void startupProgressChanged();
         void showChooserOnStartupChanged();
         void pendingCleanupCountChanged();
         void browserWindowCountChanged();
@@ -163,6 +170,7 @@ namespace eden::core {
         void openProfile(const QString &profileId, bool becauseOfSwitch);
         void finishUnlock(const QString &profileId);
         void deliverLaunchRequests(WindowController *controller, const std::shared_ptr<ProfileContext> &context);
+        void processWindowRequests();
         void performSignOut(const QString &profileId, bool showChooserAfter, std::function<void(bool)> completion);
         void performDeletion(const QString &profileId);
         void stageAndRemoveProfile(const QString &profileId);
@@ -196,6 +204,8 @@ namespace eden::core {
         QPointer<QQuickWindow> m_launchWindow;
         QPointer<QQuickWindow> m_chooserWindow;
         QString m_startupState = QStringLiteral("loading");
+        QString m_startupMessage = QStringLiteral("Starting Eden");
+        QString m_startupDetails = QStringLiteral("Preparing your profile.");
         bool m_preparingStorage = false;
         bool m_storageRecovery = false;
         QString m_recoveryMessage;
@@ -204,6 +214,8 @@ namespace eden::core {
         QTimer m_cooldownTimer;
         QString m_cooldownProfileId;
         QQueue<QUrl> m_launchUrls;
+        QQueue<WindowLaunchRequest> m_windowRequests;
+        bool m_processingWindowRequests = false;
         QString m_launchEngineName;
         bool m_launchPrivate = false;
         bool m_startupDecisionApplied = false;

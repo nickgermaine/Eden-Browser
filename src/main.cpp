@@ -8,6 +8,7 @@
 #include "core/profiles/profilelistmodel.h"
 #include "core/profiles/profilemanager.h"
 #include "core/profiles/profilesettings.h"
+#include "core/profiles/windowlaunchserver.h"
 #include "core/profiles/windowregistry.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/theme/thememanager.h"
@@ -207,12 +208,6 @@ int main(int argc, char *argv[]) {
         waylandGlibDispatcher = std::make_unique<eden::platform::WaylandGlibEventDispatcher>();
     }
 
-    eden::core::ApplicationContext applicationContext;
-    if (!applicationContext.acquireSingleInstanceLock()) {
-        qCritical("Another Eden window already manages this profile data");
-        return 0;
-    }
-
     qmlRegisterType<eden::core::WindowController>("Eden.Ui", 1, 0, "WindowController");
     qmlRegisterType<eden::core::WindowFrame>("Eden.Ui", 1, 0, "WindowFrame");
     qmlRegisterType<eden::core::TabStripNavigator>("Eden.Ui", 1, 0, "TabStripNavigator");
@@ -247,8 +242,6 @@ int main(int argc, char *argv[]) {
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Engines", eden::engine::EngineRegistry::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Themes", eden::core::ThemeManager::instance());
-    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Profiles", applicationContext.profiles());
-
     QString engineName;
     bool privateWindow = false;
     QList<QUrl> launchUrls;
@@ -266,6 +259,21 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    eden::core::ApplicationContext applicationContext;
+    if (!applicationContext.acquireSingleInstanceLock()) {
+        if (applicationContext.forwardLaunchRequest({privateWindow, engineName, launchUrls})) {
+            return 0;
+        }
+        if (!applicationContext.acquireSingleInstanceLock()) {
+            qCritical("Eden could not open this profile or contact the running browser. Close Eden and try again.");
+            return 1;
+        }
+    }
+    if (!applicationContext.listenForLaunchRequests()) {
+        qCritical("Eden could not start its local window service. Check the runtime directory permissions.");
+        return 1;
+    }
+    qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Profiles", applicationContext.profiles());
     applicationContext.profiles()->configureLaunch(privateWindow, engineName, launchUrls);
     bool holdAtShellStage = false;
 #if EDEN_ENABLE_AUTOMATION

@@ -24,20 +24,25 @@ Window {
     }
     onActiveChanged: {
         if (!active) {
-            if (mainMenuLoader.item)
+            if (mainMenuLoader.item) {
                 mainMenuLoader.item.close();
+            }
 
-            if (securityPopoverLoader.item)
+            if (securityPopoverLoader.item) {
                 securityPopoverLoader.item.close();
+            }
 
-            if (backHistoryMenuLoader.item)
+            if (backHistoryMenuLoader.item) {
                 backHistoryMenuLoader.item.close();
+            }
 
-            if (forwardHistoryMenuLoader.item)
+            if (forwardHistoryMenuLoader.item) {
                 forwardHistoryMenuLoader.item.close();
+            }
 
-            if (profileMenuLoader.item)
+            if (profileMenuLoader.item) {
                 profileMenuLoader.item.close();
+            }
         }
     }
     onClosing: controller.prepareToClose()
@@ -52,6 +57,12 @@ Window {
         id: frame
 
         window: root
+    }
+
+    WindowInputRegion {
+        window: root
+        rect: Qt.rect(shell.x, shell.y, shell.width, shell.height)
+        radius: shell.radius
     }
 
     RectangularShadow {
@@ -169,8 +180,9 @@ Window {
                     target: null
                     dragThreshold: 4
                     onActiveChanged: {
-                        if (active)
+                        if (active) {
                             frame.startSystemMove();
+                        }
                     }
                 }
 
@@ -495,12 +507,14 @@ Window {
                             anchors.fill: parent
                             visible: controller.activeIndex === index
                             Component.onCompleted: {
-                                if (engineView)
+                                if (engineView) {
                                     engineView.attach(engineHost);
+                                }
                             }
                             onEngineViewChanged: {
-                                if (engineView)
+                                if (engineView) {
                                     engineView.attach(engineHost);
+                                }
                             }
 
                             Item {
@@ -605,14 +619,16 @@ Window {
                     DragHandler {
                         target: null
                         onActiveChanged: {
-                            if (active)
+                            if (active) {
                                 controller.beginDevToolsPaneResize();
-                            else
+                            } else {
                                 controller.commitDevToolsPaneSize();
+                            }
                         }
                         onTranslationChanged: {
-                            if (active)
+                            if (active) {
                                 controller.resizeDevToolsPane(translation.x, true);
+                            }
                         }
                     }
                 }
@@ -632,14 +648,16 @@ Window {
                     DragHandler {
                         target: null
                         onActiveChanged: {
-                            if (active)
+                            if (active) {
                                 controller.beginDevToolsPaneResize();
-                            else
+                            } else {
                                 controller.commitDevToolsPaneSize();
+                            }
                         }
                         onTranslationChanged: {
-                            if (active)
+                            if (active) {
                                 controller.resizeDevToolsPane(translation.y, false);
+                            }
                         }
                     }
                 }
@@ -737,12 +755,14 @@ Window {
                     xAxis.enabled: true
                     yAxis.enabled: false
                     onActiveChanged: {
-                        if (active)
+                        if (active) {
                             controller.beginPaneResize();
+                        }
                     }
                     onTranslationChanged: {
-                        if (active)
+                        if (active) {
                             controller.resizePane(translation.x);
+                        }
                     }
                 }
             }
@@ -935,28 +955,33 @@ Window {
             }
 
             function onPageContextMenuRequested() {
-                if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2)
+                if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2) {
                     return;
+                }
 
                 pageContextMenuLoader.active = true;
-                if (!pageContextMenuLoader.item.tryOpen())
+                if (!pageContextMenuLoader.item.tryOpen()) {
                     controller.dismissPageContextMenu();
+                }
             }
 
             function onAutofillRequested() {
                 autofillMenuLoader.active = true;
-                if (autofillMenuLoader.item)
+                if (autofillMenuLoader.item) {
                     autofillMenuLoader.item.tryOpen();
+                }
             }
 
             function onCredentialStateChanged() {
-                if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item)
+                if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item) {
                     autofillMenuLoader.item.close();
+                }
             }
 
             function onJavaScriptDialogChanged() {
-                if (controller.javaScriptDialog.id === undefined && javaScriptDialogLoader.item)
+                if (controller.javaScriptDialog.id === undefined && javaScriptDialogLoader.item) {
                     javaScriptDialogLoader.item.close();
+                }
             }
 
             function onJavaScriptDialogRequested() {
@@ -965,8 +990,9 @@ Window {
             }
 
             function onFileDialogChanged() {
-                if (controller.fileDialog.id === undefined && fileDialogLoader.item)
+                if (controller.fileDialog.id === undefined && fileDialogLoader.item) {
                     fileDialogLoader.item.close();
+                }
             }
 
             function onFileDialogRequested() {
@@ -975,8 +1001,9 @@ Window {
             }
 
             function onPermissionRequestChanged() {
-                if (controller.permissionRequest.id === undefined && permissionPromptLoader.item)
+                if (controller.permissionRequest.id === undefined && permissionPromptLoader.item) {
                     permissionPromptLoader.item.close();
+                }
             }
 
             function onPermissionRequestRequested() {
@@ -985,8 +1012,9 @@ Window {
             }
 
             function onDisplayCaptureRequestChanged() {
-                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item)
+                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item) {
                     displayCapturePromptLoader.item.close();
+                }
             }
 
             function onDisplayCaptureRequestRequested() {
@@ -1143,8 +1171,9 @@ Window {
 
         Connections {
             function onSignOutConfirmationRequired(profileId, downloadCount) {
-                if (profileId !== controller.profileId)
+                if (profileId !== controller.profileId) {
                     return;
+                }
 
                 if (root.active || Profiles.browserWindowCount === 1) {
                     signOutConfirmLoader.active = true;
@@ -1220,22 +1249,23 @@ Window {
                         }
                     ]
                     onTriggered: actionId => {
-                        if (actionId === "new_tab")
+                        if (actionId === "new_tab") {
                             controller.newTabAndFocusOmnibox();
-                        else if (actionId === "new_window")
+                        } else if (actionId === "new_window") {
                             controller.openNewWindow(false);
-                        else if (actionId === "private_window")
+                        } else if (actionId === "private_window") {
                             controller.openNewWindow(true);
-                        else if (actionId === "bookmarks")
+                        } else if (actionId === "bookmarks") {
                             controller.openPane = "bookmarks";
-                        else if (actionId === "history")
+                        } else if (actionId === "history") {
                             controller.openPane = "history";
-                        else if (actionId === "downloads")
+                        } else if (actionId === "downloads") {
                             controller.openPane = "downloads";
-                        else if (actionId === "about_eden")
+                        } else if (actionId === "about_eden") {
                             controller.openAboutTab();
-                        else
+                        } else {
                             controller.shortcuts.execute(actionId);
+                        }
                     }
                 }
             }
@@ -1342,8 +1372,9 @@ Window {
             target: null
             acceptedButtons: Qt.LeftButton
             onActiveChanged: {
-                if (active)
+                if (active) {
                     frame.startSystemResize(parent.edges);
+                }
             }
         }
     }

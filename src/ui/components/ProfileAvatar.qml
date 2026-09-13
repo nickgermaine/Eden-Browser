@@ -1,6 +1,7 @@
 import Eden.Ui
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Shapes
 
 Item {
     id: avatar
@@ -8,6 +9,7 @@ Item {
     property string avatarUrl
     property string displayName
     property real avatarSize: 32
+    readonly property real diameter: Math.max(0, Math.min(width, height))
 
     implicitWidth: avatarSize
     implicitHeight: avatarSize
@@ -17,7 +19,9 @@ Item {
     Item {
         id: imageLayer
 
-        anchors.fill: parent
+        anchors.centerIn: parent
+        width: avatar.diameter
+        height: width
         visible: avatarImage.status === Image.Ready
         layer.enabled: true
         layer.smooth: true
@@ -35,31 +39,41 @@ Item {
         layer.effect: MultiEffect {
             maskEnabled: true
             maskSource: circleMask
+            maskThresholdMin: 0.5
+            maskSpreadAtMin: 1.0
         }
-
     }
 
-    Item {
+    Shape {
         id: circleMask
 
-        anchors.fill: parent
+        anchors.centerIn: parent
+        width: avatar.diameter
+        height: width
+        preferredRendererType: Shape.CurveRenderer
         layer.enabled: true
         layer.smooth: true
         visible: false
 
-        Rectangle {
-            anchors.fill: parent
-            radius: Math.min(width, height) / 2
-            color: "black"
-        }
+        ShapePath {
+            strokeWidth: -1
+            fillColor: "white"
 
+            PathAngleArc {
+                centerX: circleMask.width / 2
+                centerY: circleMask.height / 2
+                radiusX: circleMask.width / 2
+                radiusY: radiusX
+                startAngle: 0
+                sweepAngle: 360
+            }
+        }
     }
 
     Icon {
         anchors.centerIn: parent
         visible: avatarImage.status !== Image.Ready
         name: "user-circle"
-        iconSize: avatar.avatarSize
+        iconSize: avatar.diameter
     }
-
 }

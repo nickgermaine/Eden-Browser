@@ -136,9 +136,11 @@ Rectangle {
             }
 
             Row {
+                id: tabContent
+
                 anchors.fill: parent
                 anchors.leftMargin: 10
-                anchors.rightMargin: 4
+                anchors.rightMargin: anchors.leftMargin - (closeButton.width - tabIcon.width) / 2
                 spacing: 10
 
                 TabIcon {
@@ -156,7 +158,7 @@ Rectangle {
                     textFormat: Text.PlainText
                     visible: sidebar.controller.sidebarExpanded
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - tabIcon.width - activity.width - 58)
+                    width: Math.max(0, tabContent.width - tabIcon.width - activity.width - closeButton.width - tabContent.spacing * (activity.visible ? 3 : 2))
                     text: tab.title.length > 0 ? tab.title : tab.url.toString()
                     color: Theme.surfaceText
                     font: Theme.bodyFont
@@ -172,6 +174,8 @@ Rectangle {
                 }
 
                 EdenButton {
+                    id: closeButton
+
                     visible: sidebar.controller.sidebarExpanded && hover.hovered
                     width: 28
                     height: 28
@@ -196,30 +200,34 @@ Rectangle {
                 id: hover
 
                 onHoveredChanged: {
-                    if (!hovered)
+                    if (!hovered) {
                         tab.previewSuppressed = false;
+                    }
                 }
             }
 
             TapHandler {
                 acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                 onPressedChanged: {
-                    if (pressed)
+                    if (pressed) {
                         tab.previewSuppressed = true;
+                    }
                 }
                 onTapped: (_, button) => {
-                    if (button === Qt.MiddleButton)
+                    if (button === Qt.MiddleButton) {
                         sidebar.controller.closeTab(tab.index);
-                    else
+                    } else {
                         sidebar.controller.activeIndex = tab.index;
+                    }
                 }
             }
 
             TapHandler {
                 acceptedButtons: Qt.RightButton
                 onPressedChanged: {
-                    if (pressed)
+                    if (pressed) {
                         tab.previewSuppressed = true;
+                    }
                 }
                 onTapped: tabMenu.open()
             }
@@ -231,8 +239,9 @@ Rectangle {
                 yAxis.enabled: true
                 xAxis.enabled: true
                 onActiveChanged: {
-                    if (active)
+                    if (active) {
                         sidebar.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
+                    }
                 }
             }
 
@@ -291,8 +300,9 @@ Rectangle {
         }
         onExited: sidebar.controller.tabDragLeft()
         onDropped: drop => {
-            if (sidebar.controller.tabDragDropped(sidebar, drop.x, drop.y))
+            if (sidebar.controller.tabDragDropped(sidebar, drop.x, drop.y)) {
                 drop.acceptProposedAction();
+            }
         }
     }
 

@@ -107,6 +107,8 @@ set(EDEN_CORE_SOURCES
     src/core/profiles/sqlcipherdatabase.h
     src/core/profiles/windowregistry.cpp
     src/core/profiles/windowregistry.h
+    src/core/profiles/windowlaunchserver.cpp
+    src/core/profiles/windowlaunchserver.h
     src/core/settings/settingsstore.cpp
     src/core/settings/settingsstore.h
     src/core/settings/shortcutregistry.cpp
@@ -234,6 +236,9 @@ qt_add_qml_module(eden-ui
     URI Eden.Ui
     VERSION 1.0
     OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Eden/Ui
+    SOURCES
+        src/core/window/windowinputregion.cpp
+        src/core/window/windowinputregion.h
     QML_FILES
         src/ui/Theme.qml
         src/ui/components/CommandPalette.qml
@@ -677,6 +682,12 @@ qt_add_qml_module(eden-ui
         resources/themes/eden-default.json
 )
 target_link_libraries(eden-ui PUBLIC eden-core Qt6::Quick Qt6::QuickControls2 Qt6::QuickEffects Qt6::QuickShapes)
+target_include_directories(eden-ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/window)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(XCB_SHAPE REQUIRED IMPORTED_TARGET xcb-shape xcb)
+    target_link_libraries(eden-ui PRIVATE PkgConfig::XCB_SHAPE)
+    target_compile_definitions(eden-ui PRIVATE EDEN_HAS_XCB_SHAPE=1)
+endif()
 
 qt_add_executable(eden-browser
     src/main.cpp
@@ -705,6 +716,16 @@ if(EDEN_ENGINE_QTWEBENGINE)
 endif()
 
 enable_testing()
+
+add_executable(eden-window-launch-tests
+    tests/windowlaunchserver_test.cpp
+    src/core/profiles/windowlaunchserver.cpp
+    src/core/profiles/windowlaunchserver.h
+)
+target_include_directories(eden-window-launch-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(eden-window-launch-tests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME eden-window-launch-tests COMMAND eden-window-launch-tests)
+set_tests_properties(eden-window-launch-tests PROPERTIES TIMEOUT 30)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME eden-bench-tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench/bench_test.py)
@@ -807,6 +828,18 @@ qt_add_executable(eden-window-frame-tests tests/windowframe_test.cpp)
 target_link_libraries(eden-window-frame-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-window-frame-tests COMMAND eden-window-frame-tests)
 set_tests_properties(eden-window-frame-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(eden-window-input-tests tests/windowinputregion_test.cpp)
+target_link_libraries(eden-window-input-tests PRIVATE eden-ui Qt6::Test)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(XCB_XTEST QUIET IMPORTED_TARGET xcb-xtest)
+    if(XCB_XTEST_FOUND)
+        target_link_libraries(eden-window-input-tests PRIVATE PkgConfig::XCB_SHAPE PkgConfig::XCB_XTEST)
+        target_compile_definitions(eden-window-input-tests PRIVATE EDEN_HAS_X11_INPUT_TEST=1)
+    endif()
+endif()
+add_test(NAME eden-window-input-tests COMMAND eden-window-input-tests)
+set_tests_properties(eden-window-input-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 qt_add_executable(eden-wayland-glib-event-dispatcher-tests
     tests/waylandglibeventdispatcher_test.cpp
@@ -915,4 +948,14 @@ if(EDEN_ENGINE_SERVO)
     add_dependencies(eden-servo-ffi-tests eden-servo-cargo)
     add_test(NAME eden-servo-ffi-tests COMMAND eden-servo-ffi-tests)
     set_tests_properties(eden-servo-ffi-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+get_target_property(EDEN_QML_LIBRARY_TYPE Qt6::Qml TYPE)
+if(EDEN_QML_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+    get_property(EDEN_BUILD_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(EDEN_BUILD_TARGET IN LISTS EDEN_BUILD_TARGETS)
+        if(EDEN_BUILD_TARGET MATCHES "^eden-.*tests$")
+            set_property(TARGET ${EDEN_BUILD_TARGET} PROPERTY QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+        endif()
+    endforeach()
 endif()

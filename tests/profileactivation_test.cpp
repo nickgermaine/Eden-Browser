@@ -72,6 +72,7 @@ class ProfileActivationTest final : public QObject {
     void initTestCase();
     void cleanup();
     void cleanupTestCase();
+    void launchRequestWaitsForStartup();
     void controllerRejectsUnavailableStorage_data();
     void controllerRejectsUnavailableStorage();
     void managerRecoversBeforeOpeningWindows_data();
@@ -79,6 +80,8 @@ class ProfileActivationTest final : public QObject {
     void recoveryCanChooseAnotherProfile();
     void privateStartupRetryPreservesMode();
     void windowReportsSaveFailures();
+    void queuedLaunchesOpenSeparateWindows();
+    void startupWindowShowsProgress();
 
   private:
     std::optional<eden::core::ProfileRecord> createRecord();
@@ -185,6 +188,32 @@ void ProfileActivationTest::controllerRejectsUnavailableStorage_data() {
     QTest::newRow("keyring") << QString("keyring");
     QTest::newRow("database") << QString("database");
     QTest::newRow("settings") << QString("settings");
+}
+
+void ProfileActivationTest::launchRequestWaitsForStartup() {
+    QCOMPARE(m_manager->startupState(), QString("loading"));
+    QVERIFY(m_manager->requestWindow({true, {}, {QUrl("eden://settings/privacy")}}));
+    QTest::qWait(20);
+    QCOMPARE(m_manager->browserWindowCount(), 0);
+    const auto record = createRecord();
+    QVERIFY(record);
+    m_manager->activateProfile(record->id.toString());
+    QTRY_COMPARE(m_manager->browserWindowCount(), 2);
+    const auto context = m_manager->contextFor(record->id.toString());
+    QVERIFY(context);
+    QCOMPARE(context->windows().size(), 2);
+    int privateWindows = 0;
+    for (auto *controller : context->windows()) {
+        if (controller->isPrivateWindow()) {
+            ++privateWindows;
+            QCOMPARE(controller->tabs()->rowCount(), 1);
+            QCOMPARE(
+                controller->tabs()->data(controller->tabs()->index(0), eden::core::TabModel::UrlRole).toUrl(),
+                QUrl("eden://settings/privacy")
+            );
+        }
+    }
+    QCOMPARE(privateWindows, 1);
 }
 
 void ProfileActivationTest::controllerRejectsUnavailableStorage() {
@@ -379,6 +408,77 @@ void ProfileActivationTest::windowReportsSaveFailures() {
     QCOMPARE(readFile(paths.settingsPath()), settings);
     QCOMPARE(readFile(paths.sessionPath()), session);
     controller.prepareToClose();
+}
+
+void ProfileActivationTest::queuedLaunchesOpenSeparateWindows() {
+    const auto record = createRecord();
+    QVERIFY(record);
+    QVERIFY(m_manager->requestWindow({false, {}, {QUrl("eden://settings/search"), QUrl("eden://newtab")}}));
+    QVERIFY(m_manager->requestWindow({true, {}, {QUrl("eden://settings/privacy")}}));
+    QCOMPARE(m_manager->browserWindowCount(), 0);
+    m_manager->activateProfile(record->id.toString());
+    QTRY_COMPARE(m_manager->browserWindowCount(), 3);
+    const auto context = m_manager->contextFor(record->id.toString());
+    QVERIFY(context);
+    QCOMPARE(context->windows().size(), 3);
+    int normalWindows = 0;
+    int privateWindows = 0;
+    int requestedNormalWindows = 0;
+    for (auto *controller : context->windows()) {
+        if (controller->isPrivateWindow()) {
+            ++privateWindows;
+            QCOMPARE(controller->tabs()->rowCount(), 1);
+            QCOMPARE(
+                controller->tabs()->data(controller->tabs()->index(0), eden::core::TabModel::UrlRole).toUrl(),
+                QUrl("eden://settings/privacy")
+            );
+        } else {
+            ++normalWindows;
+            if (controller->tabs()->rowCount() == 2) {
+                ++requestedNormalWindows;
+                QCOMPARE(
+                    controller->tabs()->data(controller->tabs()->index(0), eden::core::TabModel::UrlRole).toUrl(),
+                    QUrl("eden://settings/search")
+                );
+                QCOMPARE(
+                    controller->tabs()->data(controller->tabs()->index(1), eden::core::TabModel::UrlRole).toUrl(),
+                    QUrl("eden://newtab")
+                );
+            }
+        }
+    }
+    QCOMPARE(normalWindows, 2);
+    QCOMPARE(privateWindows, 1);
+    QCOMPARE(requestedNormalWindows, 1);
+    QVERIFY(m_manager->requestWindow({}));
+    QTRY_COMPARE(m_manager->browserWindowCount(), 4);
+    QCOMPARE(context->windows().size(), 4);
+    for (auto *controller : context->windows()) {
+        if (!controller->isPrivateWindow()) {
+            delete controller->window();
+        }
+    }
+    QTRY_COMPARE(m_manager->browserWindowCount(), 1);
+    QVERIFY(m_manager->requestWindow({true, {}, {}}));
+    QTRY_COMPARE(m_manager->browserWindowCount(), 2);
+    for (auto *controller : context->windows()) {
+        QVERIFY(controller->isPrivateWindow());
+    }
+}
+
+void ProfileActivationTest::startupWindowShowsProgress() {
+    QQmlComponent component(m_engine.get());
+    component.loadFromModule("Eden.Ui", "LaunchWindow");
+    QVERIFY2(!component.isError(), qPrintable(component.errorString()));
+    std::unique_ptr<QObject> window(component.create());
+    QVERIFY2(window, qPrintable(component.errorString()));
+    auto *message = window->findChild<QQuickItem *>("startupMessage");
+    auto *details = window->findChild<QQuickItem *>("startupDetails");
+    QVERIFY(message);
+    QVERIFY(details);
+    QVERIFY(!message->property("text").toString().isEmpty());
+    QCOMPARE(message->property("text").toString(), m_manager->startupMessage());
+    QCOMPARE(details->property("text").toString(), m_manager->startupDetails());
 }
 
 QTEST_MAIN(ProfileActivationTest)

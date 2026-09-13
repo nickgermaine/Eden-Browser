@@ -43,6 +43,12 @@ Window {
         target: root.editor
     }
 
+    WindowInputRegion {
+        window: root
+        rect: Qt.rect(shell.x, shell.y, shell.width, shell.height)
+        radius: shell.radius
+    }
+
     RectangularShadow {
         anchors.fill: shell
         visible: Theme.windowShadowExtent > 0
@@ -87,8 +93,9 @@ Window {
                 enabled: false
                 dragThreshold: 4
                 onActiveChanged: {
-                    if (active)
+                    if (active) {
                         root.startSystemMove();
+                    }
                 }
             }
 

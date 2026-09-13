@@ -164,8 +164,9 @@ Item {
             scale: dragging ? 1.04 : 1
             z: dragging ? 3 : 1
             onActiveTabChanged: {
-                if (activeTab)
+                if (activeTab) {
                     opacity = 1;
+                }
             }
 
             Rectangle {
@@ -197,9 +198,11 @@ Item {
             }
 
             Row {
+                id: tabContent
+
                 anchors.fill: parent
                 anchors.leftMargin: 10
-                anchors.rightMargin: 6
+                anchors.rightMargin: anchors.leftMargin - (closeButton.width - tabIcon.width) / 2
                 spacing: 8
 
                 TabIcon {
@@ -217,7 +220,7 @@ Item {
                     textFormat: Text.PlainText
                     visible: !tab.isPinned
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - tabIcon.width - activity.width - 52)
+                    width: Math.max(0, tabContent.width - tabIcon.width - activity.width - closeButton.width - tabContent.spacing * (activity.visible ? 3 : 2))
                     text: tab.title.length > 0 ? tab.title : tab.url.toString()
                     color: Theme.surfaceText
                     font: Theme.bodyFont
@@ -234,6 +237,8 @@ Item {
                 }
 
                 EdenButton {
+                    id: closeButton
+
                     visible: !tab.isPinned && tab.width >= 80 && (pointer.hovered || tab.activeTab)
                     anchors.verticalCenter: parent.verticalCenter
                     width: 28
@@ -258,22 +263,25 @@ Item {
                 id: pointer
 
                 onHoveredChanged: {
-                    if (!hovered)
+                    if (!hovered) {
                         tab.previewSuppressed = false;
+                    }
                 }
             }
 
             TapHandler {
                 acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                 onPressedChanged: {
-                    if (pressed)
+                    if (pressed) {
                         tab.previewSuppressed = true;
+                    }
                 }
                 onTapped: (_, button) => {
-                    if (button === Qt.MiddleButton)
+                    if (button === Qt.MiddleButton) {
                         strip.controller.closeTab(tab.index);
-                    else
+                    } else {
                         strip.controller.activeIndex = tab.index;
+                    }
                 }
             }
 
@@ -284,16 +292,18 @@ Item {
                 xAxis.enabled: true
                 yAxis.enabled: true
                 onActiveChanged: {
-                    if (active)
+                    if (active) {
                         strip.controller.beginTabDrag(tab.index, tab, dragHandler.centroid.pressPosition.x, dragHandler.centroid.pressPosition.y);
+                    }
                 }
             }
 
             TapHandler {
                 acceptedButtons: Qt.RightButton
                 onPressedChanged: {
-                    if (pressed)
+                    if (pressed) {
                         tab.previewSuppressed = true;
+                    }
                 }
                 onTapped: tabMenu.toggle()
             }
@@ -380,8 +390,9 @@ Item {
             target: null
             dragThreshold: 4
             onActiveChanged: {
-                if (active)
+                if (active) {
                     strip.systemMoveRequested();
+                }
             }
         }
 
@@ -401,8 +412,9 @@ Item {
         }
         onExited: strip.controller.tabDragLeft()
         onDropped: drop => {
-            if (strip.controller.tabDragDropped(strip, drop.x, drop.y))
+            if (strip.controller.tabDragDropped(strip, drop.x, drop.y)) {
                 drop.acceptProposedAction();
+            }
         }
     }
 }

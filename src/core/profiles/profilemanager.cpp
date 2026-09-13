@@ -25,10 +25,12 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLocale>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QRandomGenerator>
+#include <QScopedValueRollback>
 #include <QSet>
 #include <QThreadPool>
 
@@ -134,6 +136,13 @@ namespace eden::core {
         connect(m_registry, &ProfileRegistry::snapshotChanged, this, &ProfileManager::handleSnapshotChanged);
         connect(m_windows, &WindowRegistry::windowsChanged, this, &ProfileManager::rebuildModel);
         connect(m_windows, &WindowRegistry::windowsChanged, this, &ProfileManager::browserWindowCountChanged);
+        connect(
+            this,
+            &ProfileManager::startupStateChanged,
+            this,
+            &ProfileManager::processWindowRequests,
+            Qt::QueuedConnection
+        );
     }
 
     ProfileManager::~ProfileManager() {
@@ -168,6 +177,55 @@ namespace eden::core {
         }
     }
 
+    bool ProfileManager::requestWindow(const WindowLaunchRequest &request) {
+        if (m_windowRequests.size() >= 64 || QCoreApplication::closingDown()) {
+            return false;
+        }
+        m_windowRequests.enqueue(request);
+        QMetaObject::invokeMethod(this, &ProfileManager::processWindowRequests, Qt::QueuedConnection);
+        return true;
+    }
+
+    void ProfileManager::processWindowRequests() {
+        if (m_windowRequests.isEmpty() || m_processingWindowRequests) {
+            return;
+        }
+        const QScopedValueRollback processing(m_processingWindowRequests, true);
+        if (m_startupState == QLatin1String("loading") || m_startupState == QLatin1String("recovery")) {
+            if (m_launchWindow) {
+                m_launchWindow->raise();
+                m_launchWindow->requestActivate();
+            }
+            return;
+        }
+        const QString profileId = m_windows->mostRecentActiveProfileId(true);
+        const auto context = m_contexts.value(profileId);
+        if (!context || !context->isActivated() || context->signOutInProgress()) {
+            showChooser();
+            return;
+        }
+        const WindowLaunchRequest request = m_windowRequests.head();
+        WindowController *controller =
+            createBrowserWindow(context, request.privateWindow, request.engineName, false, request.urls.isEmpty());
+        if (!controller) {
+            return;
+        }
+        m_windowRequests.dequeue();
+        for (const QUrl &url : request.urls) {
+            controller->newTab(url);
+        }
+        if (QQuickWindow *window = m_windows->windowFor(controller)) {
+            window->raise();
+            window->requestActivate();
+        }
+        if (request.urls.isEmpty()) {
+            emit controller->focusOmniboxRequested();
+        }
+        if (!m_windowRequests.isEmpty()) {
+            QMetaObject::invokeMethod(this, &ProfileManager::processWindowRequests, Qt::QueuedConnection);
+        }
+    }
+
     void ProfileManager::beginStartup() {
         if (m_preparingStorage) {
             return;
@@ -177,18 +235,35 @@ namespace eden::core {
         m_startupState = QStringLiteral("loading");
         emit startupStateChanged();
         QPointer<ProfileManager> guard(this);
-        EngineStorage::instance()->prepare(m_roots, [guard](const QString &error) {
-            if (!guard) {
-                return;
+        EngineStorage::instance()->prepare(
+            m_roots,
+            [guard](const QString &error) {
+                if (!guard) {
+                    return;
+                }
+                guard->m_preparingStorage = false;
+                if (!error.isEmpty()) {
+                    guard->m_storageRecovery = true;
+                    guard->enterRecovery(error);
+                    return;
+                }
+                guard->m_startupMessage = QStringLiteral("Opening your profile");
+                guard->m_startupDetails.clear();
+                emit guard->startupProgressChanged();
+                guard->m_registry->loadAsync();
+            },
+            [guard](const QString &message, qint64 processedBytes) {
+                if (!guard || !guard->m_preparingStorage) {
+                    return;
+                }
+                guard->m_startupMessage = message;
+                guard->m_startupDetails = processedBytes > 0
+                                              ? QStringLiteral("Processed %1. First-time setup can take a few minutes.")
+                                                    .arg(QLocale().formattedDataSize(processedBytes))
+                                              : QStringLiteral("Existing site data is checked before cleanup.");
+                emit guard->startupProgressChanged();
             }
-            guard->m_preparingStorage = false;
-            if (!error.isEmpty()) {
-                guard->m_storageRecovery = true;
-                guard->enterRecovery(error);
-                return;
-            }
-            guard->m_registry->loadAsync();
-        });
+        );
     }
 
     ProfileListModel *ProfileManager::profileModel() const {
@@ -197,6 +272,14 @@ namespace eden::core {
 
     QString ProfileManager::startupState() const {
         return m_startupState;
+    }
+
+    QString ProfileManager::startupMessage() const {
+        return m_startupMessage;
+    }
+
+    QString ProfileManager::startupDetails() const {
+        return m_startupDetails;
     }
 
     QString ProfileManager::recoveryMessage() const {

@@ -125,10 +125,10 @@ namespace eden::core {
         }));
     }
 
-    QString WindowRegistry::mostRecentActiveProfileId() const {
+    QString WindowRegistry::mostRecentActiveProfileId(bool includePrivate) const {
         const Entry *best = nullptr;
         for (const Entry &entry : m_entries) {
-            if (entry.privateWindow) {
+            if (entry.privateWindow && !includePrivate) {
                 continue;
             }
             if (!best || entry.activationOrdinal > best->activationOrdinal) {

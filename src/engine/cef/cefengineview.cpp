@@ -12,6 +12,7 @@
 
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_command_line.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_devtools_message_observer.h"
 #include "include/cef_dialog_handler.h"
@@ -38,6 +39,7 @@
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDeadlineTimer>
 #include <QDebug>
 #include <QDir>
 #include <QEvent>
@@ -97,6 +99,13 @@
 namespace eden::engine::cef {
 
     class CefEngineClient;
+
+    static float osrCaptureScale(qreal windowScale) {
+        const CefRefPtr<CefCommandLine> commandLine = CefCommandLine::GetGlobalCommandLine();
+        return commandLine && commandLine->GetSwitchValue("ozone-platform") == "wayland"
+                   ? 1.0F
+                   : static_cast<float>(windowScale);
+    }
 
     static QString cefString(const CefString &value) {
         return QString::fromStdString(value.ToString());
@@ -806,6 +815,28 @@ namespace eden::engine::cef {
             setAcceptHoverEvents(true);
             setActiveFocusOnTab(true);
             setFocusPolicy(Qt::StrongFocus);
+            m_resizeRefresh.setSingleShot(true);
+            QObject::connect(&m_resizeRefresh, &QTimer::timeout, this, [this] {
+                if (!isVisible() || m_resizeDeadline.hasExpired() || !m_requestFrame) {
+                    return;
+                }
+                m_requestFrame();
+                m_resizeRefresh.start(std::min(128, m_resizeRefresh.interval() * 2));
+            });
+        }
+
+        void setFrameRequestHandler(std::function<void()> handler) {
+            m_requestFrame = std::move(handler);
+        }
+
+        void setViewport(const QSizeF &size, qreal scale) {
+            const float viewScale = osrCaptureScale(scale);
+            const bool changed = this->size() != size || m_viewScale != viewScale;
+            m_viewScale = viewScale;
+            setSize(size);
+            if (changed) {
+                requestResizeFrame();
+            }
         }
 
         void setEventHandler(std::function<bool(QEvent *)> handler) {
@@ -913,6 +944,16 @@ namespace eden::engine::cef {
         }
 
         void presentFrame(CefOsrFrame frame) {
+            const QSize expectedSize(
+                qCeil(std::max(1, qRound(width())) * m_viewScale),
+                qCeil(std::max(1, qRound(height())) * m_viewScale)
+            );
+            if (frame.image.size() == expectedSize &&
+                qFuzzyCompare(static_cast<float>(frame.image.devicePixelRatio()), m_viewScale)) {
+                m_resizeRefresh.stop();
+            } else if (isVisible() && !m_resizeRefresh.isActive() && !m_resizeDeadline.hasExpired()) {
+                m_resizeRefresh.start(16);
+            }
             if (frame.image.size() == m_pendingFrame.image.size()) {
                 frame.damage = boundedTextureDamage(frame.damage + m_pendingFrame.damage, frame.image.size());
             } else if (!m_pendingFrame.isNull()) {
@@ -944,6 +985,24 @@ namespace eden::engine::cef {
         }
 
       protected:
+        void itemChange(ItemChange change, const ItemChangeData &data) override {
+            QQuickItem::itemChange(change, data);
+            if (change == ItemVisibleHasChanged) {
+                if (data.boolValue) {
+                    requestResizeFrame();
+                } else {
+                    m_resizeRefresh.stop();
+                }
+            }
+        }
+
+        void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override {
+            QQuickItem::geometryChange(newGeometry, oldGeometry);
+            if (newGeometry.size() != oldGeometry.size()) {
+                update();
+            }
+        }
+
         void inputMethodEvent(QInputMethodEvent *event) override {
             event->setAccepted(m_eventHandler(event));
         }
@@ -1001,13 +1060,17 @@ namespace eden::engine::cef {
                 node = new CefOsrTextureNode;
                 node->setFiltering(QSGTexture::Linear);
             }
-            node->setRect(boundingRect());
             if (!m_pendingFrame.isNull()) {
                 node->present(window(), m_pendingFrame.image, m_pendingFrame.damage);
                 m_displayedFrame = std::move(m_pendingFrame);
             } else if (!node->texture()) {
                 node->present(window(), m_displayedFrame.image, m_displayedFrame.image.rect());
             }
+            const qreal scale = m_displayedFrame.image.devicePixelRatio();
+            const QRectF frameBounds(QPointF(), m_displayedFrame.image.deviceIndependentSize());
+            const QRectF visibleBounds = frameBounds.intersected(boundingRect());
+            node->setRect(visibleBounds);
+            node->setSourceRect(QRectF(visibleBounds.topLeft() * scale, visibleBounds.size() * scale));
             auto *popup = static_cast<CefOsrTextureNode *>(node->firstChild());
             if (!m_popupFrame.visible || m_popupFrame.image.isNull() || m_popupFrame.bounds.isEmpty()) {
                 delete popup;
@@ -1039,6 +1102,15 @@ namespace eden::engine::cef {
         }
 
       private:
+        void requestResizeFrame() {
+            m_resizeDeadline = QDeadlineTimer(2000);
+            if (isVisible() && width() > 0 && height() > 0) {
+                m_resizeRefresh.start(16);
+            } else {
+                m_resizeRefresh.stop();
+            }
+        }
+
         void updateInputMethod(Qt::InputMethodQueries queries) {
             if (hasActiveFocus() && (m_editable || queries.testFlag(Qt::ImEnabled))) {
                 QGuiApplication::inputMethod()->update(queries);
@@ -1053,6 +1125,10 @@ namespace eden::engine::cef {
         }
 
         std::function<bool(QEvent *)> m_eventHandler;
+        std::function<void()> m_requestFrame;
+        QTimer m_resizeRefresh;
+        QDeadlineTimer m_resizeDeadline;
+        float m_viewScale = 1.0F;
         CefOsrFrame m_pendingFrame;
         CefOsrFrame m_displayedFrame;
         CefOsrPopupFrame m_popupFrame;
@@ -1773,7 +1849,7 @@ namespace eden::engine::cef {
         DownloadRecord &downloadRecord(CefRefPtr<CefDownloadItem> downloadItem, const QString &suggestedName = {});
         void publishDownload(uint32_t id, DownloadRecord &download);
         void enqueueFrame(CefOsrFrame frame);
-        void enqueueCopiedFrame(const void *buffer, const QSize &size, const QRegion &dirtyRegion);
+        void enqueueCopiedFrame(const void *buffer, const QSize &size, const QRegion &dirtyRegion, float frameScale);
         void dispatchPendingFrame();
         void releaseStagingFrame(int index);
         void requestFaviconCandidate(CefRefPtr<CefBrowser> browser, quint64 serial);
@@ -2033,6 +2109,12 @@ namespace eden::engine::cef {
                 devToolsOsrItem = new CefOsrItem(nullptr);
                 devToolsOsrItem->setParent(q);
                 devToolsOsrItem->setEventHandler([this](QEvent *event) { return forwardDevToolsOsrEvent(event); });
+                devToolsOsrItem->setFrameRequestHandler([this] {
+                    const CefRefPtr<CefBrowser> currentBrowser = devToolsBrowser;
+                    if (currentBrowser) {
+                        postToCefUi([currentBrowser] { currentBrowser->GetHost()->Invalidate(PET_VIEW); });
+                    }
+                });
             }
             devToolsOsrItem->setParentItem(devToolsViewport);
             devToolsEventWindow = shellWindow;
@@ -2073,6 +2155,9 @@ namespace eden::engine::cef {
             devToolsViewportConnections.append(
                 QObject::connect(shellWindow, &QQuickWindow::devicePixelRatioChanged, q, [this] {
                     updateDevToolsGeometry();
+                    if (devToolsBrowser) {
+                        devToolsBrowser->GetHost()->NotifyScreenInfoChanged();
+                    }
                 })
             );
             updateApplicationEventFilter();
@@ -2100,6 +2185,12 @@ namespace eden::engine::cef {
                     osrItem = new CefOsrItem(nullptr);
                     osrItem->setParent(q);
                     osrItem->setEventHandler([this](QEvent *event) { return forwardOsrEvent(event); });
+                    osrItem->setFrameRequestHandler([this] {
+                        const CefRefPtr<CefBrowser> currentBrowser = browser;
+                        if (currentBrowser) {
+                            postToCefUi([currentBrowser] { currentBrowser->GetHost()->Invalidate(PET_VIEW); });
+                        }
+                    });
                 }
                 if (osrItem->parentItem() != viewport) {
                     osrItem->setParentItem(viewport);
@@ -2154,6 +2245,9 @@ namespace eden::engine::cef {
             }));
             viewportConnections.append(QObject::connect(shellWindow, &QQuickWindow::devicePixelRatioChanged, q, [this] {
                 updateGeometry();
+                if (osr && browser) {
+                    browser->GetHost()->NotifyScreenInfoChanged();
+                }
             }));
             updateGeometry();
             syncVisibility();
@@ -3065,7 +3159,7 @@ namespace eden::engine::cef {
             const QRectF sceneRect = viewport->mapRectToScene(viewport->boundingRect());
             const QRect geometry = sceneRect.toAlignedRect();
             if (osrItem) {
-                osrItem->setSize(viewport->size());
+                osrItem->setViewport(viewport->size(), viewport->window()->devicePixelRatio());
             } else if (hostWindow->geometry() != geometry) {
                 hostWindow->setGeometry(geometry);
             }
@@ -3085,7 +3179,7 @@ namespace eden::engine::cef {
             if (!devToolsViewport || !devToolsViewport->window() || !devToolsOsrItem) {
                 return;
             }
-            devToolsOsrItem->setSize(devToolsViewport->size());
+            devToolsOsrItem->setViewport(devToolsViewport->size(), devToolsViewport->window()->devicePixelRatio());
             if (devToolsClient) {
                 const QRect screenGeometry = devToolsViewport->window()->geometry();
                 devToolsClient->setGeometry(
@@ -3151,7 +3245,6 @@ namespace eden::engine::cef {
             }
             if (osr) {
                 browser->GetHost()->WasResized();
-                browser->GetHost()->NotifyScreenInfoChanged();
                 return;
             }
             const QSize pixelSize = browserPixelSize();
@@ -3182,7 +3275,6 @@ namespace eden::engine::cef {
                 return;
             }
             devToolsBrowser->GetHost()->WasResized();
-            devToolsBrowser->GetHost()->NotifyScreenInfoChanged();
         }
 
         void syncVisibility() {
@@ -4172,6 +4264,10 @@ namespace eden::engine::cef {
         }
         QImage frame = copyCefFrame(buffer, width, height);
         if (!frame.isNull()) {
+            {
+                const std::lock_guard lock(m_screenRectMutex);
+                frame.setDevicePixelRatio(osrCaptureScale(m_deviceScaleFactor));
+            }
             QRegion damage = cefFrameDamage(dirtyRects, frame.size());
             enqueueFrame(std::move(frame), std::move(damage));
         }
@@ -5538,6 +5634,11 @@ namespace eden::engine::cef {
                 qInfo("EDEN_PERF startup.web_first_paint_ms=%.3f", milliseconds);
             }
         }
+        float frameScale;
+        {
+            const std::lock_guard lock(m_screenRectMutex);
+            frameScale = osrCaptureScale(m_deviceScaleFactor);
+        }
         const QSize frameSize(width, height);
         const QRect frameBounds(QPoint(), frameSize);
         CefOsrFrame supersededFrame;
@@ -5583,7 +5684,7 @@ namespace eden::engine::cef {
             }
             if (stagingIndex < 0) {
                 lock.unlock();
-                enqueueCopiedFrame(buffer, frameSize, gpuDamage);
+                enqueueCopiedFrame(buffer, frameSize, gpuDamage, frameScale);
                 return;
             }
             QImage &target = m_stagingFrames[stagingIndex];
@@ -5594,6 +5695,7 @@ namespace eden::engine::cef {
             if (target.isNull()) {
                 return;
             }
+            target.setDevicePixelRatio(frameScale);
             const QRegion copyRegion = m_stagingDirtyRegions[stagingIndex] & frameBounds;
             updateCefFrame(target, buffer, copyRegion);
             m_stagingDirtyRegions[stagingIndex] = {};
@@ -5624,7 +5726,12 @@ namespace eden::engine::cef {
         dispatchPendingFrame();
     }
 
-    void CefEngineClient::enqueueCopiedFrame(const void *buffer, const QSize &size, const QRegion &dirtyRegion) {
+    void CefEngineClient::enqueueCopiedFrame(
+        const void *buffer,
+        const QSize &size,
+        const QRegion &dirtyRegion,
+        float frameScale
+    ) {
         CefOsrFrame replacedFrame;
         bool queueDelivery = false;
         {
@@ -5634,12 +5741,14 @@ namespace eden::engine::cef {
                 if (image.isNull()) {
                     return;
                 }
+                image.setDevicePixelRatio(frameScale);
                 const QRegion damage = m_pendingFrame.image.size() == size
                                            ? boundedTextureDamage(m_pendingFrame.damage + dirtyRegion, size)
                                            : dirtyRegion;
                 replacedFrame = std::move(m_pendingFrame);
                 m_pendingFrame = CefOsrFrame(std::move(image), nullptr, -1, damage);
             } else {
+                m_pendingFrame.image.setDevicePixelRatio(frameScale);
                 updateCefFrame(m_pendingFrame.image, buffer, dirtyRegion);
                 m_pendingFrame.damage = boundedTextureDamage(m_pendingFrame.damage + dirtyRegion, size);
             }

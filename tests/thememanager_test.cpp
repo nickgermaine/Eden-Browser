@@ -1,3 +1,4 @@
+#include "core/profiles/avatarimageprovider.h"
 #include "core/profiles/profilesettings.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/theme/themeeditormodel.h"
@@ -16,6 +17,7 @@
 #include <QUuid>
 #include <QtQml>
 #include <QtTest>
+#include <cmath>
 
 class SecurityPopoverController final : public QObject {
     Q_OBJECT
@@ -65,6 +67,8 @@ class ThemeManagerTest final : public QObject {
   private slots:
     void untrustedLabelsStayPlainText();
     void activityIconsRenderAndExposeTooltips();
+    void avatarsStayCircular_data();
+    void avatarsStayCircular();
     void darkModeUsesLightIcons();
     void editorOrganizesSchemesAndSections();
     void legacyThemesMigrateToSharedBase();
@@ -83,6 +87,89 @@ class ThemeManagerTest final : public QObject {
     bool loadPage(const char *typeName);
     std::unique_ptr<QQmlEngine> m_uiEngine;
 };
+
+void ThemeManagerTest::avatarsStayCircular_data() {
+    QTest::addColumn<QSize>("bounds");
+    QTest::addColumn<bool>("generated");
+    for (int side : {28, 32, 40, 72, 88, 96}) {
+        for (bool generated : {false, true}) {
+            QTest::newRow(qPrintable(QString("%1-%2").arg(side).arg(generated ? "initial" : "photo")))
+                << QSize(side, side) << generated;
+        }
+    }
+    QTest::newRow("wide-container") << QSize(96, 40) << false;
+    QTest::newRow("tall-container") << QSize(40, 96) << true;
+}
+
+void ThemeManagerTest::avatarsStayCircular() {
+    QFETCH(QSize, bounds);
+    QFETCH(bool, generated);
+    QQuickWindow window;
+    if (window.rendererInterface()->graphicsApi() == QSGRendererInterface::Software) {
+        QSKIP("Avatar masks require a graphics renderer");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QImage source(160, 100, QImage::Format_RGB32);
+    source.fill(QColor("#e06040"));
+    if (generated) {
+        source = eden::core::AvatarImageProvider::generatedAvatar("Nick", 0, 128);
+    }
+    const QString sourcePath = directory.filePath("avatar.png");
+    QVERIFY(source.save(sourcePath));
+    QQmlEngine &engine = uiEngine();
+    QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+    QQmlComponent component(&engine);
+    component.loadFromModule("Eden.Ui", "ProfileAvatar");
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties(
+        {{"avatarUrl", QUrl::fromLocalFile(sourcePath).toString()},
+         {"displayName", "Nick"},
+         {"avatarSize", std::min(bounds.width(), bounds.height())}}
+    ));
+    QVERIFY2(object, qPrintable(component.errorString()));
+    auto *item = qobject_cast<QQuickItem *>(object.get());
+    QVERIFY(item);
+    window.setColor(Qt::black);
+    window.resize(bounds.width() + 20, bounds.height() + 20);
+    item->setParentItem(window.contentItem());
+    item->setPosition(QPointF(10, 10));
+    item->setSize(bounds);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTest::qWait(100);
+    const QImage rendered = window.grabWindow();
+    QVERIFY(!rendered.isNull());
+    const qreal scale = window.devicePixelRatio();
+    const QPointF center = (QPointF(10, 10) + QPointF(bounds.width(), bounds.height()) / 2) * scale;
+    const qreal radius = std::min(bounds.width(), bounds.height()) * scale / 2;
+    int missingInterior = 0;
+    int escapedExterior = 0;
+    int blendedEdge = 0;
+    const QColor background = source.pixelColor(0, 0);
+    const int fullBrightness = background.red() + background.green() + background.blue();
+    for (int y = 0; y < rendered.height(); ++y) {
+        for (int x = 0; x < rendered.width(); ++x) {
+            const qreal distance = std::hypot(x + 0.5 - center.x(), y + 0.5 - center.y());
+            const QColor color = rendered.pixelColor(x, y);
+            const int brightness = color.red() + color.green() + color.blue();
+            if (distance < radius - 1.0 && brightness < 40) {
+                ++missingInterior;
+            }
+            if (distance > radius + 1.0 && brightness > 40) {
+                ++escapedExterior;
+            }
+            if (std::abs(distance - radius) < 1.5 && brightness > 5 && brightness < fullBrightness * 0.95) {
+                ++blendedEdge;
+            }
+        }
+    }
+    QCOMPARE(missingInterior, 0);
+    QCOMPARE(escapedExterior, 0);
+    QVERIFY2(blendedEdge >= radius, "The circular edge must retain partial coverage for smooth rendering");
+    QCOMPARE(warnings.size(), 0);
+    item->setParentItem(nullptr);
+}
 
 void ThemeManagerTest::activityIconsRenderAndExposeTooltips() {
     QQmlEngine &engine = uiEngine();

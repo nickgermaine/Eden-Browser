@@ -15,11 +15,12 @@ namespace eden::core {
 
       public:
         using Completion = std::function<void(const QString &)>;
+        using Progress = std::function<void(const QString &, qint64)>;
 
         static EngineStorage *instance();
         explicit EngineStorage(QObject *parent = nullptr);
         ~EngineStorage() override;
-        void prepare(const ProfilePaths::Roots &roots, Completion completion);
+        void prepare(const ProfilePaths::Roots &roots, Completion completion, Progress progress = {});
         bool protects(const QString &path) const;
         void shutdown();
         static bool migrateLegacyPath(const QString &source, const QString &destination);

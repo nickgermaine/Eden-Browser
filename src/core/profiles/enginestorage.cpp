@@ -33,6 +33,8 @@ namespace eden::core {
 
     namespace {
 
+        using TransferProgress = std::function<void(qint64)>;
+
         const SecretSchema storageSchema = {
             "browser.eden.engine-storage",
             SECRET_SCHEMA_NONE,
@@ -131,7 +133,7 @@ namespace eden::core {
             return key;
         }
 
-        bool sameFile(const QString &left, const QString &right) {
+        bool sameFile(const QString &left, const QString &right, const TransferProgress &progress = {}) {
             QFile source(left);
             QFile destination(right);
             if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::ReadOnly) ||
@@ -147,11 +149,15 @@ namespace eden::core {
                 if (!equal) {
                     return false;
                 }
+                if (progress) {
+                    progress(0);
+                }
             }
             return source.error() == QFile::NoError && destination.error() == QFile::NoError;
         }
 
-        bool copyVerified(const QString &sourcePath, const QString &destinationPath) {
+        bool
+        copyVerified(const QString &sourcePath, const QString &destinationPath, const TransferProgress &progress = {}) {
             const QFileInfo source(sourcePath);
             const QFileInfo destination(destinationPath);
             if (source.isSymbolicLink() &&
@@ -191,7 +197,7 @@ namespace eden::core {
                         continue;
                     }
                     const QString fileName = QFile::decodeName(name);
-                    if (!copyVerified(sourcePath + '/' + fileName, destinationPath + '/' + fileName)) {
+                    if (!copyVerified(sourcePath + '/' + fileName, destinationPath + '/' + fileName, progress)) {
                         return false;
                     }
                 }
@@ -200,7 +206,10 @@ namespace eden::core {
             if (!source.isFile() || source.ownerId() != static_cast<uint>(getuid())) {
                 return false;
             }
-            if (destination.exists() && sameFile(sourcePath, destinationPath)) {
+            if (destination.exists() && sameFile(sourcePath, destinationPath, progress)) {
+                if (progress) {
+                    progress(source.size());
+                }
                 return true;
             }
             const int input = open(QFile::encodeName(sourcePath).constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
@@ -222,16 +231,20 @@ namespace eden::core {
             }
             while (!reader.atEnd()) {
                 QByteArray bytes = reader.read(1024 * 1024);
+                const qint64 byteCount = bytes.size();
                 const bool written = !bytes.isEmpty() && writer.write(bytes) == bytes.size();
                 wipe(bytes);
                 if (!written) {
                     return false;
                 }
+                if (progress) {
+                    progress(byteCount);
+                }
             }
             struct stat after{};
             if (reader.error() != QFile::NoError || fstat(input, &after) != 0 || before.st_size != after.st_size ||
                 before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
-                !writer.commit() || !sameFile(sourcePath, destinationPath)) {
+                !writer.commit() || !sameFile(sourcePath, destinationPath, progress)) {
                 return false;
             }
             return true;
@@ -293,6 +306,21 @@ namespace eden::core {
             worker->moveToThread(&thread);
             QObject::connect(&thread, &QThread::finished, worker, &QObject::deleteLater);
             thread.start();
+        }
+
+        void reportProgress(const QString &message) {
+            progressMessage = message;
+            progressTimer.restart();
+            if (progress) {
+                progress(message, processedBytes);
+            }
+        }
+
+        void recordProgress(qint64 bytes) {
+            processedBytes += bytes;
+            if (progressTimer.elapsed() >= 250) {
+                reportProgress(progressMessage);
+            }
         }
 
         bool startProcess(QProcess &process, const QStringList &arguments, const QByteArray &password) {
@@ -357,6 +385,7 @@ namespace eden::core {
             wipe(password);
             const auto clearPassword = qScopeGuard([&encoded] { wipe(encoded); });
             if (!QFileInfo::exists(cipher + "/gocryptfs.conf")) {
+                reportProgress(QStringLiteral("Preparing encrypted storage"));
                 if (state == "ready" || !QDir(cipher).isEmpty()) {
                     return QStringLiteral("The encrypted site storage configuration is missing.");
                 }
@@ -412,6 +441,7 @@ namespace eden::core {
                 return QStringLiteral("The site storage mount directory cannot be secured.");
             }
             mounts.append(mount);
+            reportProgress(QStringLiteral("Opening encrypted storage"));
             if (!startProcess(
                     *mount.process,
                     {"-q", "-fg", "-passfile", "/dev/stdin", "-fsname", cipher, cipher, view},
@@ -431,11 +461,15 @@ namespace eden::core {
                 );
             }
             if (QFileInfo::exists(pending)) {
-                if (!safeDirectory(pending, false) || !copyVerified(pending, view) || !syncDirectory(view)) {
+                reportProgress(QStringLiteral("Encrypting existing site data"));
+                if (!safeDirectory(pending, false) ||
+                    !copyVerified(pending, view, [this](qint64 bytes) { recordProgress(bytes); }) ||
+                    !syncDirectory(view)) {
                     return QStringLiteral(
                         "Site storage encryption did not verify. The original files were preserved for retry."
                     );
                 }
+                reportProgress(QStringLiteral("Finishing verified storage migration"));
                 if (!QDir(pending).removeRecursively() || !syncDirectory(QFileInfo(pending).absolutePath())) {
                     return QStringLiteral(
                         "Encryption verified, but the old site storage could not be removed. Retry to finish cleanup."
@@ -567,6 +601,10 @@ namespace eden::core {
         mutable QMutex mutex;
         QHash<QString, QString> protectedRoots;
         bool stopping = false;
+        Progress progress;
+        QElapsedTimer progressTimer;
+        QString progressMessage;
+        qint64 processedBytes = 0;
     };
 
     EngineStorage *EngineStorage::instance() {
@@ -584,11 +622,23 @@ namespace eden::core {
         d->thread.wait();
     }
 
-    void EngineStorage::prepare(const ProfilePaths::Roots &roots, Completion completion) {
+    void EngineStorage::prepare(const ProfilePaths::Roots &roots, Completion completion, Progress progress) {
         QMetaObject::invokeMethod(
             d->worker,
-            [this, roots, completion = std::move(completion)] {
+            [this, roots, completion = std::move(completion), progress = std::move(progress)] {
+                d->processedBytes = 0;
+                d->progress = [this, progress](const QString &message, qint64 processedBytes) {
+                    if (progress) {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [progress, message, processedBytes] { progress(message, processedBytes); },
+                            Qt::QueuedConnection
+                        );
+                    }
+                };
+                d->reportProgress(QStringLiteral("Unlocking saved site data"));
                 const QString error = d->prepare(roots);
+                d->progress = {};
                 QMetaObject::invokeMethod(
                     this,
                     [completion, error] {

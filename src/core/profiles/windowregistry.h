@@ -37,7 +37,7 @@ namespace eden::core {
         bool isPrivateWindow(const WindowController *controller) const;
         int normalWindowCount() const;
         int normalWindowCountForProfile(const QString &profileId) const;
-        QString mostRecentActiveProfileId() const;
+        QString mostRecentActiveProfileId(bool includePrivate = false) const;
 
       signals:
         void windowsChanged();
