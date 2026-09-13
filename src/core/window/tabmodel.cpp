@@ -735,6 +735,17 @@ namespace eden::core {
                 emit externalViewRequested(request, row, backendIdAt(row));
             }
         });
+        connect(
+            view,
+            &engine::EngineView::closeRequested,
+            this,
+            [this, guard = QPointer<engine::EngineView>(view)] {
+                if (guard) {
+                    closeTab(indexOf(guard));
+                }
+            },
+            Qt::QueuedConnection
+        );
     }
 
     bool TabModel::discardTab(int row) {

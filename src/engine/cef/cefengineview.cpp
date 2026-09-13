@@ -2526,6 +2526,7 @@ namespace eden::engine::cef {
                 fileChooserRegistration = nullptr;
                 fileChooserNodes.clear();
                 cancelAutofillTargets();
+                emit q->closeRequested();
             }
         }
 
@@ -3802,14 +3803,12 @@ namespace eden::engine::cef {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
             m_browser = browser;
-            if (m_closeRequested && !m_closeIssued) {
-                m_closeIssued = true;
-                closeBrowser = true;
-            }
+            closeBrowser = m_closeRequested;
         }
         dispatch([browser](CefEngineView::Private &state) { state.devToolsBrowserCreated(browser); });
         if (closeBrowser) {
-            browser->GetHost()->CloseBrowser(true);
+            const CefRefPtr<CefDevToolsClient> self(this);
+            CefPostTask(TID_UI, new CefFunctionTask([self] { self->requestCloseOnCefUi(); }));
         }
     }
 
@@ -4360,7 +4359,7 @@ namespace eden::engine::cef {
             }
         }
         const CefRefPtr<CefDevToolsClient> self(this);
-        postToCefUi([self] { self->requestCloseOnCefUi(); });
+        CefPostTask(TID_UI, new CefFunctionTask([self] { self->requestCloseOnCefUi(); }));
     }
 
     void CefDevToolsClient::requestCloseOnCefUi() {
@@ -4404,10 +4403,7 @@ namespace eden::engine::cef {
             const std::lock_guard lock(m_browserMutex);
             m_creationPending = false;
             m_browser = browser;
-            if (m_closeRequested && !m_closeIssued) {
-                m_closeIssued = true;
-                closeBrowser = true;
-            }
+            closeBrowser = m_closeRequested;
         }
         dispatch([browser](CefEngineView::Private &state) { state.browserCreated(browser); });
         if (m_popupSource) {
@@ -4418,7 +4414,8 @@ namespace eden::engine::cef {
             source->popupCreated(popupId);
         }
         if (closeBrowser) {
-            browser->GetHost()->CloseBrowser(true);
+            const CefRefPtr<CefEngineClient> self(this);
+            CefPostTask(TID_UI, new CefFunctionTask([self] { self->requestCloseOnCefUi(); }));
         }
     }
 
@@ -5271,9 +5268,7 @@ namespace eden::engine::cef {
             disposition = EngineView::Disposition::CurrentTab;
         } else if (targetDisposition == CEF_WOD_NEW_BACKGROUND_TAB) {
             disposition = EngineView::Disposition::NewBackgroundTab;
-        } else if (
-            targetDisposition == CEF_WOD_NEW_WINDOW || targetDisposition == CEF_WOD_NEW_POPUP || popupFeatures.isPopup
-        ) {
+        } else if (targetDisposition == CEF_WOD_NEW_WINDOW && !popupFeatures.isPopup) {
             disposition = EngineView::Disposition::NewWindow;
         }
         const QUrl url(QString::fromStdString(targetUrl.ToString()));
@@ -5917,7 +5912,7 @@ namespace eden::engine::cef {
             }
         }
         const CefRefPtr<CefEngineClient> self(this);
-        postToCefUi([self] { self->requestCloseOnCefUi(); });
+        CefPostTask(TID_UI, new CefFunctionTask([self] { self->requestCloseOnCefUi(); }));
     }
 
     void CefEngineClient::requestCloseOnCefUi() {

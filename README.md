@@ -11,7 +11,7 @@
 <br />
 Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
-![Eden 0.3.0](screenshots/screen-0.3.0.png?raw=true "Eden 0.3.0")
+![Eden 0.3.0](screenshots/screen-0.3.8.png?raw=true "Eden 0.3.8")
 
 
 ## Features

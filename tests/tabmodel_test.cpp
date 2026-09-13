@@ -6,6 +6,7 @@
 #include "engine/qtwebengine/qtwebengineview.h"
 
 #include <QMetaMethod>
+#include <QPointer>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QSignalSpy>
@@ -187,6 +188,8 @@ class TabModelTest final : public QObject {
     void internalPageDoesNotCreateEngine();
     void urlCredentialsAreNotExposed();
     void newViewRequestCrossesTheEngineSeam();
+    void engineCloseTargetsItsTab();
+    void staleEngineCloseIsIgnored();
     void qtWebEngineBridgeMethodsArePublic();
     void qmlCanInvokeQtWebEngineBridge();
     void registryExposesOnlyCompiledBackends();
@@ -475,6 +478,40 @@ void TabModelTest::urlCredentialsAreNotExposed() {
     auto *view = qobject_cast<FakeEngineView *>(model.engineAt(row));
     QVERIFY(view);
     QCOMPARE(view->url().password(), QString("secret"));
+}
+
+void TabModelTest::engineCloseTargetsItsTab() {
+    auto model = createModel();
+    model.addTab(QUrl("https://source.example"));
+    model.addTab(QUrl("https://signin.example"));
+    model.addTab(QUrl("https://other.example"));
+    QPointer<eden::engine::EngineView> popup = model.engineViewAt(1);
+    QSignalSpy closeWindow(&model, &eden::core::TabModel::tabCloseRequestedForWindow);
+    emit popup->closeRequested();
+    QCOMPARE(model.rowCount(), 3);
+    QVERIFY(model.moveTab(1, 0));
+    QTRY_COMPARE(model.rowCount(), 2);
+    QVERIFY(popup.isNull());
+    QCOMPARE(model.engineViewAt(0)->url(), QUrl("https://source.example"));
+    QCOMPARE(model.engineViewAt(1)->url(), QUrl("https://other.example"));
+    QCOMPARE(closeWindow.size(), 0);
+    emit model.engineViewAt(1)->closeRequested();
+    QTRY_COMPARE(model.rowCount(), 1);
+    emit model.engineViewAt(0)->closeRequested();
+    QTRY_COMPARE(model.rowCount(), 0);
+    QCOMPARE(closeWindow.size(), 1);
+}
+
+void TabModelTest::staleEngineCloseIsIgnored() {
+    auto model = createModel();
+    model.addTab(QUrl("https://source.example"));
+    model.addTab(QUrl("https://signin.example"));
+    emit model.engineViewAt(1)->closeRequested();
+    QVERIFY(model.closeTab(1));
+    model.addTab(QUrl("https://replacement.example"));
+    QCoreApplication::sendPostedEvents();
+    QCOMPARE(model.rowCount(), 2);
+    QCOMPARE(model.engineViewAt(1)->url(), QUrl("https://replacement.example"));
 }
 
 void TabModelTest::newViewRequestCrossesTheEngineSeam() {

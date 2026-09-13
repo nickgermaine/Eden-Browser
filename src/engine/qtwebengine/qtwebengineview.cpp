@@ -690,6 +690,7 @@ WebEngineView {
         connect(m_view, SIGNAL(canGoForwardChanged()), this, SLOT(syncState()));
         connect(m_view, SIGNAL(recentlyAudibleChanged(bool)), this, SLOT(syncState()));
         connect(m_view, SIGNAL(audioMutedChanged(bool)), this, SLOT(syncState()));
+        connect(m_view, SIGNAL(windowCloseRequested()), this, SIGNAL(closeRequested()));
         if (!m_pendingUrl.isEmpty()) {
             m_view->setProperty("url", m_pendingUrl);
         }

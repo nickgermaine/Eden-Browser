@@ -10,9 +10,11 @@
 #include "core/profiles/profileeditorcontroller.h"
 #include "core/profiles/profilelistmodel.h"
 #include "core/profiles/profilemanager.h"
+#include "core/profiles/windowregistry.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/shortcutregistry.h"
 #include "core/settings/theme/thememanager.h"
+#include "core/window/tabmodel.h"
 #include "core/window/tabstripnavigator.h"
 #include "core/window/windowcontroller.h"
 #include "core/window/windowframe.h"
@@ -50,6 +52,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QSet>
 #include <QSignalSpy>
@@ -92,8 +95,6 @@ extern "C" int cef_post_task(cef_thread_id_t threadId, cef_task_t *task) {
 }
 
 class LocalPageServer final : public QTcpServer {
-    Q_OBJECT
-
   public:
     explicit LocalPageServer(QObject *parent = nullptr)
         : QTcpServer(parent) {
@@ -394,6 +395,66 @@ document.getElementById('frames').onclick = async () => {
                     } else if (path == "/download.txt") {
                         responseBody = "download-ok";
                         contentType = "text/plain";
+                    } else if (path.startsWith("/signin-source")) {
+                        responseBody = R"HTML(<!doctype html><title>Sign-in source</title>
+<body style="margin:0"><button id="signin" style="width:200px;height:70px">Sign in</button>
+<script>
+const query = new URLSearchParams(location.search);
+const provider = new URL('/signin-provider', 'http://127.0.0.1:' + query.get('provider'));
+provider.searchParams.set('source', location.port);
+const mode = query.get('mode');
+let popup;
+document.cookie = 'eden_signin_fixture=present; path=/';
+addEventListener('message', event => {
+    if (event.origin !== provider.origin || event.data !== 'signin-complete') { return; }
+    document.title = 'Sign-in message received';
+    const checkClosed = () => {
+        if (!popup || popup.closed) { document.title = 'Sign-in complete'; }
+        else { setTimeout(checkClosed, 20); }
+    };
+    checkClosed();
+});
+document.getElementById('signin').onclick = () => {
+    const features = 'popup=yes,width=500,height=650' + (mode === 'noopener' ? ',noopener' : '');
+    if (mode === 'blank-redirect' || mode === 'blank-document' || mode === 'post') {
+        popup = window.open('', 'edenSignin', features);
+        if (!popup) { document.title = 'Sign-in blocked'; return; }
+        if (mode === 'blank-document') {
+            popup.document.write('<!doctype html><title>Written sign-in page</title><body>Written sign-in page');
+            popup.document.close();
+            return;
+        }
+        if (mode === 'post') {
+            const form = document.createElement('form');
+            form.action = provider.href;
+            form.method = 'post';
+            form.target = 'edenSignin';
+            const field = document.createElement('input');
+            field.name = 'ticket';
+            field.value = 'fixture';
+            form.appendChild(field);
+            document.body.appendChild(form);
+            form.submit();
+        } else { setTimeout(() => { popup.location = provider.href; }, 150); }
+    } else { popup = window.open(provider.href, 'edenSignin', features); }
+};
+</script>)HTML";
+                    } else if (path.startsWith("/signin-provider")) {
+                        const bool posted = body.contains("ticket=fixture");
+                        responseBody = QString(R"HTML(<!doctype html><body style="margin:0;background:#d8ead3">
+<button id="complete" style="width:200px;height:70px">Complete sign in</button>
+<script>
+document.title = 'Sign-in ready opener=' + (window.opener ? 'yes' : 'no') +
+    ' cookie=' + (document.cookie.includes('eden_signin_fixture=present') ? 'yes' : 'no') + ' post=%1';
+document.getElementById('complete').onclick = () => {
+    if (window.opener) {
+        window.opener.postMessage('signin-complete', 'http://127.0.0.1:' + new URLSearchParams(location.search).get('source'));
+    }
+    window.close();
+};
+</script>)HTML")
+                                           .arg(posted ? "yes" : "no")
+                                           .toUtf8();
                     } else if (path == "/popup") {
                         const QString postValue =
                             QString::fromUtf8(body).contains("value=posted") ? "posted" : "missing";
@@ -537,6 +598,8 @@ class CefHandlersTest final : public QObject {
     void shellDevToolsSuite();
     void shellFullscreen();
     void shellCallIndicators();
+    void shellSignInPopups_data();
+    void shellSignInPopups();
     void resizeStress();
     void resizeReflowsPage_data();
     void resizeReflowsPage();
@@ -1142,7 +1205,8 @@ class CefUiPause final : public CefTask {
 
 void CefHandlersTest::asynchronousClose_data() {
     QTest::addColumn<QString>("scenario");
-    for (const char *scenario : {"pending-creation", "loaded-page", "devtools-close", "page-with-devtools"}) {
+    for (const char *scenario :
+         {"pending-creation", "native-creation", "loaded-page", "devtools-close", "page-with-devtools"}) {
         QTest::newRow(scenario) << QString::fromLatin1(scenario);
     }
 }
@@ -1168,7 +1232,8 @@ void CefHandlersTest::asynchronousClose() {
     if (scenario.contains("devtools") && !(view->capabilities() & eden::engine::EngineView::DockedDevtools)) {
         QSKIP("The selected mode has no docked developer tools");
     }
-    if (scenario != "pending-creation") {
+    const bool pendingCreation = scenario == "pending-creation" || scenario == "native-creation";
+    if (!pendingCreation) {
         view->attach(&viewport);
         view->load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
         QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("E35 Main"), 15000);
@@ -1183,10 +1248,18 @@ void CefHandlersTest::asynchronousClose() {
         }
     }
     CefRefPtr<CefUiPause> pause = new CefUiPause;
+    const auto resumeOnExit = qScopeGuard([&] { pause->resume(); });
     QVERIFY(CefPostTask(TID_UI, pause));
     QTRY_VERIFY_WITH_TIMEOUT(pause->entered.load(), 1000);
-    if (scenario == "pending-creation") {
+    if (pendingCreation) {
         view->attach(&viewport);
+        if (scenario == "native-creation") {
+            CefRefPtr<CefUiPause> nativeCreationPause = new CefUiPause;
+            QVERIFY(CefPostTask(TID_UI, nativeCreationPause));
+            pause->resume();
+            pause = nativeCreationPause;
+            QTRY_VERIFY_WITH_TIMEOUT(pause->entered.load(), 1000);
+        }
     }
     if (scenario == "devtools-close") {
         view->closeDevTools();
@@ -2755,6 +2828,144 @@ void CefHandlersTest::devToolsSuite() {
     QVERIFY(!source.devToolsOpen());
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
     QVERIFY(!eden::engine::cef::sharedDevToolsSocketServer()->isListening());
+}
+
+void CefHandlersTest::shellSignInPopups_data() {
+    QTest::addColumn<QString>("mode");
+    for (const char *mode : {"direct", "blank-redirect", "blank-document", "post", "noopener", "new-window"}) {
+        QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+}
+
+void CefHandlersTest::shellSignInPopups() {
+    QFETCH(QString, mode);
+    LocalPageServer provider;
+    QVERIFY(provider.listen(QHostAddress::LocalHost));
+    QQmlApplicationEngine qmlEngine;
+    auto *manager = m_applicationContext->profiles();
+    manager->setQmlEngine(&qmlEngine);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    auto *registry = eden::core::WindowRegistry::instance();
+    QVERIFY(registry);
+    const auto cleanup = qScopeGuard([&] {
+        for (auto *controller : registry->profileControllers(harness.context->idString(), true, true)) {
+            delete registry->windowFor(controller);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(
+            eden::engine::cef::CefRuntime::instance().browserClientCount(),
+            std::size_t(0),
+            10000
+        );
+        manager->setQmlEngine(nullptr);
+    });
+    auto *controller = manager->createBrowserWindow(harness.context, true, "cef", false, false, false);
+    QVERIFY(controller);
+    auto *window = registry->windowFor(controller);
+    QVERIFY(window);
+    window->resize(1100, 800);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    controller->newTab(
+        QUrl(QString("http://127.0.0.1:%1/signin-source?provider=%2&mode=%3")
+                 .arg(m_server.serverPort())
+                 .arg(provider.serverPort())
+                 .arg(mode)),
+        false,
+        "cef"
+    );
+    QPointer<eden::engine::EngineView> source = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(source);
+    QTRY_COMPARE_WITH_TIMEOUT(source->title(), QString("Sign-in source"), 10000);
+    const auto clickPage = [](QQuickWindow *target, QPointF position) {
+        QQuickItem *viewport = nullptr;
+        std::function<void(QQuickItem *)> find = [&](QQuickItem *item) {
+            if (item->objectName() == "tabViewport" && item->isVisible()) {
+                viewport = item;
+            }
+            for (auto *child : item->childItems()) {
+                find(child);
+            }
+        };
+        find(target->contentItem());
+        if (!viewport) {
+            return false;
+        }
+        QTest::mouseClick(target, Qt::LeftButton, {}, viewport->mapToScene(position).toPoint());
+        return true;
+    };
+    const bool separateWindow = mode == "new-window";
+    if (separateWindow) {
+        class NewWindowRequest final : public eden::engine::EngineNewViewRequest {
+          public:
+            explicit NewWindowRequest(const QUrl &url)
+                : EngineNewViewRequest(url, Disposition::NewWindow, true) {}
+            bool openIn(eden::engine::EngineView *target) override {
+                accepted = target;
+                target->load(requestedUrl());
+                return true;
+            }
+            QPointer<eden::engine::EngineView> accepted;
+        } request(QUrl(QString("http://127.0.0.1:%1/signin-provider").arg(provider.serverPort())));
+        emit source->newViewRequested(&request);
+        QVERIFY(request.accepted);
+    } else {
+        QVERIFY(clickPage(window, QPointF(80, 35)));
+    }
+    eden::core::WindowController *destination = controller;
+    if (separateWindow) {
+        QTRY_COMPARE_WITH_TIMEOUT(
+            registry->profileControllers(harness.context->idString(), true, true).size(),
+            2,
+            10000
+        );
+        for (auto *candidate : registry->profileControllers(harness.context->idString(), true, true)) {
+            if (candidate != controller) {
+                destination = candidate;
+            }
+        }
+        QVERIFY(destination != controller);
+        QCOMPARE(controller->tabs()->rowCount(), 1);
+        QCOMPARE(destination->tabs()->rowCount(), 1);
+    } else {
+        QTRY_COMPARE_WITH_TIMEOUT(controller->tabs()->rowCount(), 2, 10000);
+        QCOMPARE(registry->profileControllers(harness.context->idString(), true, true).size(), 1);
+        QCOMPARE(controller->activeIndex(), 1);
+    }
+    QCOMPARE(destination->profileId(), controller->profileId());
+    QCOMPARE(destination->mode(), controller->mode());
+    QPointer<eden::engine::EngineView> popup = qobject_cast<eden::engine::EngineView *>(destination->currentEngine());
+    QVERIFY(popup);
+    QVERIFY(popup != source);
+    QVERIFY(destination->tabs()
+                ->data(destination->tabs()->index(destination->activeIndex()), eden::core::TabModel::InternalPageRole)
+                .toString()
+                .isEmpty());
+    if (mode == "blank-document") {
+        QTRY_COMPARE_WITH_TIMEOUT(popup->title(), QString("Written sign-in page"), 10000);
+        QTest::qWait(250);
+        QCOMPARE(popup->title(), QString("Written sign-in page"));
+        return;
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(
+        popup->title(),
+        QString("Sign-in ready opener=%1 cookie=%2 post=%3")
+            .arg(mode == "noopener" || separateWindow ? "no" : "yes")
+            .arg(separateWindow ? "no" : "yes")
+            .arg(mode == "post" ? "yes" : "no"),
+        10000
+    );
+    if (separateWindow) {
+        emit popup->closeRequested();
+    } else {
+        QVERIFY(clickPage(registry->windowFor(destination), QPointF(80, 35)));
+    }
+    if (mode != "noopener" && !separateWindow) {
+        QTRY_COMPARE_WITH_TIMEOUT(source->title(), QString("Sign-in complete"), 10000);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(popup.isNull(), 10000);
+    QCOMPARE(controller->tabs()->rowCount(), 1);
+    QCOMPARE(controller->currentEngine(), source.data());
+    QTRY_COMPARE_WITH_TIMEOUT(registry->profileControllers(harness.context->idString(), true, true).size(), 1, 10000);
 }
 
 void CefHandlersTest::shellCallIndicators() {

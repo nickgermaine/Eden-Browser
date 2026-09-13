@@ -238,6 +238,7 @@ namespace eden::engine {
         void securityStateChanged();
         void certificateDetailsChanged();
         void newViewRequested(EngineNewViewRequest *request);
+        void closeRequested();
         void contextMenuRequested(const ContextMenuInfo &info);
         void javaScriptDialogRequested(const JavaScriptDialogInfo &info);
         void javaScriptDialogClosed(quint64 id);

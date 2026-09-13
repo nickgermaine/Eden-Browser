@@ -16,6 +16,7 @@
 #include <QQuickWebEngineProfile>
 #include <QQuickWindow>
 #include <QSequentialIterable>
+#include <QSignalSpy>
 #include <QtTest>
 
 #include <memory>
@@ -38,7 +39,71 @@ class QtWebEngineUserAgentTest final : public QObject {
     void formReportNavigation();
     void formReportAuthentication();
     void permissionDismissal();
+    void signInPopupCloses();
 };
+
+void QtWebEngineUserAgentTest::signInPopupCloses() {
+    QQmlEngine engine;
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::QtWebEngine;
+    parameters.privateProfile = true;
+    std::unique_ptr<eden::engine::EngineProfile> profile(
+        eden_engine_plugin()->createProfile(&parameters, &engine, nullptr)
+    );
+    QVERIFY(profile);
+    QQuickWindow window;
+    window.resize(1000, 700);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QQmlComponent component(&engine);
+    component.setData("import QtQuick; Item { width:1000; height:700 }", QUrl());
+    std::unique_ptr<QObject> viewport(component.create());
+    auto *item = qobject_cast<QQuickItem *>(viewport.get());
+    QVERIFY(item);
+    item->setParentItem(window.contentItem());
+    eden::engine::QtWebEngineView source(profile.get());
+    source.attach(item);
+    std::unique_ptr<eden::engine::QtWebEngineView> popup;
+    bool adopted = false;
+    connect(
+        &source,
+        &eden::engine::EngineView::newViewRequested,
+        &source,
+        [&](eden::engine::EngineNewViewRequest *request) {
+            popup = std::make_unique<eden::engine::QtWebEngineView>(profile.get());
+            popup->attach(item);
+            adopted = request->openIn(popup.get());
+        }
+    );
+    const QByteArray page = R"HTML(<!doctype html><title>Qt sign-in source</title><body style="margin:0">
+<button id="signin" style="width:200px;height:70px">Sign in</button>
+<script>
+addEventListener('message', event => { if (event.data === 'done') { document.title = 'Qt sign-in complete'; } });
+document.getElementById('signin').onclick = () => {
+    const popup = window.open('', 'qtSignin', 'popup=yes,width=500,height=650');
+    if (!popup) { document.title = 'Qt sign-in blocked'; return; }
+    popup.document.title = popup.opener === window ? 'Qt sign-in ready' : 'Qt opener missing';
+    popup.document.body.style.margin = '0';
+    popup.document.body.innerHTML = '<button style="width:200px;height:70px">Complete</button>';
+    popup.document.querySelector('button').onclick = () => {
+        popup.opener.postMessage('done', '*');
+        popup.close();
+    };
+};
+</script>)HTML";
+    source.load(QUrl(
+        QStringLiteral("data:text/html;charset=utf-8,") +
+        QString::fromLatin1(QUrl::toPercentEncoding(QString::fromUtf8(page)))
+    ));
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Qt sign-in source"), 10000);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 35));
+    QTRY_VERIFY_WITH_TIMEOUT(adopted, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(popup->title(), QString("Qt sign-in ready"), 10000);
+    QSignalSpy closed(popup.get(), &eden::engine::EngineView::closeRequested);
+    QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(80, 35));
+    QTRY_COMPARE_WITH_TIMEOUT(source.title(), QString("Qt sign-in complete"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 10000);
+}
 
 void QtWebEngineUserAgentTest::forgedConsoleReports() {
     AutofillPageServer server;

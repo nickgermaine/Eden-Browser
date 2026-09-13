@@ -745,8 +745,11 @@ namespace eden::core {
                 } else if (request->disposition() == engine::EngineView::Disposition::NewWindow) {
                     WindowController *destination =
                         ProfileManager::instance()
-                            ->createBrowserWindow(m_context, m_privateWindow, backendId, false, true);
-                    target = destination ? qobject_cast<engine::EngineView *>(destination->currentEngine()) : nullptr;
+                            ->createBrowserWindow(m_context, m_privateWindow, backendId, false, false);
+                    if (destination) {
+                        const int row = destination->newTab(QUrl("about:blank"), false, backendId);
+                        target = destination->tabs()->engineViewAt(row);
+                    }
                 } else {
                     const bool background = request->disposition() == engine::EngineView::Disposition::NewBackgroundTab;
                     const int row = newTab(QUrl("about:blank"), background, backendId);
@@ -757,8 +760,6 @@ namespace eden::core {
                 }
                 if (!request->openIn(target)) {
                     target->load(request->requestedUrl().isEmpty() ? QUrl("about:blank") : request->requestedUrl());
-                } else if (request->requestedUrl().isEmpty()) {
-                    target->load(QUrl("about:blank"));
                 }
             }
         );
