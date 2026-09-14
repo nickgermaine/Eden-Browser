@@ -232,6 +232,7 @@ namespace {
             if (!commandLine->HasSwitch("ozone-platform")) {
                 commandLine->AppendSwitchWithValue("ozone-platform", "x11");
             }
+            commandLine->AppendSwitch("no-first-run");
             appendListSwitch(commandLine, "disable-features", "ImmersiveReadAnything");
         }
 

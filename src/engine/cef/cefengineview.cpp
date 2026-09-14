@@ -1684,6 +1684,13 @@ namespace eden::engine::cef {
             bool userGesture,
             bool isRedirect
         ) override;
+        bool OnOpenURLFromTab(
+            CefRefPtr<CefBrowser> browser,
+            CefRefPtr<CefFrame> frame,
+            const CefString &targetUrl,
+            CefRequestHandler::WindowOpenDisposition targetDisposition,
+            bool userGesture
+        ) override;
         void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition) override;
         void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
         void OnLoadError(
@@ -4629,7 +4636,7 @@ namespace eden::engine::cef {
                 if (!model->IsEnabledAt(index)) {
                     continue;
                 }
-                const QString label = QString::fromStdString(model->GetLabelAt(index).ToString()).toLower();
+                const QString label = contextMenuLabel(model->GetLabelAt(index)).toLower();
                 const int commandId = model->GetCommandIdAt(index);
                 if (label.contains("open link in new tab")) {
                     m_contextMenuCommands.insert("open_link_new_tab", commandId);
@@ -5296,6 +5303,36 @@ namespace eden::engine::cef {
             return true;
         }
         return false;
+    }
+
+    bool CefEngineClient::OnOpenURLFromTab(
+        CefRefPtr<CefBrowser>,
+        CefRefPtr<CefFrame>,
+        const CefString &targetUrl,
+        CefRequestHandler::WindowOpenDisposition targetDisposition,
+        bool userGesture
+    ) {
+        EngineView::Disposition disposition = EngineView::Disposition::NewForegroundTab;
+        switch (targetDisposition) {
+        case CEF_WOD_NEW_FOREGROUND_TAB:
+        case CEF_WOD_NEW_POPUP:
+            break;
+        case CEF_WOD_NEW_BACKGROUND_TAB:
+            disposition = EngineView::Disposition::NewBackgroundTab;
+            break;
+        case CEF_WOD_NEW_WINDOW:
+            disposition = EngineView::Disposition::NewWindow;
+            break;
+        default:
+            return false;
+        }
+        const QUrl url(QString::fromStdString(targetUrl.ToString()));
+        if (url.isEmpty()) {
+            return false;
+        }
+        return dispatch([url, disposition, userGesture](CefEngineView::Private &state) {
+            state.requestNewView(url, disposition, userGesture, nullptr);
+        });
     }
 
     void CefEngineClient::OnBeforePopupAborted(CefRefPtr<CefBrowser>, int popupId) {

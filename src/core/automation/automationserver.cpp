@@ -399,8 +399,10 @@ namespace eden::core {
                     event(QEvent::MouseMove, position, position, global, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
                 QCoreApplication::sendEvent(m_window, &event);
             } else {
-                const Qt::MouseButton button =
-                    parameters.value("button").toString() == "right" ? Qt::RightButton : Qt::LeftButton;
+                const QString buttonName = parameters.value("button").toString();
+                const Qt::MouseButton button = buttonName == "right"    ? Qt::RightButton
+                                               : buttonName == "middle" ? Qt::MiddleButton
+                                                                        : Qt::LeftButton;
                 QMouseEvent press(QEvent::MouseButtonPress, position, position, global, button, button, Qt::NoModifier);
                 QMouseEvent release(
                     QEvent::MouseButtonRelease,
@@ -495,16 +497,20 @@ namespace eden::core {
     }
 
     void AutomationServer::recordNextFrame(const QString &name, std::chrono::steady_clock::time_point started) {
-        auto connection = std::make_shared<QMetaObject::Connection>();
-        *connection = connect(m_window, &QQuickWindow::frameSwapped, m_window, [connection, name, started] {
-            disconnect(*connection);
-            const double milliseconds =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-            PerformanceMetrics::record(name, milliseconds);
-            if (qEnvironmentVariableIsSet("EDEN_PERF")) {
-                qInfo().noquote() << "EDEN_PERF" << name + '=' + QString::number(milliseconds, 'f', 3);
-            }
-        });
+        connect(
+            m_window,
+            &QQuickWindow::frameSwapped,
+            m_window,
+            [name, started] {
+                const double milliseconds =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                PerformanceMetrics::record(name, milliseconds);
+                if (qEnvironmentVariableIsSet("EDEN_PERF")) {
+                    qInfo().noquote() << "EDEN_PERF" << name + '=' + QString::number(milliseconds, 'f', 3);
+                }
+            },
+            static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::SingleShotConnection)
+        );
     }
 
 }
