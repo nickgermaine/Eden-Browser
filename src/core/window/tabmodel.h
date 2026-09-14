@@ -107,6 +107,8 @@ namespace eden::core {
         QString backendIdAt(int index) const;
         QString defaultBackendId() const;
         quint64 tabIdAt(int index) const;
+        quint64 openerTabIdAt(int index) const;
+        void setOpenerTabId(int index, quint64 openerId);
         bool isDiscarded(int index) const;
         qint64 rendererProcessIdAt(int index) const;
         int rendererProcessUseCount(qint64 processId) const;
@@ -134,6 +136,7 @@ namespace eden::core {
             QUrl favicon;
             QString internalPage;
             quint64 id = 0;
+            quint64 openerId = 0;
             engine::Backend backend = engine::Backend::QtWebEngine;
             bool pinned = false;
             bool privateMode = false;

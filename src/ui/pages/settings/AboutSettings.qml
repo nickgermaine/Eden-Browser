@@ -36,6 +36,12 @@ Item {
             "file": "cef-bsd-3-clause.txt"
         },
         {
+            "name": "WebKit",
+            "license": "LGPL and BSD licenses",
+            "detail": "WebCore, JavaScriptCore, and WPE by the WebKit contributors",
+            "file": "webkit-notices.txt"
+        },
+        {
             "name": "Solar Icon Set",
             "license": "Creative Commons Attribution 4.0",
             "detail": "Interface icons by 480 Design",

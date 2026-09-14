@@ -188,27 +188,6 @@ namespace eden::core {
         return value;
     }
 
-    struct RendererProcessSample {
-        qint64 memoryKiB = 0;
-        int processCount = 0;
-    };
-
-    static RendererProcessSample rendererProcessesMemory() {
-        RendererProcessSample sample;
-        for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
-            if (!processCommandLine(processId).contains("--type=renderer")) {
-                continue;
-            }
-            const qint64 memory = residentMemoryKiB(processId);
-            if (memory < 0) {
-                continue;
-            }
-            sample.memoryKiB += memory;
-            ++sample.processCount;
-        }
-        return sample;
-    }
-
     static QVariantMap sharedProcessMemory() {
         qint64 gpuMemory = 0;
         qint64 networkMemory = 0;
@@ -216,16 +195,19 @@ namespace eden::core {
         bool networkAvailable = false;
         for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
             const QByteArray commandLine = processCommandLine(processId);
+            const QString executable =
+                QFileInfo(QFile::symLinkTarget(QString("/proc/%1/exe").arg(processId))).fileName();
             const qint64 memory = residentMemoryKiB(processId);
             if (memory < 0) {
                 continue;
             }
-            if (commandLine.contains("--type=gpu-process")) {
+            if (executable == "WPEGPUProcess" || commandLine.contains("--type=gpu-process")) {
                 gpuMemory += memory;
                 gpuAvailable = true;
             } else if (
-                commandLine.contains("--type=utility") &&
-                (commandLine.contains("network.mojom.NetworkService") || commandLine.contains("network-service"))
+                executable == "WPENetworkProcess" ||
+                (commandLine.contains("--type=utility") &&
+                 (commandLine.contains("network.mojom.NetworkService") || commandLine.contains("network-service")))
             ) {
                 networkMemory += memory;
                 networkAvailable = true;
@@ -319,6 +301,7 @@ namespace eden::core {
         if (m_registeredAsWindow) {
             prepareToClose();
         }
+        m_tabs.reset();
     }
 
     TabModel *WindowController::tabs() const {
@@ -752,7 +735,9 @@ namespace eden::core {
                     }
                 } else {
                     const bool background = request->disposition() == engine::EngineView::Disposition::NewBackgroundTab;
+                    const quint64 openerId = m_tabs->tabIdAt(sourceIndex);
                     const int row = newTab(QUrl("about:blank"), background, backendId);
+                    m_tabs->setOpenerTabId(row, openerId);
                     target = m_tabs->engineViewAt(row);
                 }
                 if (!target) {
@@ -773,6 +758,7 @@ namespace eden::core {
             emit closeWindowRequested();
         });
         connect(m_tabs.get(), &QAbstractItemModel::rowsRemoved, this, [this](const QModelIndex &, int first, int last) {
+            const quint64 openerId = std::exchange(m_closingOpenerTabId, 0);
             if (!m_tabs || m_tabs->rowCount() == 0) {
                 setActiveIndex(-1);
                 return;
@@ -782,7 +768,8 @@ namespace eden::core {
             if (m_activeIndex > last) {
                 nextActiveIndex = m_activeIndex - (last - first + 1);
             } else if (activeRemoved) {
-                nextActiveIndex = first;
+                const int openerIndex = m_tabs->indexForTabId(openerId);
+                nextActiveIndex = openerIndex >= 0 ? openerIndex : first;
             }
             nextActiveIndex = std::min(nextActiveIndex, m_tabs->rowCount() - 1);
             if (nextActiveIndex == m_activeIndex) {
@@ -800,6 +787,8 @@ namespace eden::core {
             &QAbstractItemModel::rowsAboutToBeRemoved,
             this,
             [this](const QModelIndex &, int first, int last) {
+                m_closingOpenerTabId =
+                    m_activeIndex >= first && m_activeIndex <= last ? m_tabs->openerTabIdAt(m_activeIndex) : 0;
                 if (!m_thumbnailCache) {
                     return;
                 }
@@ -1020,20 +1009,8 @@ namespace eden::core {
                     m_tabs->rendererProcessUseCount(processId) > 1 ? "Shared renderer" : "Dedicated renderer"
                 );
             } else {
-                const RendererProcessSample sample = rendererProcessesMemory();
-                if (sample.processCount == 1) {
-                    preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
-                    preview.insert("rendererAttribution", "Dedicated renderer");
-                } else if (sample.processCount > 1) {
-                    preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
-                    preview.insert(
-                        "rendererAttribution",
-                        QString("All renderers (%1 processes)").arg(sample.processCount)
-                    );
-                } else {
-                    preview.insert("rendererMemory", "Unavailable");
-                    preview.insert("rendererAttribution", "Renderer mapping unavailable");
-                }
+                preview.insert("rendererMemory", "Unavailable");
+                preview.insert("rendererAttribution", "Renderer mapping unavailable");
             }
         } else {
             preview.insert("rendererMemory", "Unavailable");
@@ -2521,7 +2498,7 @@ namespace eden::core {
                     append("open_media_new_tab", "Open image in new tab", "new-window");
                 }
                 const QUrl contextTarget = !info.linkUrl.isEmpty() ? info.linkUrl : info.mediaUrl;
-                if (!providedActions && !contextTarget.isEmpty()) {
+                if (!contextTarget.isEmpty() && info.surface == "page") {
                     QVariantList engines;
                     for (const engine::EngineDescriptor &descriptor :
                          engine::EngineRegistry::instance()->descriptors()) {
@@ -2535,15 +2512,17 @@ namespace eden::core {
                     }
                     append("open_with", "Open with", "globe", true, engines);
                 }
-                if (!providedActions && info.editable) {
+                if (info.editable && info.surface == "page") {
                     refreshAutofillSuggestions();
                     if (!m_autofillSuggestions.isEmpty()) {
                         append("autofill", "Auto-fill", "password", true, m_autofillSuggestions);
                     }
-                    append("cut", "Cut", "cut");
-                    append("copy", "Copy", "copy");
-                    append("paste", "Paste", "clipboard");
-                    append("select_all", "Select all", "text-selection");
+                    if (!providedActions) {
+                        append("cut", "Cut", "cut");
+                        append("copy", "Copy", "copy");
+                        append("paste", "Paste", "clipboard");
+                        append("select_all", "Select all", "text-selection");
+                    }
                 } else if (!providedActions && !info.selectedText.isEmpty()) {
                     append("copy", "Copy", "copy");
                 }

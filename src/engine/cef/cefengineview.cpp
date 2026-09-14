@@ -3607,6 +3607,16 @@ namespace eden::engine::cef {
             }
             if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
                 auto *key = static_cast<QKeyEvent *>(event);
+                const auto modifiers = key->modifiers();
+                const bool paste = !(modifiers & (Qt::AltModifier | Qt::MetaModifier)) &&
+                                   ((key->key() == Qt::Key_V && modifiers.testFlag(Qt::ControlModifier)) ||
+                                    (key->key() == Qt::Key_Insert && modifiers == Qt::ShiftModifier));
+                if (paste) {
+                    if (event->type() == QEvent::KeyPress) {
+                        pasteFromShellClipboard(currentBrowser);
+                    }
+                    return true;
+                }
                 CefKeyEvent cefEvent;
                 cefEvent.type = event->type() == QEvent::KeyPress ? KEYEVENT_RAWKEYDOWN : KEYEVENT_KEYUP;
                 cefEvent.modifiers = cefEventModifiers(key->modifiers());

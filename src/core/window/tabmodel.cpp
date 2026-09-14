@@ -668,6 +668,16 @@ namespace eden::core {
         return m_tabs.at(row)->id;
     }
 
+    quint64 TabModel::openerTabIdAt(int row) const {
+        return row >= 0 && row < rowCount() ? m_tabs.at(row)->openerId : 0;
+    }
+
+    void TabModel::setOpenerTabId(int row, quint64 openerId) {
+        if (row >= 0 && row < rowCount() && m_tabs.at(row)->id != openerId) {
+            m_tabs.at(row)->openerId = openerId;
+        }
+    }
+
     bool TabModel::isDiscarded(int row) const {
         if (row < 0 || row >= rowCount()) {
             return false;

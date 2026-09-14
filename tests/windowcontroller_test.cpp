@@ -11,6 +11,7 @@
 #include "engine/engineview.h"
 #include "passwords/credentialvault.h"
 
+#include <QProcess>
 #include <QQuickWindow>
 #include <QScopeGuard>
 #include <QTemporaryDir>
@@ -72,7 +73,7 @@ class PermissionEngine final : public eden::engine::EngineView {
     }
     qint64 rendererProcessId() const override {
         ++processQueries;
-        return QCoreApplication::applicationPid();
+        return rendererPid;
     }
     void requestThumbnail(const QSize &, ThumbnailCallback callback) override {
         ++captures;
@@ -94,6 +95,7 @@ class PermissionEngine final : public eden::engine::EngineView {
         setCaptureDetails("fixture", flags);
     }
 
+    qint64 rendererPid = QCoreApplication::applicationPid();
     bool thumbnails = false;
     mutable int processQueries = 0;
     int captures = 0;
@@ -220,7 +222,10 @@ class WindowControllerTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void popupCloseReturnsToOpener();
     void fullscreenTracksItsOwner();
+    void nativeMenusKeepAutofillAndEngineActions();
+    void unmappedRendererDoesNotBorrowAnotherProcess();
     void personalDataRejectsReplacedTargets();
     void displayChoicesRemainTemporary();
     void automaticDismissal_data();
@@ -234,6 +239,84 @@ class WindowControllerTest final : public QObject {
     void previewCaptureRejectsStaleImages();
     void tabSwitchMetricIncludesPreviewWork();
 };
+
+void WindowControllerTest::nativeMenusKeepAutofillAndEngineActions() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    auto *vault = qobject_cast<eden::passwords::CredentialVault *>(harness.controller->credentialVault());
+    QVERIFY(vault && vault->available());
+    QVERIFY(
+        vault->saveFormProfile(0, {{"label", "Work"}, {"name", "Test Person"}, {"email", "person@example.test"}}) > 0
+    );
+    emit view->formFieldFocused({{"type", "email"}, {"name", "email"}, {"autocomplete", "email"}});
+    eden::engine::ContextMenuInfo info;
+    info.editable = true;
+    info.linkUrl = QUrl("https://destination.example/");
+    info.actions = {QVariantMap{{"id", "native-paste"}, {"title", "Paste"}, {"icon", "clipboard"}}};
+    emit view->contextMenuRequested(info);
+    QSet<QString> commands;
+    for (const auto &action : harness.controller->pageContextMenuActions()) {
+        commands.insert(action.toMap().value("id").toString());
+    }
+    QVERIFY(commands.contains("native-paste"));
+    QVERIFY(commands.contains("autofill"));
+    QVERIFY(commands.contains("open_with"));
+    QVERIFY(!commands.contains("paste"));
+    info.surface = "devtools";
+    emit view->contextMenuRequested(info);
+    QCOMPARE(harness.controller->pageContextMenuActions(), info.actions);
+}
+
+void WindowControllerTest::unmappedRendererDoesNotBorrowAnotherProcess() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    view->rendererPid = 0;
+    QProcess unrelated;
+    unrelated.start("/usr/bin/python3", {"-c", "import time; time.sleep(30)", "--type=renderer"});
+    QVERIFY(unrelated.waitForStarted());
+    const auto cleanup = qScopeGuard([&] {
+        unrelated.terminate();
+        unrelated.waitForFinished();
+    });
+    const QVariantMap preview = harness.controller->tabPreview(0);
+    QCOMPARE(preview.value("rendererPid").toLongLong(), 0);
+    QCOMPARE(preview.value("rendererMemory").toString(), QString("Unavailable"));
+    QCOMPARE(preview.value("rendererAttribution").toString(), QString("Renderer mapping unavailable"));
+}
+
+void WindowControllerTest::popupCloseReturnsToOpener() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    for (int index = 0; index < 6; ++index) {
+        QVERIFY(harness.addTab());
+    }
+    auto *tabs = harness.controller->tabs();
+    auto *opener = tabs->engineViewAt(1);
+    const quint64 openerId = tabs->tabIdAt(1);
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->setActiveIndex(5);
+    tabs->moveTab(1, 3);
+    harness.controller->closeTab(5);
+    QCOMPARE(harness.controller->currentEngine(), opener);
+    QCOMPARE(harness.controller->activeIndex(), 3);
+    QVERIFY(harness.addTab());
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->setActiveIndex(0);
+    auto *foreground = harness.controller->currentEngine();
+    harness.controller->closeTab(5);
+    QCOMPARE(harness.controller->currentEngine(), foreground);
+    QVERIFY(harness.addTab());
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->closeTab(tabs->indexForTabId(openerId));
+    harness.controller->setActiveIndex(4);
+    harness.controller->closeTab(4);
+    QCOMPARE(harness.controller->activeIndex(), 3);
+    QVERIFY(harness.controller->currentEngine());
+}
 
 void WindowControllerTest::fullscreenTracksItsOwner() {
     QQuickWindow window;

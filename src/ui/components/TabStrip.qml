@@ -27,6 +27,8 @@ Item {
     signal systemMoveRequested
     signal toggleMaximizedRequested
 
+    onRenderedTabWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
+    onTabCountChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     onRenderedTabsContentWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     onWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     objectName: "tabDropArea"
@@ -120,7 +122,7 @@ Item {
             }
         }
 
-        displaced: Transition {
+        moveDisplaced: Transition {
             NumberAnimation {
                 properties: "x,y"
                 duration: Theme.shortDuration

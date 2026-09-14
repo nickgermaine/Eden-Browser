@@ -197,6 +197,9 @@ int main(int argc, char *argv[]) {
 #if EDEN_ENGINE_QTWEBENGINE
     eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::QtWebEngine);
 #endif
+#if EDEN_ENGINE_WPE
+    eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::Wpe);
+#endif
     QGuiApplication application(argc, argv);
     logStartupStage("qgui_application_constructed_ms");
     Q_INIT_RESOURCE(eden_ui_raw_res_0);
@@ -204,7 +207,8 @@ int main(int argc, char *argv[]) {
     QFontDatabase::addApplicationFont(":/qt/qml/Eden/Ui/resources/fonts/RobotoFlex.ttf");
 
     std::unique_ptr<eden::platform::WaylandGlibEventDispatcher> waylandGlibDispatcher;
-    if (QGuiApplication::platformName() == "wayland" && qEnvironmentVariableIntValue("QT_NO_GLIB") != 0) {
+    if ((QGuiApplication::platformName() == "wayland" || EDEN_ENGINE_WPE) &&
+        qEnvironmentVariableIntValue("QT_NO_GLIB") != 0) {
         waylandGlibDispatcher = std::make_unique<eden::platform::WaylandGlibEventDispatcher>();
     }
 

@@ -10,6 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(EDEN_ENGINE_CEF "Acquire and build the CEF engine dependency" ON)
 option(EDEN_ENGINE_QTWEBENGINE "Build the QtWebEngine backend module" ON)
+option(EDEN_ENGINE_WPE "Build the WPE WebKit backend module" ON)
 option(EDEN_ENGINE_SERVO "Acquire and build the Servo engine dependency" OFF)
 option(EDEN_ENABLE_AUTOMATION "Build the local benchmark automation hook" OFF)
 option(EDEN_SOLAR_ICONS "Acquire the Solar icon source set for design work" ON)
@@ -163,6 +164,7 @@ target_compile_definitions(eden-core PUBLIC
     EDEN_ENABLE_AUTOMATION=$<BOOL:${EDEN_ENABLE_AUTOMATION}>
     EDEN_ENGINE_CEF=$<BOOL:${EDEN_ENGINE_CEF}>
     EDEN_ENGINE_QTWEBENGINE=$<BOOL:${EDEN_ENGINE_QTWEBENGINE}>
+    EDEN_ENGINE_WPE=$<BOOL:${EDEN_ENGINE_WPE}>
 )
 target_include_directories(eden-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(eden-core PUBLIC
@@ -177,6 +179,10 @@ target_link_libraries(eden-core PUBLIC
     PkgConfig::SQLCIPHER
     PkgConfig::PSL
 )
+
+if(EDEN_ENGINE_WPE)
+    include(cmake/EdenWpe.cmake)
+endif()
 
 if(EDEN_ENGINE_QTWEBENGINE)
     add_library(eden-engine-qtwebengine SHARED
@@ -297,6 +303,7 @@ qt_add_qml_module(eden-ui
         resources/licenses/solar-cc-by-4.0.txt
         resources/licenses/chromium-bsd-3-clause.txt
         resources/licenses/cef-bsd-3-clause.txt
+        resources/licenses/webkit-notices.txt
         resources/icons/material/close.svg
         resources/icons/material/maximize.svg
         resources/icons/material/minimize.svg
@@ -713,6 +720,10 @@ if(EDEN_ENGINE_CEF)
 endif()
 if(EDEN_ENGINE_QTWEBENGINE)
     add_dependencies(eden-browser eden-engine-qtwebengine)
+endif()
+
+if(EDEN_ENGINE_WPE)
+    add_dependencies(eden-browser eden-engine-wpe)
 endif()
 
 enable_testing()

@@ -42,6 +42,9 @@ namespace eden::engine {
         if (backend == Backend::QtWebEngine) {
             return "eden-engine-qtwebengine";
         }
+        if (backend == Backend::Wpe) {
+            return "eden-engine-wpe";
+        }
         return {};
     }
 

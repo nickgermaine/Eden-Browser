@@ -298,6 +298,7 @@ namespace eden::core {
         std::unique_ptr<OmniboxController> m_omnibox;
         std::unique_ptr<ShortcutRegistry> m_shortcuts;
         int m_activeIndex = -1;
+        quint64 m_closingOpenerTabId = 0;
         bool m_privateWindow = false;
         bool m_initialized = false;
         bool m_registeredAsWindow = false;

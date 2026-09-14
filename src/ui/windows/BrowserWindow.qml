@@ -481,15 +481,7 @@ Window {
                 Item {
                     id: viewport
 
-                    readonly property bool devToolsDockedRight: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 0
-                    readonly property bool devToolsDockedBottom: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 1
-
-                    anchors.left: parent.left
-                    anchors.right: devToolsDockedRight ? devToolsDockFrame.left : parent.right
-                    anchors.rightMargin: devToolsDockedRight ? Theme.workspaceGap : 0
-                    anchors.top: parent.top
-                    anchors.bottom: devToolsDockedBottom ? devToolsDockFrame.top : parent.bottom
-                    anchors.bottomMargin: devToolsDockedBottom ? Theme.workspaceGap : 0
+                    anchors.fill: parent
                     clip: true
 
                     Repeater {
@@ -502,9 +494,13 @@ Window {
                             required property var engineView
                             required property string internalPage
                             required property url url
+                            readonly property bool devToolsDockedRight: engineView && engineView.devToolsOpen && engineView.devToolsPlacement === 0
+                            readonly property bool devToolsDockedBottom: engineView && engineView.devToolsOpen && engineView.devToolsPlacement === 1
 
                             objectName: "tabViewport"
                             anchors.fill: parent
+                            anchors.rightMargin: devToolsDockedRight ? Math.max(280, Math.min(Math.round(parent.width * 0.8), controller.devToolsPaneWidth)) + Theme.workspaceGap : 0
+                            anchors.bottomMargin: devToolsDockedBottom ? Math.max(180, Math.min(Math.round(parent.height * 0.8), controller.devToolsPaneHeight)) + Theme.workspaceGap : 0
                             visible: controller.activeIndex === index
                             Component.onCompleted: {
                                 if (engineView) {
