@@ -17,7 +17,11 @@ endif()
 get_filename_component(EDEN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 include("${EDEN_ROOT}/cmake/CefVersion.cmake")
 
-set(EDEN_CEF_ROOT "${EDEN_ROOT}/third_party/cef/${EDEN_CEF_LINUX_X86_64_ARCHIVE}")
+set(EDEN_CEF_ARCHIVE "" CACHE STRING "CEF archive name under third_party/cef, defaults to the pinned distribution")
+if(NOT EDEN_CEF_ARCHIVE)
+    set(EDEN_CEF_ARCHIVE "${EDEN_CEF_LINUX_X86_64_ARCHIVE}")
+endif()
+set(EDEN_CEF_ROOT "${EDEN_ROOT}/third_party/cef/${EDEN_CEF_ARCHIVE}")
 string(REGEX REPLACE "\\.tar\\.bz2$" "" EDEN_CEF_ROOT "${EDEN_CEF_ROOT}")
 
 if(NOT EXISTS "${EDEN_CEF_ROOT}/cmake/FindCEF.cmake")

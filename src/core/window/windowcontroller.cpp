@@ -1862,9 +1862,25 @@ namespace eden::core {
             dismissPageContextMenu();
             return;
         }
-        if (command == "open_target_new_tab" || command == "open_media_new_tab") {
+        if (command == "view_source") {
+            const QUrl url = currentUrl();
+            if (!url.isEmpty()) {
+                newTab(
+                    QUrl("view-source:" + url.toString()),
+                    false,
+                    m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString()
+                );
+            }
+            dismissPageContextMenu();
+            return;
+        }
+        if (command == "open_target_new_tab" || command == "open_link_new_tab" || command == "open_media_new_tab") {
             if (!m_pageContextMenuTarget.isEmpty()) {
-                newTab(m_pageContextMenuTarget, false, m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString());
+                newTab(
+                    m_pageContextMenuTarget,
+                    command == "open_link_new_tab",
+                    m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString()
+                );
             }
             dismissPageContextMenu();
             return;
