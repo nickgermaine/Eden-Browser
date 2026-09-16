@@ -572,6 +572,7 @@ Window {
 
                 Item {
                     id: devToolsDockFrame
+                    objectName: "devToolsDockFrame"
 
                     readonly property bool dockedRight: controller.currentEngine && controller.currentEngine.devToolsPlacement === 0 ? true : false
 
@@ -601,6 +602,7 @@ Window {
                 }
 
                 Item {
+                    objectName: "devToolsRightDivider"
                     visible: devToolsDock.active && devToolsDockFrame.dockedRight
                     anchors.right: devToolsDockFrame.left
                     anchors.top: parent.top
@@ -616,20 +618,21 @@ Window {
                         target: null
                         onActiveChanged: {
                             if (active) {
-                                controller.beginDevToolsPaneResize();
+                                controller.beginDevToolsPaneResize(devToolsDockFrame.width, devToolsDockFrame.height);
                             } else {
                                 controller.commitDevToolsPaneSize();
                             }
                         }
                         onTranslationChanged: {
                             if (active) {
-                                controller.resizeDevToolsPane(translation.x, true);
+                                controller.resizeDevToolsPane(activeTranslation.x, true);
                             }
                         }
                     }
                 }
 
                 Item {
+                    objectName: "devToolsBottomDivider"
                     visible: devToolsDock.active && !devToolsDockFrame.dockedRight
                     anchors.bottom: devToolsDockFrame.top
                     anchors.left: parent.left
@@ -645,14 +648,14 @@ Window {
                         target: null
                         onActiveChanged: {
                             if (active) {
-                                controller.beginDevToolsPaneResize();
+                                controller.beginDevToolsPaneResize(devToolsDockFrame.width, devToolsDockFrame.height);
                             } else {
                                 controller.commitDevToolsPaneSize();
                             }
                         }
                         onTranslationChanged: {
                             if (active) {
-                                controller.resizeDevToolsPane(translation.y, false);
+                                controller.resizeDevToolsPane(activeTranslation.y, false);
                             }
                         }
                     }
@@ -892,6 +895,7 @@ Window {
 
             sourceComponent: Component {
                 EdenMenu {
+                    objectName: "pageContextMenu"
                     readonly property bool devToolsSurface: controller.pageContextMenuSurface === "devtools"
                     readonly property real surfaceX: devToolsSurface ? workspace.x + viewportFrame.x + devToolsDockFrame.x + Theme.contentBorderWidth : workspace.x + viewportFrame.x
                     readonly property real surfaceY: devToolsSurface ? workspace.y + viewportFrame.y + devToolsDockFrame.y + 52 + Theme.contentBorderWidth : workspace.y + viewportFrame.y
@@ -919,6 +923,7 @@ Window {
 
             sourceComponent: Component {
                 EdenMenu {
+                    objectName: "autofillMenu"
                     parent: shell
                     x: Math.max(8, Math.min(shell.width - width - 8, workspace.x + viewportFrame.x + controller.autofillPopupPosition.x))
                     y: Math.max(8, Math.min(shell.height - height - 8, workspace.y + viewportFrame.y + controller.autofillPopupPosition.y + 4))
@@ -969,7 +974,7 @@ Window {
             }
 
             function onCredentialStateChanged() {
-                if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item) {
+                if ((!controller.autofillFieldFocused || controller.autofillSuggestions.length === 0) && autofillMenuLoader.item) {
                     autofillMenuLoader.item.close();
                 }
             }

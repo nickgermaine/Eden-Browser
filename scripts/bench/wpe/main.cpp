@@ -8,13 +8,53 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QQuickWindow>
 #include <QSaveFile>
 #include <QTimer>
+#include <chrono>
 
 using namespace eden::engine;
+
+static QVariantMap rendererPageBacking(qint64 pid) {
+    QFile mapping(QString("/proc/%1/smaps").arg(pid));
+    if (!mapping.open(QIODevice::ReadOnly)) {
+        return {{"readable", false}};
+    }
+    quint64 textFileHugeKiB = 0, textAnonymousHugeKiB = 0, anonymousHugeKiB = 0, textRssKiB = 0;
+    bool text = false, textAdvised = false;
+    for (const QByteArray &line : mapping.readAll().split('\n')) {
+        const auto fields = line.simplified().split(' ');
+        if (fields.value(0).contains('-')) {
+            text = line.contains("libWPEWebKit-2.0.so") && fields.value(1).contains('x');
+        }
+        if (line.startsWith("AnonHugePages:")) {
+            anonymousHugeKiB += fields.value(1).toULongLong();
+            if (text) {
+                textAnonymousHugeKiB += fields.value(1).toULongLong();
+            }
+        }
+        if (text && line.startsWith("FilePmdMapped:")) {
+            textFileHugeKiB += fields.value(1).toULongLong();
+        }
+        if (text && line.startsWith("Rss:")) {
+            textRssKiB += fields.value(1).toULongLong();
+        }
+        if (text && line.startsWith("VmFlags:") && fields.contains("hg")) {
+            textAdvised = true;
+        }
+    }
+    return {
+        {"readable", true},
+        {"webkitTextFileHugeKiB", textFileHugeKiB},
+        {"webkitTextAnonymousHugeKiB", textAnonymousHugeKiB},
+        {"anonymousHugeKiB", anonymousHugeKiB},
+        {"webkitTextRssKiB", textRssKiB},
+        {"webkitTextAdvised", textAdvised}
+    };
+}
 
 int main(int argc, char *argv[]) {
     qputenv("QT_NO_GLIB", "1");
@@ -25,13 +65,25 @@ int main(int argc, char *argv[]) {
     application.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser;
     parser.addHelpOption();
+    parser.addOption({"probe-script", "Run a local DOM probe instead of Speedometer", "file"});
     parser.addOption({"url", "Benchmark page", "url", "https://browserbench.org/Speedometer3.1/"});
     parser.addOption({"output", "Result JSON path", "file"});
     parser.addOption({"label", "Build and tuning label", "name"});
+    parser.addOption({"timings", "Save the benchmark timing entries for trace correlation"});
     parser.addOption({"training-directory", "Directory for native PGO profiles", "path"});
     parser.process(application);
     if (parser.value("output").isEmpty()) {
         parser.showHelp(2);
+    }
+    const bool isProbe = parser.isSet("probe-script");
+    QString probeScript;
+    if (isProbe) {
+        QFile input(parser.value("probe-script"));
+        if (!input.open(QIODevice::ReadOnly)) {
+            qCritical("Could not read the DOM probe");
+            return 2;
+        }
+        probeScript = QString::fromUtf8(input.readAll());
     }
     eden::platform::WaylandGlibEventDispatcher dispatcher;
     if (!WpeRuntime::initialize("Eden", "benchmark")) {
@@ -65,11 +117,11 @@ int main(int argc, char *argv[]) {
         window.resize(1280, 900);
         view.attach(window.contentItem());
         window.show();
-        view.load(QUrl(parser.value("url")));
+        view.load(isProbe && !parser.isSet("url") ? QUrl("about:blank") : QUrl(parser.value("url")));
         QElapsedTimer elapsed;
         elapsed.start();
         QTimer poll;
-        poll.setInterval(5000);
+        poll.setInterval(isProbe ? 100 : 5000);
         bool started = false;
         bool pending = false;
         QObject::connect(&poll, &QTimer::timeout, &application, [&] {
@@ -82,7 +134,7 @@ int main(int argc, char *argv[]) {
                 return;
             }
             pending = true;
-            const QString script = started ? QStringLiteral(R"JS((() => ({
+            QString script = started ? QStringLiteral(R"JS((() => ({
                     complete: benchmarkClient._hasResults,
                     finished: benchmarkClient._finishedTestCount,
                     results: benchmarkClient._hasResults ? {
@@ -91,15 +143,30 @@ int main(int argc, char *argv[]) {
                         measuredValues: benchmarkClient._measuredValuesList,
                         userAgent: navigator.userAgent,
                         viewport: [innerWidth, innerHeight, devicePixelRatio],
-                        visibility: document.visibilityState
+                        visibility: document.visibilityState,
+                        timeOrigin: performance.timeOrigin,
+                        timings: %1 ? performance.getEntriesByType('measure').map(entry => ({
+                            name: entry.name, startTime: entry.startTime, duration: entry.duration
+                        })) : null
                     } : null
                 }))())JS")
-                                           : QStringLiteral(R"JS((() => {
+                                           .arg(parser.isSet("timings") ? "true" : "false")
+                                     : QStringLiteral(R"JS((() => {
                     const button = document.querySelector('.start-tests-button');
                     if (document.readyState !== 'complete' || !button) { return false; }
                     button.click();
                     return true;
                 })())JS");
+            if (isProbe) {
+                script = started ? QStringLiteral("globalThis.__edenProbeState") : probeScript + QStringLiteral(R"JS(
+                    globalThis.__edenProbeState = {complete: false};
+                    Promise.resolve().then(() => edenDOMProbe()).then(
+                        results => globalThis.__edenProbeState = {complete: true, results},
+                        error => globalThis.__edenProbeState = {complete: true, error: String(error.stack || error)}
+                    );
+                    true;
+                )JS");
+            }
             view.evaluate(
                 script,
                 [&](QVariant value) {
@@ -107,18 +174,27 @@ int main(int argc, char *argv[]) {
                     if (!started) {
                         started = value.toBool();
                         if (started) {
-                            qInfo("Speedometer started");
+                            qInfo("%s started", isProbe ? "DOM probe" : "Speedometer");
                         }
                         return;
                     }
                     const QVariantMap state = value.toMap();
-                    qInfo("Speedometer progress: %d", state.value("finished").toInt());
+                    if (!isProbe) {
+                        qInfo("Speedometer progress: %d", state.value("finished").toInt());
+                    }
+                    if (state.contains("error")) {
+                        qCritical().noquote() << state.value("error").toString();
+                        application.exit(5);
+                        return;
+                    }
                     if (!state.value("complete").toBool()) {
                         return;
                     }
                     poll.stop();
                     QVariantMap results = state.value("results").toMap();
                     results.insert("elapsedMilliseconds", elapsed.elapsed());
+                    results.insert("displaySyncPulses", qulonglong(WpeRuntime::displayPulseCount()));
+                    results.insert("rendererPageBackingAfterCompletion", rendererPageBacking(view.rendererProcessId()));
                     results.insert("label", parser.value("label"));
                     results.insert("qtVersion", QString::fromLatin1(qVersion()));
                     results.insert(
@@ -142,13 +218,55 @@ int main(int argc, char *argv[]) {
                           "JSC_numberOfDFGCompilerThreads",
                           "JSC_numberOfFTLCompilerThreads",
                           "WEBKIT_SKIA_GPU_PAINTING_THREADS",
+                          "WEBKIT_EDEN_JSC_ASSIGN_CLONE",
+                          "WEBKIT_EDEN_JSC_REST_CLONE",
+                          "WEBKIT_EDEN_JSC_REGEXP_ALTERNATIVES",
+                          "WEBKIT_EDEN_EDITOR_WINDOW",
+                          "WEBKIT_EDEN_EARLY_SCENE_COMPLETION",
+                          "WEBKIT_EDEN_HELPER_NICE",
+                          "WEBKIT_EDEN_TEXT_HUGE_PAGES",
+                          "WEBKIT_EDEN_JIT_HUGE_PAGES",
+                          "WEBKIT_EDEN_REUSE_SCALED_FONT",
+                          "WEBKIT_EDEN_PAINT_PARTITION_RATIO",
+                          "WEBKIT_EDEN_EXPERIMENT_TRACE",
+                          "EDEN_WPE_DISPLAY_SYNC",
+                          "WEBKIT_SKIA_CANVAS_REPLAY_THREADS",
+                          "WEBKIT_SKIA_CANVAS_REPLAY_BATCH",
+                          "WEBKIT_SKIA_CANVAS_REPLAY_TRACE",
                           "WEBKIT_SKIA_CPU_PAINTING_THREADS",
+                          "WEBKIT_SKIA_MSAA_SAMPLE_COUNT",
+                          "WEBKIT_SKIA_ENABLE_DYNAMIC_MSAA",
+                          "WEBKIT_SKIA_ENABLE_DDL",
+                          "WEBKIT_SKIA_ENABLE_CPU_RENDERING",
+                          "WEBKIT_A11Y_BUS_ADDRESS",
+                          "WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS",
+                          "EDEN_WPE_FRAME_ACK",
+                          "EDEN_WPE_CANVAS_ACCELERATION",
                           "EDEN_WPE_EXPLICIT_SYNC"}) {
                         if (qEnvironmentVariableIsSet(name)) {
                             runtimeOptions.insert(QString::fromLatin1(name), qEnvironmentVariable(name));
                         }
                     }
                     results.insert("runtimeOptions", runtimeOptions);
+                    if (parser.isSet("timings")) {
+                        const auto before = std::chrono::steady_clock::now();
+                        const auto wall = std::chrono::system_clock::now();
+                        const auto after = std::chrono::steady_clock::now();
+                        results.insert(
+                            "clockCorrelation",
+                            QVariantMap{
+                                {"wallMilliseconds",
+                                 std::chrono::duration<double, std::milli>(wall.time_since_epoch()).count()},
+                                {"monotonicMilliseconds",
+                                 std::chrono::duration<double, std::milli>(
+                                     (before + (after - before) / 2).time_since_epoch()
+                                 )
+                                     .count()},
+                                {"samplingWindowMilliseconds",
+                                 std::chrono::duration<double, std::milli>(after - before).count()}
+                            }
+                        );
+                    }
                     QSaveFile output(parser.value("output"));
                     const QByteArray json = QJsonDocument::fromVariant(results).toJson();
                     if (!output.open(QIODevice::WriteOnly) || output.write(json) != json.size() || !output.commit()) {
@@ -158,11 +276,13 @@ int main(int argc, char *argv[]) {
                     }
                     qInfo().noquote()
                         << QJsonDocument::fromVariant(results.value("score")).toJson(QJsonDocument::Compact);
-                    const bool valid = results.value("accelerated").toBool() &&
-                                       results.value("textureImports").toULongLong() > 0 &&
-                                       results.value("score").toMap().value("isValid").toBool() &&
-                                       results.value("measuredValues").toList().size() == 10 &&
-                                       results.value("visibility").toString() == QStringLiteral("visible");
+                    const bool valid =
+                        results.value("accelerated").toBool() && results.value("textureImports").toULongLong() > 0 &&
+                        (isProbe ? results.value("probe").toString() == QStringLiteral("dom-insertion") &&
+                                       !results.value("measurements").toMap().isEmpty()
+                                 : results.value("score").toMap().value("isValid").toBool() &&
+                                       results.value("measuredValues").toList().size() == 10) &&
+                        results.value("visibility").toString() == QStringLiteral("visible");
                     application.exit(valid ? 0 : 5);
                 },
                 nullptr

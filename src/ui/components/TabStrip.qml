@@ -82,16 +82,6 @@ Item {
         onWidthChanged: navigator.scheduleRelayout(strip.overflowing, currentIndex)
         Component.onCompleted: navigator.scheduleRelayout(strip.overflowing, currentIndex)
 
-        add: Transition {
-            NumberAnimation {
-                property: "opacity"
-                from: 0
-                to: 1
-                duration: Theme.shortDuration
-                easing.type: Easing.OutCubic
-            }
-        }
-
         remove: Transition {
             NumberAnimation {
                 property: "opacity"
@@ -157,6 +147,19 @@ Item {
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: strip.controller.tabDragIndex === index
             property bool previewSuppressed: false
+
+            ListView.onAdd: insertionFade.restart()
+
+            NumberAnimation {
+                id: insertionFade
+
+                target: tab
+                property: "opacity"
+                from: 0
+                to: 1
+                duration: Theme.shortDuration
+                easing.type: Easing.OutCubic
+            }
 
             width: isPinned ? Theme.pinnedTabWidth : strip.renderedTabWidth
             height: 36

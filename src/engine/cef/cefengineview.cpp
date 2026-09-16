@@ -6588,7 +6588,10 @@ namespace eden::engine::cef {
         const QByteArray values = QJsonDocument(QJsonArray{username, password}).toJson(QJsonDocument::Compact);
         const QString script =
             QStringLiteral(
-                "(function(values){var fields=Array.from(document.querySelectorAll('input,textarea'));"
+                "(function(values){var "
+                "fields=Array.from(document.querySelectorAll('input,textarea')).filter(function(f){"
+                "return !f.disabled&&!f.readOnly&&/^(text|email|password|tel|search|url|textarea)$/.test(f.type)"
+                "&&f.getClientRects().length>0&&getComputedStyle(f).visibility==='visible';});"
                 "var tokens=function(f){return String(f.autocomplete||'').toLowerCase().split(/\\s+/);};"
                 "var has=function(f,v){return tokens(f).indexOf(v)>=0;};var identity=function(f){return[f.name,"
                 "f.id,f.placeholder,f.getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();};"

@@ -4,6 +4,8 @@
 #include <QString>
 #include <functional>
 
+class QQuickWindow;
+
 namespace eden::engine {
 
     class WpeSurface;
@@ -14,6 +16,8 @@ namespace eden::engine {
         static void shutdown();
         static void initializeSpellChecking(WebKitWebContext *context);
         static WPEDisplay *display();
+        static guint64 displayPulseCount();
+        static void synchronizeScreen(WPEView *view, QQuickWindow *window, bool visible);
         static const QString &userAgentSuffix();
         static WPEView *captureInspector(const std::function<void()> &open);
     };

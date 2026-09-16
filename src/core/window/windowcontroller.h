@@ -92,6 +92,7 @@ namespace eden::core {
                 credentialStateChanged
         )
         Q_PROPERTY(QVariantList autofillSuggestions READ autofillSuggestions NOTIFY credentialStateChanged)
+        Q_PROPERTY(bool autofillFieldFocused READ autofillFieldFocused NOTIFY credentialStateChanged)
         Q_PROPERTY(QPoint autofillPopupPosition READ autofillPopupPosition NOTIFY credentialStateChanged)
         Q_PROPERTY(bool credentialKeyVisible READ credentialKeyVisible NOTIFY credentialStateChanged)
         Q_PROPERTY(int tabDragRevision READ tabDragRevision NOTIFY tabDragRevisionChanged)
@@ -141,6 +142,7 @@ namespace eden::core {
         QString credentialDraftUsername() const;
         QString credentialDraftPassword() const;
         QVariantList autofillSuggestions() const;
+        bool autofillFieldFocused() const;
         QPoint autofillPopupPosition() const;
         bool credentialKeyVisible() const;
         int tabDragRevision() const;
@@ -218,7 +220,7 @@ namespace eden::core {
         Q_INVOKABLE void resizePane(qreal horizontalDelta);
         int devToolsPaneWidth() const;
         int devToolsPaneHeight() const;
-        Q_INVOKABLE void beginDevToolsPaneResize();
+        Q_INVOKABLE void beginDevToolsPaneResize(qreal displayedWidth, qreal displayedHeight);
         Q_INVOKABLE void resizeDevToolsPane(qreal delta, bool horizontal);
         Q_INVOKABLE void commitDevToolsPaneSize();
         void setOpenPane(const QString &pane);

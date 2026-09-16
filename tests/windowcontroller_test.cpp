@@ -225,6 +225,7 @@ class WindowControllerTest final : public QObject {
     void popupCloseReturnsToOpener();
     void fullscreenTracksItsOwner();
     void nativeMenusKeepAutofillAndEngineActions();
+    void autofillPopupRequiresFocusedField();
     void unmappedRendererDoesNotBorrowAnotherProcess();
     void personalDataRejectsReplacedTargets();
     void displayChoicesRemainTemporary();
@@ -239,6 +240,34 @@ class WindowControllerTest final : public QObject {
     void previewCaptureRejectsStaleImages();
     void tabSwitchMetricIncludesPreviewWork();
 };
+
+void WindowControllerTest::autofillPopupRequiresFocusedField() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    auto *view = harness.addTab();
+    QVERIFY(view);
+    auto *controller = harness.controller.get();
+    auto *vault = qobject_cast<eden::passwords::CredentialVault *>(controller->credentialVault());
+    QVERIFY(vault && vault->available());
+    QVERIFY(vault->saveCredential(0, "https://permissions.example", "synthetic-user", "synthetic-password") > 0);
+    QSignalSpy opened(controller, &eden::core::WindowController::autofillRequested);
+    QSignalSpy changed(controller, &eden::core::WindowController::credentialStateChanged);
+    emit view->formFieldFocused({{"type", "password"}, {"name", "password"}, {"height", 30}});
+    QVERIFY(controller->autofillFieldFocused());
+    QVERIFY(!controller->autofillSuggestions().isEmpty());
+    QCOMPARE(opened.size(), 1);
+    emit view->formFieldFocused({});
+    QVERIFY(!controller->autofillFieldFocused());
+    QCOMPARE(opened.size(), 1);
+    QVERIFY(controller->credentialKeyVisible());
+    emit view->formFieldFocused({{"type", "password"}, {"name", "password"}, {"height", 30}});
+    QCOMPARE(opened.size(), 2);
+    changed.clear();
+    view->load(QUrl("https://permissions.example/session"));
+    QVERIFY(!controller->autofillFieldFocused());
+    QVERIFY(!changed.isEmpty());
+    QCOMPARE(opened.size(), 2);
+}
 
 void WindowControllerTest::nativeMenusKeepAutofillAndEngineActions() {
     PermissionHarness harness;

@@ -18,6 +18,7 @@
 #include <QLibrary>
 #include <QQuickWindow>
 #include <QScopeGuard>
+#include <QScreen>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QStyleHints>
@@ -613,6 +614,130 @@ class WpeBackendTest final : public QObject {
         QVERIFY(!wpe_view_get_visible(view.surface()->nativeView()));
     }
 
+    void credentialFillPreservesHiddenLoginTokens() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("login-form"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("login-form"), 15000);
+        QVERIFY(evaluate(view, R"JS(document.body.innerHTML=`
+<form><input type="hidden" name="authenticity_token" value="synthetic-csrf">
+<input type="hidden" name="required_field_secret" value="synthetic-trap">
+<input name="login" id="login_field" autocomplete="username">
+<input type="password" name="password" id="password" autocomplete="current-password">
+<input name="otp" autocomplete="one-time-code" value="654321"></form>`;true)JS")
+                    .toBool());
+        AutofillTarget target;
+        view.requestAutofillTarget([&](AutofillTarget value) { target = std::move(value); });
+        QTRY_VERIFY_WITH_TIMEOUT(target.isValid(), 5000);
+        view.fillCredential(target, "synthetic-user", "synthetic-password");
+        QTRY_COMPARE(
+            evaluate(view, "document.getElementById('password').value").toString(),
+            QString("synthetic-password")
+        );
+        QCOMPARE(evaluate(view, "document.getElementById('login_field').value").toString(), QString("synthetic-user"));
+        QCOMPARE(
+            evaluate(view, "document.querySelector('[name=authenticity_token]').value").toString(),
+            QString("synthetic-csrf")
+        );
+        QCOMPARE(
+            evaluate(view, "document.querySelector('[name=required_field_secret]').value").toString(),
+            QString("synthetic-trap")
+        );
+        QCOMPARE(evaluate(view, "document.querySelector('[name=otp]').value").toString(), QString("654321"));
+        evaluate(view, "document.getElementById('password').focus();document.getElementById('password').select();true");
+        view.surface()->forceActiveFocus();
+        QGuiApplication::clipboard()->setText("synthetic-pasted-password");
+        QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
+        QTRY_COMPARE(
+            evaluate(view, "document.getElementById('password').value").toString(),
+            QString("synthetic-pasted-password")
+        );
+    }
+
+    void inspectorResizeReflowsWithoutPointerEvents() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(1200, 700);
+        QQuickItem page(window.contentItem());
+        page.setSize(window.size());
+        QQuickItem inspector(window.contentItem());
+        inspector.setPosition(QPointF(800, 0));
+        inspector.setSize(QSizeF(400, 700));
+        view.attach(&page);
+        view.attachDevTools(&inspector);
+        window.show();
+        view.load(url("resize-inspector"));
+        QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading(), 15000);
+        evaluate(
+            view,
+            "document.body.style.cssText='margin:0;background:#e03020';"
+            "document.body.innerHTML='<div style=\"position:fixed;right:0;bottom:0;"
+            "width:50vw;height:100vh;background:#20d040\"></div>';true"
+        );
+        QString reflowFailure;
+        const auto matchesViewport = [&] {
+            const auto size = evaluate(
+                                  view,
+                                  "[innerWidth,innerHeight,document.querySelector('div').getBoundingClientRect().x,"
+                                  "document.querySelector('div').getBoundingClientRect().width]"
+            )
+                                  .toList();
+            reflowFailure = QString("window=%1x%2 viewport=%3x%4 DOM=%5x%6 scale=%7")
+                                .arg(window.width())
+                                .arg(window.height())
+                                .arg(page.width())
+                                .arg(page.height())
+                                .arg(size.value(0).toInt())
+                                .arg(size.value(1).toInt())
+                                .arg(window.devicePixelRatio());
+            if (size.size() != 4 || size.at(0).toInt() != int(page.width()) ||
+                size.at(1).toInt() != int(page.height()) || size.at(2).toDouble() != page.width() / 2 ||
+                size.at(3).toDouble() != page.width() / 2) {
+                return false;
+            }
+            const auto frame = window.grabWindow();
+            const auto scale = window.devicePixelRatio();
+            if (frame.isNull() || frame.width() <= qRound(page.width() * 0.6 * scale) ||
+                frame.height() <= qRound(100 * scale)) {
+                return false;
+            }
+            reflowFailure += QString(" box=%1,%2").arg(size.value(2).toDouble()).arg(size.value(3).toDouble());
+            reflowFailure += QString(" frame=%1x%2 green=%3 red=%4")
+                                 .arg(frame.width())
+                                 .arg(frame.height())
+                                 .arg(frame.pixelColor(qRound(page.width() * 0.6 * scale), qRound(100 * scale)).name())
+                                 .arg(frame.pixelColor(qRound(page.width() * 0.4 * scale), qRound(100 * scale)).name());
+            return !frame.isNull() &&
+                   frame.pixelColor(qRound(page.width() * 0.6 * scale), qRound(100 * scale)).green() > 150 &&
+                   frame.pixelColor(qRound(page.width() * 0.4 * scale), qRound(100 * scale)).red() > 150;
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(matchesViewport(), qPrintable(reflowFailure), 5000);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            view.openDevTools();
+            QTRY_VERIFY2_WITH_TIMEOUT(view.devToolsOpen(), qPrintable(QString("repeat=%1").arg(repeat)), 3000);
+            page.setWidth(800);
+            QTRY_VERIFY2_WITH_TIMEOUT(matchesViewport(), qPrintable(reflowFailure), 2000);
+            QVERIFY(!inspector.childItems().isEmpty());
+            auto *surface = qobject_cast<WpeSurface *>(inspector.childItems().first());
+            QVERIFY(surface);
+            for (int width : {760, 640, 450, 550, 820, 700}) {
+                page.setWidth(width);
+                inspector.setX(width);
+                inspector.setWidth(1200 - width);
+                QCOMPARE(wpe_view_get_width(surface->nativeView()), 1200 - width);
+                QTRY_VERIFY2_WITH_TIMEOUT(matchesViewport(), qPrintable(reflowFailure), 2000);
+            }
+            view.closeDevTools();
+            page.setWidth(1200);
+            QTRY_VERIFY2_WITH_TIMEOUT(matchesViewport(), qPrintable(reflowFailure), 2000);
+        }
+    }
+
     void popupKeepsOpener() {
         WpeProfile profile(privateParameters());
         WpeEngineView source(&profile);
@@ -949,6 +1074,657 @@ class WpeBackendTest final : public QObject {
         view.openDevTools();
         QTRY_VERIFY(view.devToolsOpen());
         view.closeDevTools();
+    }
+
+    void engineExperimentRuntimeEvidence() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("runtime-evidence"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("runtime-evidence"), 15000);
+        QVERIFY(evaluate(view, R"JS(
+(() => {
+    const canvas=document.createElement('canvas');canvas.width=800;canvas.height=600;document.body.replaceChildren(canvas);
+    const context=canvas.getContext('2d');
+    const functions=Array.from({length:32},(_,index)=>new Function('value','return Math.sqrt(value+'+index+')'));
+    let total=0;
+    for(let iteration=0;iteration<100000;iteration++) total+=functions[iteration%32](iteration);
+    for(let index=0;index<4000;index++){context.beginPath();context.arc(index%800,(index*13)%600,8,0,Math.PI*2);context.fill();}
+    window.testAllocations=Array.from({length:100000},(_,index)=>({index,text:'allocation '+index}));
+    return Number.isFinite(total);
+})()
+)JS")
+                    .toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(view.surface()->textureImportCount() > 0, 10000);
+        QTest::qWait(300);
+        const QString process = QString("/proc/%1").arg(view.rendererProcessId());
+        const auto tasks = QDir(process + "/task").entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        int helpers = 0;
+        const int requestedNice = qEnvironmentVariableIntValue("WEBKIT_EDEN_HELPER_NICE");
+        for (const auto &task : tasks) {
+            QFile status(process + "/task/" + task + "/stat");
+            if (!status.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            const QByteArray state = status.readAll();
+            const int close = state.lastIndexOf(')');
+            const QByteArray name = state.mid(state.indexOf('(') + 1, close - state.indexOf('(') - 1);
+            const auto fields = state.mid(close + 2).simplified().split(' ');
+            const int nice = fields.value(16).toInt();
+            if (name == "JITWorker" || name == "HeapHelper" || name == "SkiaCPUWorker" || name == "CanvasDDL") {
+                ++helpers;
+                if (requestedNice > 0) {
+                    QVERIFY2(nice >= requestedNice, name.constData());
+                }
+                qInfo("Experiment helper %s nice=%d", name.constData(), nice);
+            } else if (task == QString::number(view.rendererProcessId())) {
+                QCOMPARE(nice, 0);
+            }
+        }
+        if (requestedNice > 0) {
+            QVERIFY(helpers > 0);
+        }
+        QFile mappings(process + "/smaps");
+        if (mappings.open(QIODevice::ReadOnly)) {
+            quint64 anonymousHuge = 0, fileHuge = 0, sharedHuge = 0, advisedRegions = 0, textAdvisedRegions = 0,
+                    textFileHuge = 0;
+            bool text = false;
+            for (const QByteArray &line : mappings.readAll().split('\n')) {
+                const auto fields = line.simplified().split(' ');
+                if (fields.value(0).contains('-')) {
+                    text = line.contains("libWPEWebKit-2.0.so") && fields.value(1).contains('x');
+                }
+                if (line.startsWith("AnonHugePages:")) {
+                    anonymousHuge += fields.value(1).toULongLong();
+                }
+                if (line.startsWith("FilePmdMapped:")) {
+                    fileHuge += fields.value(1).toULongLong();
+                    if (text) {
+                        textFileHuge += fields.value(1).toULongLong();
+                    }
+                }
+                if (line.startsWith("ShmemPmdMapped:")) {
+                    sharedHuge += fields.value(1).toULongLong();
+                }
+                if (line.startsWith("VmFlags:") && fields.contains("hg")) {
+                    ++advisedRegions;
+                    if (text) {
+                        ++textAdvisedRegions;
+                    }
+                }
+            }
+            qInfo(
+                "Experiment huge pages: anonymousKiB=%llu fileKiB=%llu sharedKiB=%llu advisedRegions=%llu "
+                "textAdvisedRegions=%llu",
+                anonymousHuge,
+                fileHuge,
+                sharedHuge,
+                advisedRegions,
+                textAdvisedRegions
+            );
+            qInfo("Experiment WebKit executable file huge pages KiB=%llu", textFileHuge);
+            if (qEnvironmentVariable("WEBKIT_EDEN_TEXT_HUGE_PAGES") == "1") {
+                QVERIFY(textAdvisedRegions > 0);
+            }
+            if (qEnvironmentVariable("WEBKIT_EDEN_JIT_HUGE_PAGES") == "1") {
+                QVERIFY(advisedRegions > textAdvisedRegions);
+            }
+        } else {
+            qWarning("The kernel denied reading the renderer page-size accounting");
+        }
+    }
+
+    void boundedEditorSurroundingPreservesCompositionAndSelection() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("large-editor"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("large-editor"), 15000);
+        QVERIFY(evaluate(view, R"JS(
+window.originalText='a'.repeat(5000)+'😀'+'X'.repeat(5000);
+document.body.innerHTML='<div id="large" contenteditable style="width:600px;height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all"></div>';
+var editor=document.getElementById('large');
+editor.textContent=originalText;
+editor.focus();
+getSelection().setPosition(editor.firstChild,5002);
+true
+)JS")
+                    .toBool());
+        view.surface()->forceActiveFocus();
+        QTRY_VERIFY(view.surface()->inputMethodQuery(Qt::ImEnabled).toBool());
+        const auto surrounding = [&] {
+            return view.surface()->inputMethodQuery(Qt::ImSurroundingText).toString();
+        };
+        const auto cursor = [&] {
+            return view.surface()->inputMethodQuery(Qt::ImCursorPosition).toInt();
+        };
+        QTRY_VERIFY(surrounding().left(cursor()).endsWith(QString::fromUtf8("😀")));
+        const int limit = qEnvironmentVariableIntValue("WEBKIT_EDEN_EDITOR_WINDOW");
+        if (limit >= 128) {
+            QVERIFY(surrounding().size() <= 3 * limit + 2);
+            QVERIFY(cursor() >= 2 && cursor() <= limit + 1);
+        } else {
+            QCOMPARE(surrounding().size(), 10002);
+        }
+        QVERIFY(!surrounding().front().isLowSurrogate());
+        QVERIFY(!surrounding().back().isHighSurrogate());
+        QInputMethodEvent preedit(QString::fromUtf8("日本"), {});
+        QCoreApplication::sendEvent(view.surface(), &preedit);
+        QTRY_VERIFY(evaluate(view, "document.getElementById('large').textContent.includes('日本')").toBool());
+        QVERIFY(!surrounding().contains(QString::fromUtf8("日本")));
+        QInputMethodEvent commit;
+        commit.setCommitString(QString::fromUtf8("日本"));
+        QCoreApplication::sendEvent(view.surface(), &commit);
+        QTRY_VERIFY(
+            evaluate(view, "document.getElementById('large').textContent==='a'.repeat(5000)+'😀日本'+'X'.repeat(5000)")
+                .toBool()
+        );
+        QVERIFY(evaluate(view, R"JS(
+var editor=document.getElementById('large');
+editor.textContent=originalText;
+var range=document.createRange();range.setStart(editor.firstChild,4998);range.setEnd(editor.firstChild,5004);
+getSelection().removeAllRanges();getSelection().addRange(range);true
+)JS")
+                    .toBool());
+        QTRY_COMPARE(view.surface()->inputMethodQuery(Qt::ImCurrentSelection).toString(), QString::fromUtf8("aa😀XX"));
+        QInputMethodEvent replace;
+        replace.setCommitString("Z");
+        QCoreApplication::sendEvent(view.surface(), &replace);
+        QTRY_VERIFY(
+            evaluate(view, "document.getElementById('large').textContent==='a'.repeat(4998)+'Z'+'X'.repeat(4998)")
+                .toBool()
+        );
+    }
+
+    void editorWindowPreservesLargeSelectionsAndDeletion() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("editor-deletion"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("editor-deletion"), 15000);
+        QVERIFY(evaluate(view, R"JS(
+(() => {
+    document.body.innerHTML='<textarea id="editor" style="width:600px;height:400px"></textarea>';
+    const editor=document.getElementById('editor');
+    editor.value='left\n'.repeat(1000)+'😀'+'right\n'.repeat(1000);
+    editor.focus();editor.setSelectionRange(5002,5002);return true;
+})()
+)JS")
+                    .toBool());
+        view.surface()->forceActiveFocus();
+        const auto surrounding = [&] {
+            return view.surface()->inputMethodQuery(Qt::ImSurroundingText).toString();
+        };
+        const auto cursor = [&] {
+            return view.surface()->inputMethodQuery(Qt::ImCursorPosition).toInt();
+        };
+        QTRY_VERIFY(view.surface()->inputMethodQuery(Qt::ImEnabled).toBool());
+        QTRY_VERIFY(surrounding().left(cursor()).endsWith(QString::fromUtf8("😀")));
+        QInputMethodEvent deletion;
+        deletion.setCommitString(QString(), -2, 2);
+        QCoreApplication::sendEvent(view.surface(), &deletion);
+        QTRY_VERIFY(
+            evaluate(view, "document.getElementById('editor').value==='left\\n'.repeat(1000)+'right\\n'.repeat(1000)")
+                .toBool()
+        );
+        QVERIFY(evaluate(view, "document.getElementById('editor').select();true").toBool());
+        QTRY_COMPARE(view.surface()->inputMethodQuery(Qt::ImCurrentSelection).toString().size(), 11000);
+        QInputMethodEvent replacement;
+        replacement.setCommitString(QString::fromUtf8("日本"));
+        QCoreApplication::sendEvent(view.surface(), &replacement);
+        QTRY_COMPARE(evaluate(view, "document.getElementById('editor').value").toString(), QString::fromUtf8("日本"));
+    }
+
+    void sparseRepaintPreservesUntouchedPixels() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("sparse-paint"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("sparse-paint"), 15000);
+        QVERIFY(evaluate(view, R"JS(
+document.body.style.cssText='margin:0;height:600px;background:white';
+document.body.innerHTML='<div style="position:absolute;width:calc(100vw - 20px);height:calc(100vh - 20px);transform:translateZ(0);background:#20c040"><div id="first" style="position:absolute;left:10px;top:10px;width:30px;height:30px;background:#e03020;box-shadow:0 0 4px black"></div><div id="last" style="position:absolute;right:10px;bottom:10px;width:30px;height:30px;background:#e03020;box-shadow:0 0 4px black"></div><span style="position:absolute;left:250px;top:250px;font:20px sans-serif">Unchanged middle text</span></div>';true
+)JS")
+                    .toBool());
+        const auto matches = [&](const QColor &color) {
+            const auto frame = window.grabWindow();
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale = window.devicePixelRatio();
+            for (const QPoint &point : {QPoint(20, 20), QPoint(window.width() - 50, window.height() - 50)}) {
+                const QPoint pixel(qRound(point.x() * scale), qRound(point.y() * scale));
+                if (!frame.rect().contains(pixel) || frame.pixelColor(pixel) != color) {
+                    return false;
+                }
+            }
+            return frame.pixelColor(qRound(400 * scale), qRound(400 * scale)) == QColor("#20c040");
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(matches(QColor("#e03020")), 10000);
+        for (const QString &color : {QString("#2040e0"), QString("#e03020"), QString("#2040e0")}) {
+            QVERIFY(evaluate(
+                        view,
+                        "document.getElementById('first').style.background='" + color +
+                            "';document.getElementById('last').style.background='" + color + "';true"
+            )
+                        .toBool());
+            QTRY_VERIFY_WITH_TIMEOUT(matches(QColor(color)), 5000);
+        }
+    }
+
+    void fontReusePreservesShapingAcrossFontChanges() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("font-state"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("font-state"), 15000);
+        QCOMPARE(
+            evaluate(view, R"JS(
+(() => {
+    const canvas=document.createElement('canvas');canvas.width=800;canvas.height=150;
+    const context=canvas.getContext('2d',{willReadFrequently:true});
+    const strings=['office AVATAR ffi','العربية نص تجريبي','עברית בדיקה','日本語 😀 café','a\u0301 e\u0308'];
+    const fonts=['12px serif','bold 28px serif','italic 19px sans-serif','40px monospace','11px sans-serif'];
+    const cases=fonts.flatMap(font=>strings.map(text=>({font,text})));
+    function render(item) {
+        context.clearRect(0,0,800,150);context.font=item.font;context.direction='ltr';
+        const metric=context.measureText(item.text);
+        context.fillText(item.text,30,80);
+        const pixels=context.getImageData(0,0,800,150).data;
+        let hash=2166136261;
+        for (const value of pixels) hash=Math.imul(hash^value,16777619);
+        return JSON.stringify([metric.width,metric.actualBoundingBoxLeft,metric.actualBoundingBoxRight,metric.actualBoundingBoxAscent,metric.actualBoundingBoxDescent,hash]);
+    }
+    const expected=cases.map(render);
+    for (let pass=0;pass<3;pass++) {
+        for (let index=cases.length-1;index>=0;index--) {
+            if(render(cases[index])!==expected[index]) return 'changed font state at '+index;
+            if(render(cases[index])!==expected[index]) return 'changed repeated font state at '+index;
+        }
+    }
+    return 'ok';
+})()
+)JS")
+                .toString(),
+            QString("ok")
+        );
+    }
+
+    void displaySyncTracksScreenAndStopsWhenHidden() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(800, 600);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("display-sync"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("display-sync"), 15000);
+        if (qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") == "1") {
+            QCOMPARE(wpe_display_get_n_screens(WpeRuntime::display()), guint(QGuiApplication::screens().size()));
+            auto *screen = wpe_toplevel_get_screen(wpe_view_get_toplevel(view.surface()->nativeView()));
+            QVERIFY(screen);
+            QCOMPARE(wpe_screen_get_refresh_rate(screen), qMax(1000, qRound(window.screen()->refreshRate() * 1000)));
+        }
+        QVERIFY(evaluate(
+                    view,
+                    "window.testFrames=0;window.keepRunning=true;function "
+                    "frame(){testFrames++;if(keepRunning)requestAnimationFrame(frame)}requestAnimationFrame(frame);true"
+        )
+                    .toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "testFrames").toInt() >= 5, 5000);
+        if (qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") == "1") {
+            QTRY_VERIFY_WITH_TIMEOUT(WpeRuntime::displayPulseCount() >= 5, 5000);
+        }
+        window.hide();
+        QTest::qWait(500);
+        const auto before = evaluate(view, "testFrames").toInt();
+        QTest::qWait(200);
+        QCOMPARE(evaluate(view, "testFrames").toInt(), before);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "testFrames").toInt() > before, 5000);
+        QVERIFY(evaluate(view, "keepRunning=false;true").toBool());
+        QTest::qWait(1500);
+        QSignalSpy swaps(&window, &QQuickWindow::frameSwapped);
+        const auto pulses = WpeRuntime::displayPulseCount();
+        QTest::qWait(250);
+        QCOMPARE(swaps.size(), 0);
+        QCOMPARE(WpeRuntime::displayPulseCount(), pulses);
+    }
+
+    void displaySyncMovesBetweenWindows() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView first(&profile);
+        WpeEngineView second(&profile);
+        QQuickWindow firstWindow;
+        QQuickWindow secondWindow;
+        firstWindow.resize(800, 600);
+        secondWindow.resize(800, 600);
+        first.attach(firstWindow.contentItem());
+        second.attach(secondWindow.contentItem());
+        firstWindow.show();
+        first.load(url("first-display"));
+        second.load(url("second-display"));
+        QTRY_COMPARE_WITH_TIMEOUT(first.title(), QString("first-display"), 15000);
+        QTRY_COMPARE_WITH_TIMEOUT(second.title(), QString("second-display"), 15000);
+        const QString animation = "window.testFrames=0;function "
+                                  "tick(){testFrames++;requestAnimationFrame(tick)}requestAnimationFrame(tick);true";
+        QVERIFY(evaluate(first, animation).toBool());
+        QVERIFY(evaluate(second, animation).toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(evaluate(first, "testFrames").toInt() >= 5, 5000);
+        for (int cycle = 0; cycle < 3; cycle++) {
+            const int secondBefore = evaluate(second, "testFrames").toInt();
+            secondWindow.show();
+            firstWindow.hide();
+            QTRY_VERIFY_WITH_TIMEOUT(evaluate(second, "testFrames").toInt() >= secondBefore + 5, 5000);
+            const int firstBefore = evaluate(first, "testFrames").toInt();
+            firstWindow.show();
+            secondWindow.hide();
+            QTRY_VERIFY_WITH_TIMEOUT(evaluate(first, "testFrames").toInt() >= firstBefore + 5, 5000);
+        }
+        second.attach(nullptr);
+        const int before = evaluate(first, "testFrames").toInt();
+        QTRY_VERIFY_WITH_TIMEOUT(evaluate(first, "testFrames").toInt() >= before + 5, 5000);
+    }
+
+    void canvasReplayPreservesPixelsAndReadbackOrder() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(640, 480);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("canvas-readback"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("canvas-readback"), 15000);
+        const auto result = evaluate(view, R"JS((() => {
+            const failures = [];
+            const canvas = document.createElement('canvas');
+            document.body.replaceChildren(canvas);
+            const reset = () => {
+                canvas.width = 256;
+                canvas.height = 256;
+                return canvas.getContext('2d');
+            };
+            const fill = (context, color) => {
+                context.fillStyle = color;
+                for (let i = 0; i < 2048; ++i) {
+                    context.fillRect(i % 16 * 16, Math.floor(i / 16) % 16 * 16, 16, 16);
+                }
+            };
+            const check = (context, x, y, expected, label) => {
+                const actual = Array.from(context.getImageData(x, y, 1, 1).data);
+                if (actual.some((value, index) => Math.abs(value - expected[index]) > 1)) {
+                    failures.push(label + ': ' + actual.join(','));
+                }
+            };
+            let context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.save();
+            context.beginPath();
+            context.rect(16, 16, 96, 96);
+            context.clip();
+            context.translate(32, 32);
+            context.save();
+            context.beginPath();
+            context.rect(0, 0, 64, 64);
+            context.clip();
+            for (let i = 0; i < 1024; ++i) {
+                context.save();
+                context.translate(i % 8 * 8, Math.floor(i / 8) % 8 * 8);
+                context.fillStyle = 'rgb(200,30,40)';
+                context.fillRect(0, 0, 8, 8);
+                context.restore();
+            }
+            context.restore();
+            context.restore();
+            context.fillStyle = 'rgb(30,210,50)';
+            context.fillRect(4, 4, 4, 4);
+            check(context, 40, 40, [200,30,40,255], 'nested clips and transforms');
+            check(context, 120, 120, [20,40,60,255], 'clip outside');
+            check(context, 5, 5, [30,210,50,255], 'restore after batches');
+            context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.globalAlpha = 0.5;
+            context.fillStyle = 'rgb(200,0,0)';
+            context.fillRect(0, 0, 256, 256);
+            check(context, 100, 100, [110,20,30,255], 'alpha order');
+            context = reset();
+            fill(context, 'rgb(40,80,120)');
+            const pixels = new ImageData(new Uint8ClampedArray([3,5,7,255]), 1, 1);
+            context.putImageData(pixels, 10, 10);
+            check(context, 10, 10, [3,5,7,255], 'write after queued draws');
+            check(context, 11, 10, [40,80,120,255], 'write preserves neighbours');
+            context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.fillStyle = 'rgb(30,210,50)';
+            context.fillRect(0, 0, 64, 64);
+            context.drawImage(canvas, 0, 0, 64, 64, 128, 128, 64, 64);
+            check(context, 140, 140, [30,210,50,255], 'self image snapshot ordering');
+            const source = document.createElement('canvas');
+            source.width = 256;
+            source.height = 256;
+            const sourceContext = source.getContext('2d');
+            fill(sourceContext, 'rgb(170,60,190)');
+            context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.drawImage(source, 0, 0);
+            check(context, 140, 140, [170,60,190,255], 'two canvas ordering');
+            context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.fillStyle = context.createPattern(source, 'repeat');
+            context.fillRect(0, 0, 256, 256);
+            check(context, 140, 140, [170,60,190,255], 'image pattern fallback');
+            context = reset();
+            fill(context, 'rgb(20,40,60)');
+            context.filter = 'blur(1px)';
+            context.fillStyle = 'rgb(30,210,50)';
+            context.fillRect(32, 32, 128, 128);
+            context.filter = 'none';
+            check(context, 80, 80, [30,210,50,255], 'filter layer fallback');
+            context = reset();
+            fill(context, 'rgb(200,30,40)');
+            canvas.width = 64;
+            canvas.height = 64;
+            check(canvas.getContext('2d'), 10, 10, [0,0,0,0], 'resize discards queued content');
+            return {valid: true, failures};
+        })())JS")
+                                .toMap();
+        QVERIFY(result.value("valid").toBool());
+        QVERIFY2(
+            result.value("failures").toStringList().isEmpty(),
+            qPrintable(result.value("failures").toStringList().join("; "))
+        );
+    }
+
+    void canvasReplayMatchesImmediateGpuPainting() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(640, 480);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("canvas-equivalence"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("canvas-equivalence"), 15000);
+        const auto result = evaluate(view, R"JS((() => {
+            const pictures = [];
+            for (const immediate of [false, true]) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 256;
+                const context = canvas.getContext('2d');
+                if (immediate) {
+                    context.fillRect(0, 0, 1, 1);
+                    context.getImageData(0, 0, 1, 1);
+                }
+                context.fillStyle = 'rgb(20,40,60)';
+                context.fillRect(0, 0, 512, 256);
+                context.save();
+                context.beginPath();
+                context.rect(8, 8, 496, 240);
+                context.clip();
+                for (let index = 0; index < 768; ++index) {
+                    context.save();
+                    context.translate(index % 32 * 16 + 0.25, Math.floor(index / 32) % 16 * 16 + 0.5);
+                    context.globalAlpha = 0.6;
+                    context.fillStyle = index % 2 ? 'rgb(230,90,40)' : 'rgb(50,170,220)';
+                    context.beginPath();
+                    context.arc(8, 8, 7, 0, Math.PI * 2);
+                    context.fill();
+                    context.restore();
+                }
+                context.font = '18px sans-serif';
+                context.fillStyle = 'white';
+                for (let index = 0; index < 512; ++index) {
+                    context.fillText('office ffi AV', index % 4 * 128, Math.floor(index / 4) % 12 * 20 + 18);
+                }
+                context.restore();
+                pictures.push(context.getImageData(0, 0, 512, 256).data);
+            }
+            let differences = 0;
+            let maximum = 0;
+            for (let index = 0; index < pictures[0].length; ++index) {
+                const difference = Math.abs(pictures[0][index] - pictures[1][index]);
+                maximum = Math.max(maximum, difference);
+                if (difference > 1) {
+                    ++differences;
+                }
+            }
+            return {valid: true, differences, maximum};
+        })())JS")
+                                .toMap();
+        QVERIFY(result.value("valid").toBool());
+        QVERIFY2(
+            result.value("differences").toInt() == 0,
+            qPrintable(QString("%1 channel differences, maximum %2")
+                           .arg(result.value("differences").toInt())
+                           .arg(result.value("maximum").toInt()))
+        );
+    }
+
+    void canvasReplayPreservesSnapshotsAcrossFrames() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(640, 480);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("canvas-snapshots"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("canvas-snapshots"), 15000);
+        QVERIFY(evaluate(view, R"JS((() => {
+            window.snapshotResult = {done: false};
+            (async () => {
+                const source = document.createElement('canvas');
+                const target = document.createElement('canvas');
+                for (const canvas of [source, target]) {
+                    canvas.width = 256;
+                    canvas.height = 256;
+                }
+                document.body.replaceChildren(source, target);
+                const context = source.getContext('2d');
+                const draw = color => {
+                    context.fillStyle = color;
+                    for (let index = 0; index < 2048; ++index) {
+                        context.fillRect(index % 16 * 16, Math.floor(index / 16) % 16 * 16, 16, 16);
+                    }
+                };
+                draw('rgb(30,80,210)');
+                const snapshot = await createImageBitmap(source);
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                draw('rgb(200,30,40)');
+                const targetContext = target.getContext('2d');
+                targetContext.drawImage(snapshot, 0, 0);
+                const saved = Array.from(targetContext.getImageData(40, 40, 1, 1).data);
+                const current = Array.from(context.getImageData(40, 40, 1, 1).data);
+                snapshot.close();
+                window.snapshotResult = {done: true, saved, current};
+            })().catch(error => { window.snapshotResult = {done: true, error: String(error)}; });
+            return true;
+        })())JS")
+                    .toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "window.snapshotResult.done").toBool(), 15000);
+        const auto result = evaluate(view, "window.snapshotResult").toMap();
+        QVERIFY2(!result.contains("error"), qPrintable(result.value("error").toString()));
+        QCOMPARE(result.value("saved").toList(), QVariantList({30, 80, 210, 255}));
+        QCOMPARE(result.value("current").toList(), QVariantList({200, 30, 40, 255}));
+    }
+
+    void canvasReplayPresentsAndSurvivesPendingDestruction() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(640, 480);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("canvas-presentation"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("canvas-presentation"), 15000);
+        QVERIFY(evaluate(view, R"JS((() => {
+            document.body.style.cssText = 'margin:0;background:white';
+            window.testCanvas = document.createElement('canvas');
+            testCanvas.width = 640;
+            testCanvas.height = 480;
+            document.body.replaceChildren(testCanvas);
+            window.drawCanvas = color => {
+                const context = testCanvas.getContext('2d');
+                context.fillStyle = color;
+                for (let i = 0; i < 4096; ++i) {
+                    context.fillRect(i % 32 * 20, Math.floor(i / 32) % 24 * 20, 20, 20);
+                }
+                context.font = '24px sans-serif';
+                context.fillStyle = 'white';
+                for (let i = 0; i < 512; ++i) {
+                    context.fillText('Canvas', 300, 350);
+                }
+            };
+            drawCanvas('rgb(30,210,50)');
+            return true;
+        })())JS")
+                    .toBool());
+        const auto visibleColor = [&] {
+            const auto frame = window.grabWindow();
+            if (frame.isNull()) {
+                return QColor();
+            }
+            return frame.pixelColor(qRound(80 * window.devicePixelRatio()), qRound(80 * window.devicePixelRatio()));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(visibleColor().green() - 210) <= 2, 15000);
+        QVERIFY(evaluate(view, "drawCanvas('rgb(200,30,40)');true").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(visibleColor().red() - 200) <= 2 && qAbs(visibleColor().green() - 30) <= 2,
+            15000
+        );
+        QVERIFY(evaluate(view, R"JS((() => {
+            for (let round = 0; round < 12; ++round) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 640;
+                canvas.height = 480;
+                const context = canvas.getContext('2d');
+                for (let i = 0; i < 2048; ++i) {
+                    context.beginPath();
+                    context.arc(i % 640, i % 480, 12, 0, Math.PI * 2);
+                    context.fill();
+                }
+                canvas.width = 0;
+            }
+            return true;
+        })())JS")
+                    .toBool());
+        view.load(url("canvas-after-destruction"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("canvas-after-destruction"), 15000);
+        QCOMPARE(evaluate(view, "6 * 7").toInt(), 42);
     }
 
     void texturePoolReusesImportsAndPresentsLatestFrame() {

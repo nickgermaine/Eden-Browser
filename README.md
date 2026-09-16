@@ -45,10 +45,12 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 - CMake ≥ 3.21, GCC 13+ or Clang 16+ (C++20)
 - Qt ≥ 6.8: Core, Gui, Network, Qml, Quick, QuickControls2, QuickEffects, QuickShapes, Sql, Test
 - Qt WebEngine ≥ 6.8 for the Blink (Qt) engine; on by default, skip with `-DEDEN_ENGINE_QTWEBENGINE=OFF`
-- WPE WebKit 2.52.6 or newer and Qt OpenGL; enabled by default, skip with `-DEDEN_ENGINE_WPE=OFF`. Build the patched runtime with `python3 scripts/build_wpe.py --mode performance --jobs 8` before configuring Eden. Run native GPU checks with `python3 scripts/test_wpe.py --build build`.
+- WPE WebKit 2.52.6 or newer and Qt OpenGL; enabled by default, skip with `-DEDEN_ENGINE_WPE=OFF`. Build the patched runtime with `python3 scripts/build_wpe.py --mode performance --variant engine-experiments --canvas-replay --engine-experiments --huge-page-alignment --jobs 8` before configuring Eden. Run native GPU checks with `python3 scripts/test_wpe.py --build build`.
 - libpsl for recognizing complete domain suffixes in the address bar
 - Network access on first configure: CMake fetches the pinned CEF distribution (~300 MB) and the Solar icon set into `third_party/`, checksum-verified, no manual steps
 - Optional: Rust toolchain for the experimental Servo scaffold (`-DEDEN_ENGINE_SERVO=ON`, off by default), Python ≥ 3.10 for the benchmark harness in `scripts/bench/`
+
+The patched WebKit build uses a saved PGO profile when available. Eden enables two canvas replay workers for this runtime; explicit worker settings take precedence. Set `EDEN_WPE_TUNED_DEFAULTS=0` to disable automatic tuning.
 
 ### Runtime (Linux)
 

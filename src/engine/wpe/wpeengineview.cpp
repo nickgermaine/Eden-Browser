@@ -92,6 +92,9 @@ namespace eden::engine {
         webkit_settings_set_enable_fullscreen(settings, TRUE);
         webkit_settings_set_enable_page_cache(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
+        if (qEnvironmentVariable("EDEN_WPE_CANVAS_ACCELERATION") == "0") {
+            webkit_settings_set_enable_2d_canvas_acceleration(settings, FALSE);
+        }
         webkit_settings_set_user_agent_with_application_details(
             settings,
             "Eden",
@@ -879,10 +882,8 @@ namespace eden::engine {
             dismissContextMenu();
         }
         g_signal_handlers_disconnect_by_data(m_inspector->nativeView(), this);
+        wpe_view_closed(m_inspector->nativeView());
         delete m_inspector.data();
-        if (m_view) {
-            webkit_web_view_toggle_inspector(m_view);
-        }
         setDevToolsOpen(false);
     }
 
@@ -1599,7 +1600,9 @@ namespace eden::engine {
         const QString script =
             QStringLiteral(
                 "(function(values){if(globalThis.__edenAutofillDocument!==values[2]||globalThis.origin!==values[3])"
-                "return;var fields=Array.from(document.querySelectorAll('input,textarea'));var tokens="
+                "return;var fields=Array.from(document.querySelectorAll('input,textarea')).filter(function(f){"
+                "return !f.disabled&&!f.readOnly&&/^(text|email|password|tel|search|url|textarea)$/.test(f.type)"
+                "&&f.getClientRects().length>0&&getComputedStyle(f).visibility==='visible';});var tokens="
                 "function(f){return String(f.autocomplete||'').toLowerCase().split(/\\s+/);};var has=function(f,v)"
                 "{return tokens(f).indexOf(v)>=0;};var identity=function(f){return[f.name,f.id,f.placeholder,f."
                 "getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();};var secret=fields.find(function"

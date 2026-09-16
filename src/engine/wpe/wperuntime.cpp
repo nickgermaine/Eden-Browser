@@ -1,4 +1,5 @@
 #include "engine/wpe/wperuntime.h"
+#include "engine/wpe/wpedisplaysync.h"
 #include "engine/wpe/wpesurface.h"
 
 #include <EGL/egl.h>
@@ -56,6 +57,7 @@ namespace eden::engine {
     G_DEFINE_TYPE(EdenWpeDisplay, eden_wpe_display, WPE_TYPE_DISPLAY)
 
     static WPEDisplay *runtimeDisplay = nullptr;
+    static std::unique_ptr<WpeDisplaySync> runtimeDisplaySync;
     static QString runtimeUserAgentSuffix;
     static bool spellCheckingInitialized = false;
     static WPEView **inspectorCapture = nullptr;
@@ -68,6 +70,9 @@ namespace eden::engine {
 
     void bindWpeSurface(WPEView *view, WpeSurface *surface) {
         g_object_set_data(G_OBJECT(view), "eden-surface", surface);
+        if (!surface && runtimeDisplaySync) {
+            runtimeDisplaySync->bind(view, nullptr, false);
+        }
         auto *input = static_cast<WPEInputMethodContext *>(g_object_get_data(G_OBJECT(view), "eden-input"));
         if (surface && input) {
             surface->setInputContext(input);
@@ -116,6 +121,9 @@ namespace eden::engine {
 
     static void eden_wpe_toplevel_class_init(EdenWpeToplevelClass *klass) {
         auto *toplevelClass = WPE_TOPLEVEL_CLASS(klass);
+        toplevelClass->get_screen = [](WPEToplevel *toplevel) -> WPEScreen * {
+            return static_cast<WPEScreen *>(g_object_get_data(G_OBJECT(toplevel), "eden-screen"));
+        };
         toplevelClass->resize = [](WPEToplevel *toplevel, int width, int height) -> gboolean {
             wpe_toplevel_resized(toplevel, width, height);
             return TRUE;
@@ -235,7 +243,13 @@ namespace eden::engine {
         }
         GPtrArray *formats = g_ptr_array_new();
         if (const QMimeData *mime = QGuiApplication::clipboard()->mimeData()) {
-            for (const QString &format : mime->formats()) {
+            QStringList textFormats = mime->formats();
+            if (mime->hasText()) {
+                textFormats.append("text/plain");
+                textFormats.append("text/plain;charset=utf-8");
+                textFormats.removeDuplicates();
+            }
+            for (const QString &format : textFormats) {
                 g_ptr_array_add(formats, const_cast<char *>(g_intern_string(format.toUtf8().constData())));
             }
         }
@@ -259,6 +273,12 @@ namespace eden::engine {
             G_OBJECT_CLASS(eden_wpe_display_parent_class)->dispose(object);
         };
         auto *displayClass = WPE_DISPLAY_CLASS(klass);
+        displayClass->get_n_screens = [](WPEDisplay *) -> guint {
+            return runtimeDisplaySync ? runtimeDisplaySync->screenCount() : 0;
+        };
+        displayClass->get_screen = [](WPEDisplay *, guint index) -> WPEScreen * {
+            return runtimeDisplaySync ? runtimeDisplaySync->screen(index) : nullptr;
+        };
         displayClass->connect = [](WPEDisplay *display, GError **error) -> gboolean {
             auto *native = reinterpret_cast<EdenWpeDisplay *>(display);
             if (!wpe_display_connect(native->graphics, error)) {
@@ -354,6 +374,9 @@ namespace eden::engine {
         updateColorScheme();
         colorSchemeConnection =
             QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, qApp, updateColorScheme);
+        if (qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") == "1") {
+            runtimeDisplaySync = std::make_unique<WpeDisplaySync>(display);
+        }
         wpe_display_set_primary(display);
         runtimeDisplay = display;
         runtimeUserAgentSuffix = product + '/' + version;
@@ -375,7 +398,18 @@ namespace eden::engine {
         spellCheckingInitialized = false;
         QObject::disconnect(clipboardConnection);
         QObject::disconnect(colorSchemeConnection);
+        runtimeDisplaySync.reset();
         g_clear_object(&runtimeDisplay);
+    }
+
+    guint64 WpeRuntime::displayPulseCount() {
+        return runtimeDisplaySync ? runtimeDisplaySync->pulseCount() : 0;
+    }
+
+    void WpeRuntime::synchronizeScreen(WPEView *view, QQuickWindow *window, bool visible) {
+        if (runtimeDisplaySync) {
+            runtimeDisplaySync->bind(view, window, visible);
+        }
     }
 
     WPEDisplay *WpeRuntime::display() {

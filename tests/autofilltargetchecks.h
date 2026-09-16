@@ -24,13 +24,20 @@ class AutofillPageServer final : public QTcpServer {
                     }
                     const QByteArray path = request.split(' ').value(1);
                     m_requests.remove(socket);
-                    QByteArray page = R"HTML(<!doctype html><input autocomplete="username"><input type="password">
+                    QByteArray page =
+                        R"HTML(<!doctype html><input type="hidden" name="authenticity_token" value="synthetic-csrf">
+<input type="hidden" name="login" value="synthetic-hidden-user">
+<input name="secret" style="display:none" value="synthetic-hidden-secret">
+<input name="token" style="visibility:hidden" value="synthetic-invisible-secret">
+<input autocomplete="username"><input type="password">
 <script>
-const fields = Array.from(document.querySelectorAll('input'));
+const fields = Array.from(document.querySelectorAll('input[autocomplete=username],input[type=password]'));
 let events = 0;
 for (const type of ['input', 'change']) {
     document.addEventListener(type, () => {
-        document.title = fields.map(field => field.value).join('|') + ':' + ++events;
+        const protectedValues = Array.from(document.querySelectorAll('input')).slice(0,4).map(field=>field.value).join('|');
+        document.title = protectedValues === 'synthetic-csrf|synthetic-hidden-user|synthetic-hidden-secret|synthetic-invisible-secret'
+            ? fields.map(field => field.value).join('|') + ':' + ++events : 'hidden-fields-changed';
         if (parent !== window) { parent.postMessage(document.title, '*'); }
     });
 }

@@ -7,7 +7,13 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
+
+from wpe.canvas_replay import prepare_canvas_replay
+from wpe.engine_experiments import prepare_engine_experiments
+from wpe.pgo import prepare_profile
+from wpe.jsc_experiments import prepare_jsc_experiments
 
 
 def replace_once(text, before, after):
@@ -16,7 +22,7 @@ def replace_once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def prepare_source(root, version, digest):
+def prepare_source(root, version, digest, variant=""):
     dependency = root / "third_party" / "wpe"
     archive = dependency / "packages" / f"wpewebkit-{version}.tar.xz"
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -26,10 +32,13 @@ def prepare_source(root, version, digest):
         temporary.rename(archive)
     if hashlib.file_digest(archive.open("rb"), "sha256").hexdigest() != digest:
         raise RuntimeError("The WebKit archive failed SHA-256 verification")
-    source = dependency / "source" / f"wpewebkit-{version}"
+    source = dependency / "source" / (f"wpewebkit-{version}" + ("-" + variant if variant else ""))
     if not (source / "CMakeLists.txt").exists():
-        with tarfile.open(archive) as package:
-            package.extractall(source.parent, filter="data")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=source.parent) as staging:
+            with tarfile.open(archive) as package:
+                package.extractall(staging, filter="data")
+            (Path(staging) / f"wpewebkit-{version}").rename(source)
     paths = [
         "Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp",
         "Source/WebKit/UIProcess/Inspector/wpe/WebInspectorUIProxyWPE.cpp",
@@ -427,7 +436,22 @@ def main():
     parser.add_argument("--mode", choices=["baseline", "profile-generate", "performance"], default="performance")
     parser.add_argument("--profile", type=Path)
     parser.add_argument("--configure-only", action="store_true")
+    parser.add_argument("--variant", default="")
+    parser.add_argument("--canvas-replay", action="store_true")
+    parser.add_argument("--engine-experiments", action="store_true")
+    parser.add_argument("--jsc-experiments", action="store_true")
+    parser.add_argument("--huge-page-alignment", action="store_true")
     arguments = parser.parse_args()
+    if arguments.variant and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", arguments.variant):
+        parser.error("--variant accepts lowercase letters, digits and hyphens")
+    if arguments.canvas_replay and (not arguments.variant or arguments.mode == "baseline"):
+        parser.error("--canvas-replay requires an isolated --variant and a performance source build")
+    if arguments.engine_experiments and (not arguments.variant or arguments.mode == "baseline"):
+        parser.error("--engine-experiments requires an isolated --variant and a performance source build")
+    if arguments.jsc_experiments and (not arguments.variant or arguments.mode == "baseline"):
+        parser.error("--jsc-experiments requires an isolated --variant and a performance source build")
+    if arguments.huge_page_alignment and not arguments.engine_experiments:
+        parser.error("--huge-page-alignment requires --engine-experiments")
     topology = subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET"], text=True)
     actual = {
         int(row.split(",")[0]): tuple(row.split(",")[1:])
@@ -449,7 +473,8 @@ def main():
     root = Path(__file__).resolve().parents[1]
     dependency = root / "third_party/wpe"
     suffix = {"baseline": "", "profile-generate": "-profile", "performance": "-performance"}[arguments.mode]
-    prefix = dependency / f"local{suffix}"
+    variant_suffix = "-" + arguments.variant if arguments.variant else ""
+    prefix = dependency / f"local{suffix}{variant_suffix}"
     if arguments.runtime_only:
         stage_runtime_libraries(dependency, prefix)
         return
@@ -460,12 +485,20 @@ def main():
     digest_key = "EDEN_WPE_SOURCE_SHA256" if arguments.mode == "baseline" else "EDEN_WPE_PERFORMANCE_SHA256"
     version = re.search(version_key + r' "([^"]+)"', versions)[1]
     digest = re.search(digest_key + r' "([^"]+)"', versions)[1]
-    build = dependency / ("build" if arguments.mode == "baseline" else f"build-{version}{suffix}")
+    build = dependency / (("build" if arguments.mode == "baseline" else f"build-{version}{suffix}") + variant_suffix)
     if arguments.mode == "performance" and not arguments.profile:
-        saved_profile = dependency / "profiles" / f"{version}.profdata"
-        if saved_profile.is_file():
-            arguments.profile = saved_profile
-    source = prepare_source(root, version, digest)
+        profiles = [dependency / "profiles" / f"{version}{variant_suffix}.profdata"]
+        if arguments.variant:
+            profiles.append(dependency / "profiles" / f"{version}.profdata")
+        for saved_profile in profiles:
+            if saved_profile.is_file():
+                arguments.profile = saved_profile
+                break
+    source = prepare_source(root, version, digest, arguments.variant)
+    if arguments.variant and arguments.mode != "baseline":
+        prepare_canvas_replay(root, source, version, arguments.canvas_replay)
+        prepare_engine_experiments(root, source, version, arguments.engine_experiments)
+        prepare_jsc_experiments(root, source, version, arguments.jsc_experiments)
     if arguments.prepare_only:
         print(source)
         return
@@ -488,6 +521,10 @@ def main():
         [str(tools / "lib" / "ruby" / "gems" / "3.4.0"), "/usr/lib/ruby/gems/3.4.0"]
     )
     affinity = ["taskset", "--cpu-list", arguments.cpus]
+    effective_profile = arguments.profile
+    profile_paths = {}
+    if arguments.profile:
+        effective_profile, profile_paths = prepare_profile(arguments.profile, source, build, affinity, environment)
     configure = [
         "cmake",
         "-S",
@@ -528,6 +565,8 @@ def main():
             raise RuntimeError("The performance build requires the matching LLVM linker")
         flags = "-march=native -mtune=native -fno-semantic-interposition -fno-plt"
         linker_flags = f'-fuse-ld=lld -Wl,--threads=1,--thinlto-jobs={arguments.link_jobs},--thinlto-cache-dir={build / "lto-cache"}'
+        if arguments.huge_page_alignment:
+            linker_flags += " -Wl,-z,max-page-size=0x200000"
         configure += [
             "-DCMAKE_C_COMPILER=clang",
             "-DCMAKE_CXX_COMPILER=clang++",
@@ -545,10 +584,10 @@ def main():
             "-DENABLE_JAVASCRIPT_SHELL=OFF",
             f'-DENABLE_LLVM_PROFILE_GENERATION={"ON" if arguments.mode == "profile-generate" else "OFF"}',
             f'-DUSE_PGO_PROFILE={"ON" if arguments.profile else "OFF"}',
-            f'-DPGO_PROFILE_PATH={arguments.profile.resolve() if arguments.profile else ""}',
+            f'-DPGO_PROFILE_PATH={effective_profile.resolve() if effective_profile else ""}',
         ]
     if arguments.mode == "performance":
-        profile_hash = file_digest(arguments.profile).hex() if arguments.profile else "none"
+        profile_hash = file_digest(effective_profile).hex() if effective_profile else "none"
         profile_stamp = build / "eden-profile-sha256"
         previous_hash = profile_stamp.read_text().strip() if profile_stamp.exists() else None
         if previous_hash != profile_hash and (build / "build.ninja").exists():
@@ -571,8 +610,21 @@ def main():
         "version": version,
         "sourceSHA256": digest,
         "mode": arguments.mode,
+        "variant": arguments.variant,
+        "canvasReplayPatch": arguments.canvas_replay,
+        "engineExperiments": arguments.engine_experiments,
+        "jscExperiments": arguments.jsc_experiments,
+        "jscExperimentSources": {"jsc_experiments.py": file_digest(root / "scripts/wpe/jsc_experiments.py").hex()} if arguments.jsc_experiments else {},
+        "hugePageAlignment": arguments.huge_page_alignment,
+        "engineExperimentSources": {path.name: file_digest(path).hex() for path in [root / "scripts/wpe/engine_experiments.py"]} if arguments.engine_experiments else {},
+        "canvasReplaySources": {
+            path.name: file_digest(path).hex()
+            for path in [root / "scripts/wpe/canvas_replay.py", root / "scripts/wpe/EdenSkiaCanvasReplay.h"]
+        } if arguments.canvas_replay else {},
         "compiler": subprocess.check_output([compiler, "--version"], env=environment, text=True).splitlines()[0],
         "profileSHA256": file_digest(arguments.profile).hex() if arguments.profile else None,
+        "effectiveProfileSHA256": file_digest(effective_profile).hex() if effective_profile else None,
+        "profilePaths": profile_paths,
         "configure": configure,
     }
     manifest_path = prefix / "share" / "eden-wpe-build.json"

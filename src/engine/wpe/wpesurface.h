@@ -99,6 +99,7 @@ namespace eden::engine {
         bool m_inputFocused = false;
         bool m_composing = false;
         bool m_accelerated = true;
+        const bool m_acknowledgeOnImport;
         std::atomic<quint64> m_textureImports = 0;
         QString m_renderingDiagnostic;
         WpeRenderingNotice *m_renderingNotice = nullptr;

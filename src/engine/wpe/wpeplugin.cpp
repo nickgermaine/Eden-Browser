@@ -25,6 +25,12 @@ namespace eden::engine {
         if (!identity || !identity->product || !identity->version) {
             return false;
         }
+#if defined(EDEN_WPE_CANVAS_REPLAY_DEFAULT)
+        if (qEnvironmentVariable("EDEN_WPE_TUNED_DEFAULTS") != "0" &&
+            !qEnvironmentVariableIsSet("WEBKIT_SKIA_CANVAS_REPLAY_THREADS")) {
+            qputenv("WEBKIT_SKIA_CANVAS_REPLAY_THREADS", QByteArray::number(EDEN_WPE_CANVAS_REPLAY_DEFAULT));
+        }
+#endif
         return WpeRuntime::initialize(QString::fromUtf8(identity->product), QString::fromUtf8(identity->version));
     }
 

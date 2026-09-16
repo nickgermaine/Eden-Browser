@@ -465,6 +465,10 @@ namespace eden::core {
         return m_autofillSuggestions;
     }
 
+    bool WindowController::autofillFieldFocused() const {
+        return !m_autofillField.isEmpty();
+    }
+
     QPoint WindowController::autofillPopupPosition() const {
         return {
             qRound(m_autofillField.value("x").toDouble()),
@@ -852,6 +856,8 @@ namespace eden::core {
         resolveDisplayCaptureRequest();
         resolveFileDialog(false);
         m_activeIndex = index;
+        m_autofillField.clear();
+        emit credentialStateChanged();
         emit activeIndexChanged();
         emit currentEngineChanged();
         emit currentBookmarkedChanged();
@@ -1856,8 +1862,10 @@ namespace eden::core {
             dismissPageContextMenu();
             return;
         }
-        if (command == "open_media_new_tab") {
-            newTab(m_pageContextMenuTarget, false, m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString());
+        if (command == "open_target_new_tab" || command == "open_media_new_tab") {
+            if (!m_pageContextMenuTarget.isEmpty()) {
+                newTab(m_pageContextMenuTarget, false, m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString());
+            }
             dismissPageContextMenu();
             return;
         }
@@ -2251,9 +2259,9 @@ namespace eden::core {
         return m_devToolsPaneHeight;
     }
 
-    void WindowController::beginDevToolsPaneResize() {
-        m_devToolsResizeStartWidth = m_devToolsPaneWidth;
-        m_devToolsResizeStartHeight = m_devToolsPaneHeight;
+    void WindowController::beginDevToolsPaneResize(qreal displayedWidth, qreal displayedHeight) {
+        m_devToolsResizeStartWidth = std::clamp(qRound(displayedWidth), 280, 1600);
+        m_devToolsResizeStartHeight = std::clamp(qRound(displayedHeight), 180, 1200);
     }
 
     void WindowController::resizeDevToolsPane(qreal delta, bool horizontal) {
@@ -2337,6 +2345,11 @@ namespace eden::core {
             }
         });
         connect(view, &engine::EngineView::loadingChanged, this, [this, view] {
+            if (view->isLoading() && view == currentEngine() && !m_autofillField.isEmpty()) {
+                m_autofillField.clear();
+                emit credentialStateChanged();
+                refreshAutofillSuggestions();
+            }
             if (m_fullscreenEngine == view && view->isLoading()) {
                 exitContentFullscreen();
             }
@@ -2368,6 +2381,7 @@ namespace eden::core {
             }
             if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
                 m_autofillField.clear();
+                emit credentialStateChanged();
                 emit currentUrlChanged();
                 emit currentBookmarkedChanged();
                 refreshAutofillSuggestions();
@@ -2441,7 +2455,7 @@ namespace eden::core {
             m_autofillField = field;
             emit credentialStateChanged();
             refreshAutofillSuggestions();
-            if (!m_autofillSuggestions.isEmpty()) {
+            if (autofillFieldFocused() && !m_autofillSuggestions.isEmpty()) {
                 emit autofillRequested();
             }
         });
@@ -2490,7 +2504,7 @@ namespace eden::core {
                     actions.append(action);
                 };
                 if (!providedActions && !info.linkUrl.isEmpty()) {
-                    append("open_link_new_tab", "Open link in new tab", "new-window");
+                    append("open_target_new_tab", "Open link in new tab", "new-window");
                     append("copy_link", "Copy link address", "copy");
                     append("download_link", "Save link as", "download");
                 }

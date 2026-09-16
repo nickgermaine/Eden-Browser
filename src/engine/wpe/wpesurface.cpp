@@ -203,6 +203,7 @@ namespace eden::engine {
         bool import(QQuickWindow *window, const std::shared_ptr<WpeFrame> &next, bool &created) {
             created = false;
             if (frame && frame->size != next->size) {
+                markDirty(QSGNode::DirtyGeometry);
                 releaseTexture();
                 for (auto &entry : cache) {
                     destroyCached(entry);
@@ -409,7 +410,8 @@ namespace eden::engine {
     }
 
     WpeSurface::WpeSurface(WPEView *view)
-        : m_view(WPE_VIEW(g_object_ref(view))) {
+        : m_view(WPE_VIEW(g_object_ref(view))),
+          m_acknowledgeOnImport(qEnvironmentVariable("EDEN_WPE_FRAME_ACK") == "import") {
         setFlag(ItemHasContents);
         setFlag(ItemAcceptsInputMethod);
         setAcceptedMouseButtons(Qt::AllButtons);
@@ -478,11 +480,13 @@ namespace eden::engine {
             wpe_toplevel_resized(toplevel, qMax(1, int(width())), qMax(1, int(height())));
         }
         wpe_view_resized(m_view, qMax(1, int(width())), qMax(1, int(height())));
+        WpeRuntime::synchronizeScreen(m_view, window(), wpe_view_get_visible(m_view));
     }
 
     void WpeSurface::synchronizeVisibility() {
         const bool visible = window() && window()->isVisible() && window()->visibility() != QWindow::Minimized &&
                              isVisible() && isEnabled() && width() > 0 && height() > 0;
+        WpeRuntime::synchronizeScreen(m_view, window(), visible);
         wpe_view_set_visible(m_view, visible);
         if (visible) {
             wpe_view_map(m_view);
@@ -544,14 +548,18 @@ namespace eden::engine {
             if (created) {
                 ++m_textureImports;
             }
-            const auto frame = m_frame;
-            QObject::connect(
-                window(),
-                &QQuickWindow::frameSwapped,
-                this,
-                [frame] { frame->rendered(); },
-                Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection)
-            );
+            if (m_acknowledgeOnImport) {
+                m_frame->rendered();
+            } else {
+                const auto frame = m_frame;
+                QObject::connect(
+                    window(),
+                    &QQuickWindow::frameSwapped,
+                    this,
+                    [frame] { frame->rendered(); },
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection)
+                );
+            }
         }
         const QSizeF logicalSize = QSizeF(m_frame->size) / m_frame->scale;
         node->setRect(
@@ -840,10 +848,7 @@ namespace eden::engine {
         if (event->replacementLength() != 0 || event->replacementStart() != 0) {
             const int start = qBound(0, m_cursorPosition + event->replacementStart(), int(m_surrounding.size()));
             const int end = qBound(start, start + qMax(0, event->replacementLength()), int(m_surrounding.size()));
-            const int cursor = m_surrounding.left(m_cursorPosition).toUcs4().size();
-            const int first = m_surrounding.left(start).toUcs4().size();
-            const int count = m_surrounding.mid(start, end - start).toUcs4().size();
-            g_signal_emit_by_name(m_input, "delete-surrounding", first - cursor, guint(count));
+            g_signal_emit_by_name(m_input, "delete-surrounding", start - m_cursorPosition, guint(end - start));
         }
         const QString preedit = event->preeditString();
         if (!m_composing && !preedit.isEmpty()) {
