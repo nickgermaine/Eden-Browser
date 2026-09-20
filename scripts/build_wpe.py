@@ -12,8 +12,10 @@ import urllib.request
 
 from wpe.canvas_replay import prepare_canvas_replay
 from wpe.engine_experiments import prepare_engine_experiments
+from wpe.rendering_experiments import prepare_rendering_experiments
 from wpe.pgo import prepare_profile
 from wpe.jsc_experiments import prepare_jsc_experiments
+from wpe.inspector_theme import apply_inspector_theme
 
 
 def replace_once(text, before, after):
@@ -46,6 +48,10 @@ def prepare_source(root, version, digest, variant=""):
         "Source/WebKit/UIProcess/API/glib/WebKitUserMediaPermissionRequest.cpp",
         "Source/WebCore/platform/mediastream/gstreamer/GStreamerDisplayCaptureDeviceManager.cpp",
         "Source/WebKit/UIProcess/UserMediaPermissionRequestProxy.h",
+        "Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp",
+        "Source/WebKit/UIProcess/API/wpe/WebKitPopupMenu.cpp",
+        "Source/WebInspectorUI/UserInterface/Views/Main.css",
+        "Source/WebKit/UIProcess/glib/SystemSettingsManagerProxy.cpp",
     ]
     with tarfile.open(archive) as package:
         original = {name: package.extractfile(f"wpewebkit-{version}/{name}").read().decode() for name in paths}
@@ -134,7 +140,7 @@ def prepare_source(root, version, digest, variant=""):
     inspector = replace_once(
         inspector,
         '#include "APINavigationAction.h"',
-        '#include "APINavigationAction.h"\n#include "APIContextMenuClient.h"\n#include "WebContextMenuProxy.h"\n#include "WebKitContextMenuPrivate.h"\n#include "WebKitHitTestResultPrivate.h"',
+        '#include "APINavigationAction.h"\n#include "APIContextMenuClient.h"\n#include "WebContextMenuProxy.h"\n#include "WebKitContextMenuPrivate.h"\n#include "WebKitHitTestResultPrivate.h"\n#include "WebKitOptionMenuPrivate.h"\n#include "WebKitUserContentPrivate.h"\n#include "WebUserContentControllerProxy.h"\n#include <WebCore/Color.h>',
     )
     inspector = replace_once(
         inspector,
@@ -165,6 +171,22 @@ class InspectorNavigationClient final : public API::NavigationClient {""",
         """    if (!g_signal_lookup("eden-context-menu-v1", WPE_TYPE_VIEW)) {
         g_signal_new("eden-context-menu-v1", WPE_TYPE_VIEW, G_SIGNAL_RUN_LAST, 0, nullptr, nullptr, nullptr, G_TYPE_NONE, 2, WEBKIT_TYPE_CONTEXT_MENU, WEBKIT_TYPE_HIT_TEST_RESULT);
     }
+    if (!g_signal_lookup("eden-option-menu-v1", WPE_TYPE_VIEW)) {
+        g_signal_new("eden-option-menu-v1", WPE_TYPE_VIEW, G_SIGNAL_RUN_LAST, 0, nullptr, nullptr, nullptr, G_TYPE_NONE, 5, WEBKIT_TYPE_OPTION_MENU, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
+    }
+    if (!g_signal_lookup("eden-inspector-style-v1", WPE_TYPE_VIEW)) {
+        g_signal_new("eden-inspector-style-v1", WPE_TYPE_VIEW, G_SIGNAL_RUN_LAST, 0, nullptr, nullptr, nullptr, G_TYPE_NONE, 1, G_TYPE_STRING);
+    }
+    g_signal_connect(wpeView, "eden-inspector-style-v1", G_CALLBACK(+[](WPEView*, const char* css, WebInspectorUIProxy* proxy) {
+        if (!proxy->m_inspectorView || !css)
+            return;
+        Ref inspectorPage = proxy->m_inspectorView->page();
+        inspectorPage->userContentController().removeAllUserStyleSheets();
+        WebKitUserStyleSheet* sheet = webkit_user_style_sheet_new(css, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
+        inspectorPage->userContentController().addUserStyleSheet(webkitUserStyleSheetGetUserStyleSheet(sheet));
+        webkit_user_style_sheet_unref(sheet);
+    }), this);
+    page->setBackgroundColor(WebCore::Color::transparentBlack);
     page->setContextMenuClient(makeUnique<EdenInspectorContextMenuClient>(wpeView));
     page->setNavigationClient(makeUniqueRef<InspectorNavigationClient>(*this));""",
     )
@@ -363,7 +385,99 @@ static void webkit_web_view_class_init(WebKitWebViewClass* webViewClass)""",
         "    Vector<String> videoDeviceUIDs() const;",
         "    Vector<String> videoDeviceUIDs() const;\n    const Vector<WebCore::CaptureDevice>& eligibleVideoDevices() const { return m_eligibleVideoDevices; }",
     )
-    for name, content in zip(paths, [client, inspector, view, media, capture, request]):
+    page_client = replace_once(
+        original[paths[6]],
+        """    if (!m_view.client().isGLibBasedAPI())
+        return nullptr;
+    return WebKitPopupMenu::create(m_view, page.popupMenuClient());""",
+        """#if ENABLE(WPE_PLATFORM)
+    if (!m_view.client().isGLibBasedAPI() && !m_view.wpeView())
+        return nullptr;
+#else
+    if (!m_view.client().isGLibBasedAPI())
+        return nullptr;
+#endif
+    return WebKitPopupMenu::create(m_view, page.popupMenuClient());""",
+    )
+    popup = replace_once(
+        original[paths[7]],
+        """    ASSERT(view.client().isGLibBasedAPI());
+    return adoptRef(*new WebKitPopupMenu(view, client));""",
+        """    return adoptRef(*new WebKitPopupMenu(view, client));""",
+    )
+    popup = replace_once(
+        popup,
+        """    GRefPtr<WebKitOptionMenu> menu = static_cast<WebKitWebViewClient&>(m_view.client()).showOptionMenu(*this, rect, items, selectedIndex);
+    if (menu) {""",
+        """    GRefPtr<WebKitOptionMenu> menu;
+    if (m_view.client().isGLibBasedAPI())
+        menu = static_cast<WebKitWebViewClient&>(m_view.client()).showOptionMenu(*this, rect, items, selectedIndex);
+#if ENABLE(WPE_PLATFORM)
+    else if (auto* wpeView = m_view.wpeView()) {
+        const guint signal = g_signal_lookup("eden-option-menu-v1", WPE_TYPE_VIEW);
+        if (signal && g_signal_has_handler_pending(wpeView, signal, 0, TRUE)) {
+            menu = adoptGRef(webkitOptionMenuCreate(*this, items, selectedIndex));
+            g_signal_emit_by_name(wpeView, "eden-option-menu-v1", menu.get(), rect.x(), rect.y(), rect.width(), rect.height());
+        }
+    }
+#endif
+    if (menu) {""",
+    )
+    popup = replace_once(
+        popup,
+        '#include "WebKitWebViewClient.h"',
+        """#include "WebKitWebViewClient.h"
+
+#if ENABLE(WPE_PLATFORM)
+#include <wpe/wpe-platform.h>
+#endif""",
+    )
+    inspector_style = replace_once(
+        original[paths[8]],
+        """    width: 1em;
+    height: 1em;
+    vertical-align: -2px;
+}""",
+        """    width: 1em;
+    height: 1em;
+    font: inherit;
+    line-height: 1;
+    vertical-align: -2px;
+}""",
+    )
+    system_settings = replace_once(
+        original[paths[9]],
+        """    changedState.fontName = fontName;
+}
+#endif""",
+        """    changedState.fontName = fontName;
+    String family = fontName;
+    double points = 10;
+    if (auto index = fontName.reverseFind(' '); index != notFound) {
+        auto sizeText = fontName.substring(index + 1).utf8();
+        char* end = nullptr;
+        double parsed = g_ascii_strtod(sizeText.data(), &end);
+        if (end != sizeText.data() && parsed > 0) {
+            points = parsed;
+            family = fontName.left(index);
+        }
+    }
+    if (family.endsWith(','))
+        family = family.left(family.length() - 1);
+    changedState.fontFamily = family;
+    changedState.fontSize = static_cast<float>(points * (xftDPI() / 1024.0) / 72.0);
+}
+#endif""",
+    )
+    system_settings = replace_once(
+        system_settings,
+        "#include <WebCore/Theme.h>",
+        "#include <WebCore/Theme.h>\n#include <glib.h>",
+    )
+    for name, content in zip(
+        paths,
+        [client, inspector, view, media, capture, request, page_client, popup, inspector_style, system_settings],
+    ):
         destination = source / name
         if destination.read_text() != content:
             destination.write_text(content)
@@ -441,6 +555,8 @@ def main():
     parser.add_argument("--engine-experiments", action="store_true")
     parser.add_argument("--jsc-experiments", action="store_true")
     parser.add_argument("--huge-page-alignment", action="store_true")
+    parser.add_argument("--frame-pointers", action="store_true")
+    parser.add_argument("--rendering-experiments", action="store_true")
     arguments = parser.parse_args()
     if arguments.variant and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", arguments.variant):
         parser.error("--variant accepts lowercase letters, digits and hyphens")
@@ -450,6 +566,10 @@ def main():
         parser.error("--engine-experiments requires an isolated --variant and a performance source build")
     if arguments.jsc_experiments and (not arguments.variant or arguments.mode == "baseline"):
         parser.error("--jsc-experiments requires an isolated --variant and a performance source build")
+    if arguments.rendering_experiments and (not arguments.variant or arguments.mode == "baseline" or not arguments.canvas_replay):
+        parser.error("--rendering-experiments requires --canvas-replay, an isolated --variant and a performance source build")
+    if arguments.frame_pointers and (not arguments.variant or arguments.mode == "baseline"):
+        parser.error("--frame-pointers requires an isolated --variant and a performance source build")
     if arguments.huge_page_alignment and not arguments.engine_experiments:
         parser.error("--huge-page-alignment requires --engine-experiments")
     topology = subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET"], text=True)
@@ -477,6 +597,7 @@ def main():
     prefix = dependency / f"local{suffix}{variant_suffix}"
     if arguments.runtime_only:
         stage_runtime_libraries(dependency, prefix)
+        apply_inspector_theme(root, prefix)
         return
     if arguments.profile and (arguments.mode != "performance" or not arguments.profile.is_file()):
         parser.error("--profile requires performance mode and an existing merged profile")
@@ -499,6 +620,7 @@ def main():
         prepare_canvas_replay(root, source, version, arguments.canvas_replay)
         prepare_engine_experiments(root, source, version, arguments.engine_experiments)
         prepare_jsc_experiments(root, source, version, arguments.jsc_experiments)
+        prepare_rendering_experiments(root, source, version, arguments.rendering_experiments)
     if arguments.prepare_only:
         print(source)
         return
@@ -564,6 +686,8 @@ def main():
         if not shutil.which("ld.lld", path=environment["PATH"]):
             raise RuntimeError("The performance build requires the matching LLVM linker")
         flags = "-march=native -mtune=native -fno-semantic-interposition -fno-plt"
+        if arguments.frame_pointers:
+            flags += " -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer"
         linker_flags = f'-fuse-ld=lld -Wl,--threads=1,--thinlto-jobs={arguments.link_jobs},--thinlto-cache-dir={build / "lto-cache"}'
         if arguments.huge_page_alignment:
             linker_flags += " -Wl,-z,max-page-size=0x200000"
@@ -605,6 +729,7 @@ def main():
     )
     subprocess.run(affinity + ["cmake", "--install", str(build)], env=environment, check=True)
     stage_runtime_libraries(dependency, prefix)
+    apply_inspector_theme(root, prefix)
     compiler = "gcc" if arguments.mode == "baseline" else "clang"
     manifest = {
         "version": version,
@@ -616,6 +741,9 @@ def main():
         "jscExperiments": arguments.jsc_experiments,
         "jscExperimentSources": {"jsc_experiments.py": file_digest(root / "scripts/wpe/jsc_experiments.py").hex()} if arguments.jsc_experiments else {},
         "hugePageAlignment": arguments.huge_page_alignment,
+        "framePointers": arguments.frame_pointers,
+        "renderingExperiments": arguments.rendering_experiments,
+        "renderingExperimentSources": {path.name: file_digest(path).hex() for path in [root / "scripts/wpe/rendering_experiments.py", root / "scripts/wpe/EdenHarfBuzzTransforms.inc", root / "scripts/wpe/EdenSkiaCanvasCpuRaster.h"]} if arguments.rendering_experiments else {},
         "engineExperimentSources": {path.name: file_digest(path).hex() for path in [root / "scripts/wpe/engine_experiments.py"]} if arguments.engine_experiments else {},
         "canvasReplaySources": {
             path.name: file_digest(path).hex()

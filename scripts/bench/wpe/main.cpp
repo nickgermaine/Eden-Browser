@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QJsonDocument>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QSaveFile>
 #include <QTimer>
@@ -65,14 +66,24 @@ int main(int argc, char *argv[]) {
     application.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser;
     parser.addHelpOption();
-    parser.addOption({"probe-script", "Run a local DOM probe instead of Speedometer", "file"});
+    parser.addOption({"probe-script", "Run a local probe instead of Speedometer", "file"});
     parser.addOption({"url", "Benchmark page", "url", "https://browserbench.org/Speedometer3.1/"});
     parser.addOption({"output", "Result JSON path", "file"});
     parser.addOption({"label", "Build and tuning label", "name"});
     parser.addOption({"timings", "Save the benchmark timing entries for trace correlation"});
     parser.addOption({"training-directory", "Directory for native PGO profiles", "path"});
+    parser.addOption({"external-driver", "Leave benchmark control to an external inspector driver"});
+    parser.addOption({"viewport-width", "Fixed page viewport width for shell comparisons", "pixels"});
+    parser.addOption({"viewport-height", "Fixed page viewport height for shell comparisons", "pixels"});
     parser.process(application);
-    if (parser.value("output").isEmpty()) {
+    if (parser.value("output").isEmpty() && !parser.isSet("external-driver")) {
+        parser.showHelp(2);
+    }
+    const int viewportWidth = parser.value("viewport-width").toInt();
+    const int viewportHeight = parser.value("viewport-height").toInt();
+    if (parser.isSet("viewport-width") != parser.isSet("viewport-height") ||
+        (parser.isSet("viewport-width") &&
+         (viewportWidth < 1 || viewportWidth > 8192 || viewportHeight < 1 || viewportHeight > 8192))) {
         parser.showHelp(2);
     }
     const bool isProbe = parser.isSet("probe-script");
@@ -115,7 +126,11 @@ int main(int argc, char *argv[]) {
         );
         QQuickWindow window;
         window.resize(1280, 900);
-        view.attach(window.contentItem());
+        QQuickItem viewport(window.contentItem());
+        if (viewportWidth > 0) {
+            viewport.setSize(QSizeF(viewportWidth, viewportHeight));
+        }
+        view.attach(viewportWidth > 0 ? &viewport : window.contentItem());
         window.show();
         view.load(isProbe && !parser.isSet("url") ? QUrl("about:blank") : QUrl(parser.value("url")));
         QElapsedTimer elapsed;
@@ -197,6 +212,7 @@ int main(int argc, char *argv[]) {
                     results.insert("rendererPageBackingAfterCompletion", rendererPageBacking(view.rendererProcessId()));
                     results.insert("label", parser.value("label"));
                     results.insert("qtVersion", QString::fromLatin1(qVersion()));
+                    results.insert("runtime", WpeRuntime::diagnostics());
                     results.insert(
                         "webkitVersion",
                         QStringLiteral("%1.%2.%3")
@@ -212,6 +228,11 @@ int main(int argc, char *argv[]) {
                     QVariantMap runtimeOptions;
                     for (const char *name :
                          {"JSC_jitPolicyScale",
+                          "WEBKIT_EDEN_SIMPLE_TEXT",
+                          "WEBKIT_EDEN_CANVAS_DAMAGE",
+                          "WEBKIT_EDEN_CANVAS_CPU_PIXELS",
+                          "WEBKIT_EDEN_CODE_CACHE_TRACE",
+                          "JSC_useCodeCache",
                           "JSC_minNumberOfWorklistThreads",
                           "JSC_maxNumberOfWorklistThreads",
                           "JSC_numberOfBaselineCompilerThreads",
@@ -276,19 +297,21 @@ int main(int argc, char *argv[]) {
                     }
                     qInfo().noquote()
                         << QJsonDocument::fromVariant(results.value("score")).toJson(QJsonDocument::Compact);
-                    const bool valid =
-                        results.value("accelerated").toBool() && results.value("textureImports").toULongLong() > 0 &&
-                        (isProbe ? results.value("probe").toString() == QStringLiteral("dom-insertion") &&
-                                       !results.value("measurements").toMap().isEmpty()
-                                 : results.value("score").toMap().value("isValid").toBool() &&
-                                       results.value("measuredValues").toList().size() == 10) &&
-                        results.value("visibility").toString() == QStringLiteral("visible");
+                    const bool valid = results.value("accelerated").toBool() &&
+                                       results.value("textureImports").toULongLong() > 0 &&
+                                       (isProbe ? !results.value("probe").toString().isEmpty() &&
+                                                      !results.value("measurements").toMap().isEmpty()
+                                                : results.value("score").toMap().value("isValid").toBool() &&
+                                                      results.value("measuredValues").toList().size() == 10) &&
+                                       results.value("visibility").toString() == QStringLiteral("visible");
                     application.exit(valid ? 0 : 5);
                 },
                 nullptr
             );
         });
-        poll.start();
+        if (!parser.isSet("external-driver")) {
+            poll.start();
+        }
         result = application.exec();
         g_signal_handler_disconnect(view.nativeView(), terminationHandler);
         view.attach(nullptr);

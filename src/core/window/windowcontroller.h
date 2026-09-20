@@ -186,6 +186,7 @@ namespace eden::core {
         Q_INVOKABLE QVariantList navigationHistory(int direction, int maximumItems = 20) const;
         Q_INVOKABLE void navigateHistory(int offset);
         Q_INVOKABLE void reload();
+        Q_INVOKABLE void reloadBypassingCache();
         Q_INVOKABLE void stop();
         Q_INVOKABLE void find(const QString &text, bool backward = false, bool caseSensitive = false);
         Q_INVOKABLE void toggleBookmark();
@@ -342,6 +343,8 @@ namespace eden::core {
         QVariantList m_autofillSuggestions;
         QVariantMap m_autofillField;
         QString m_pendingCredentialPassword;
+        QString m_findText;
+        bool m_findCaseSensitive = false;
         QPointer<QQuickWindow> m_window;
         bool m_closeDeferredForTabDrag = false;
         int m_tabDragRevision = 0;
@@ -354,6 +357,7 @@ namespace eden::core {
         QSet<quint64> m_previewCapturesInFlight;
         QSize m_windowedSize;
         QTimer m_geometryPersistTimer;
+        int m_zoomWheelDelta = 0;
     };
 
 }

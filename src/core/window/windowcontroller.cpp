@@ -46,8 +46,10 @@
 #include <QSet>
 #include <QStringList>
 #include <QUrlQuery>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 
@@ -85,6 +87,22 @@ namespace eden::core {
     }
 
     static constexpr qreal kTabTearOffMargin = 48;
+
+    static constexpr std::array<qreal, 17>
+        kZoomFactors{0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0};
+
+    static qreal steppedZoomFactor(qreal current, int direction) {
+        if (direction > 0) {
+            const auto next = std::find_if(kZoomFactors.cbegin(), kZoomFactors.cend(), [current](qreal candidate) {
+                return candidate > current + 0.001;
+            });
+            return next == kZoomFactors.cend() ? kZoomFactors.back() : *next;
+        }
+        const auto previous = std::find_if(kZoomFactors.crbegin(), kZoomFactors.crend(), [current](qreal candidate) {
+            return candidate < current - 0.001;
+        });
+        return previous == kZoomFactors.crend() ? kZoomFactors.front() : *previous;
+    }
 
     static int credentialMatchScore(const QString &candidate, const QString &query) {
         const QString normalizedCandidate = candidate.toCaseFolded();
@@ -672,8 +690,12 @@ namespace eden::core {
                 setActiveIndex(index);
             }
         });
-        connect(m_tabs.get(), &TabModel::tabEngineCreated, this, [this](int, engine::EngineView *view) {
+        connect(m_tabs.get(), &TabModel::tabEngineCreated, this, [this](int index, engine::EngineView *view) {
             connectEngine(view);
+            if (index == m_activeIndex) {
+                emit currentEngineChanged();
+                emit currentBookmarkedChanged();
+            }
         });
         connect(m_tabs.get(), &TabModel::tabTransferredOut, this, [this](engine::EngineView *view) {
             if (view) {
@@ -908,6 +930,14 @@ namespace eden::core {
                 value.insert("id", id);
                 value.insert("title", title);
                 value.insert("icon", icon);
+                value.insert(
+                    "shortcut",
+                    ShortcutRegistry::shortcutText(
+                        id == "new"     ? "new_tab"
+                        : id == "close" ? "close_tab"
+                                        : id
+                    )
+                );
                 if (!children.isEmpty()) {
                     value.insert("children", children);
                 }
@@ -1258,6 +1288,27 @@ namespace eden::core {
             const QPointF position = static_cast<QMouseEvent *>(event)->position();
             if (view && !view->containsPageScenePoint(position)) {
                 view->releaseFocus();
+            }
+        }
+        if (watched == m_window && event->type() == QEvent::Wheel) {
+            auto *wheel = static_cast<QWheelEvent *>(event);
+            engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr;
+            if (view && wheel->modifiers() == Qt::ControlModifier && view->containsPageScenePoint(wheel->position())) {
+                const int delta = wheel->angleDelta().y() ? wheel->angleDelta().y() : wheel->pixelDelta().y() * 3;
+                if (delta && m_zoomWheelDelta && ((delta > 0) != (m_zoomWheelDelta > 0))) {
+                    m_zoomWheelDelta = 0;
+                }
+                m_zoomWheelDelta += delta;
+                while (m_zoomWheelDelta >= 120) {
+                    executeCommand("zoom_in");
+                    m_zoomWheelDelta -= 120;
+                }
+                while (m_zoomWheelDelta <= -120) {
+                    executeCommand("zoom_out");
+                    m_zoomWheelDelta += 120;
+                }
+                wheel->accept();
+                return true;
             }
         }
         TabDragSession &session = tabDragSession();
@@ -1657,6 +1708,12 @@ namespace eden::core {
         }
     }
 
+    void WindowController::reloadBypassingCache() {
+        if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+            view->reloadBypassingCache();
+        }
+    }
+
     void WindowController::stop() {
         if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
             view->stop();
@@ -1664,6 +1721,8 @@ namespace eden::core {
     }
 
     void WindowController::find(const QString &text, bool backward, bool caseSensitive) {
+        m_findText = text;
+        m_findCaseSensitive = caseSensitive;
         engine::EngineView::FindFlags flags;
         if (backward) {
             flags |= engine::EngineView::FindBackward;
@@ -2475,8 +2534,10 @@ namespace eden::core {
                 emit autofillRequested();
             }
         });
-        connect(view, &engine::EngineView::shortcutRequested, this, [this](const QString &command) {
-            m_shortcuts->execute(command);
+        connect(view, &engine::EngineView::shortcutRequested, this, [this, view](const QString &command) {
+            if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
+                m_shortcuts->execute(command);
+            }
         });
         connect(view, &engine::EngineView::fullscreenRequested, this, [this, view](bool fullscreen) {
             if (fullscreen && view == qobject_cast<engine::EngineView *>(currentEngine()) && m_window) {
@@ -2562,7 +2623,7 @@ namespace eden::core {
                     append("reload", "Reload", "refresh");
                     append("view_source", "View page source", "code");
                     if (view->capabilities() & engine::EngineView::DockedDevtools) {
-                        append("inspect", "Inspect", "code");
+                        append("inspect", "Inspect", "programming");
                     }
                 }
                 m_pageContextMenuActions = std::move(actions);
@@ -2768,8 +2829,14 @@ namespace eden::core {
     void WindowController::executeCommand(const QString &id) {
         if (id == "new_tab") {
             newTabAndFocusOmnibox();
+        } else if (id == "new_window") {
+            openNewWindow(false);
         } else if (id == "close_tab") {
             closeTab(m_activeIndex);
+        } else if (id == "close_window") {
+            if (m_window) {
+                m_window->close();
+            }
         } else if (id == "restore_tab") {
             if (m_tabs && m_tabs->undoClose()) {
                 setActiveIndex(std::max(0, m_tabs->rowCount() - 1));
@@ -2778,12 +2845,55 @@ namespace eden::core {
             setActiveIndex((m_activeIndex + 1) % m_tabs->rowCount());
         } else if (id == "previous_tab" && m_tabs && m_tabs->rowCount() > 0) {
             setActiveIndex((m_activeIndex + m_tabs->rowCount() - 1) % m_tabs->rowCount());
+        } else if (id.startsWith("activate_tab_") && m_tabs) {
+            bool valid = false;
+            const int tab = id.sliced(13).toInt(&valid) - 1;
+            if (valid && tab >= 0 && tab < m_tabs->rowCount()) {
+                setActiveIndex(tab);
+            }
+        } else if (id == "activate_last_tab" && m_tabs && m_tabs->rowCount() > 0) {
+            setActiveIndex(m_tabs->rowCount() - 1);
+        } else if (id == "move_tab_left" && m_tabs && m_activeIndex > 0) {
+            m_tabs->moveTab(m_activeIndex, m_activeIndex - 1);
+        } else if (id == "move_tab_right" && m_tabs && m_activeIndex >= 0 && m_activeIndex + 1 < m_tabs->rowCount()) {
+            m_tabs->moveTab(m_activeIndex, m_activeIndex + 1);
+        } else if (id == "back") {
+            back();
+        } else if (id == "forward") {
+            forward();
+        } else if (id == "home") {
+            if (m_context) {
+                navigate(m_context->settings()->homePageDestination());
+            }
         } else if (id == "focus_omnibox") {
             emit focusOmniboxRequested();
+        } else if (id == "reload") {
+            reload();
+        } else if (id == "reload_bypass_cache") {
+            reloadBypassingCache();
+        } else if (id == "zoom_in" || id == "zoom_out" || id == "zoom_reset") {
+            if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+                const qreal factor =
+                    id == "zoom_reset" ? 1.0 : steppedZoomFactor(view->zoomFactor(), id == "zoom_in" ? 1 : -1);
+                view->setZoomFactor(factor);
+                emit transientMessageRequested(QStringLiteral("Zoom: %1%").arg(qRound(factor * 100)));
+            }
         } else if (id == "bookmark") {
             toggleBookmark();
+        } else if (id == "bookmarks") {
+            setOpenPane("bookmarks");
         } else if (id == "find") {
             setFindVisible(true);
+        } else if (id == "find_next" || id == "find_previous") {
+            if (m_findText.isEmpty()) {
+                setFindVisible(true);
+            } else {
+                find(m_findText, id == "find_previous", m_findCaseSensitive);
+            }
+        } else if (id == "view_source") {
+            if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+                view->executeContextMenuCommand("view_source");
+            }
         } else if (id == "private_window") {
             openNewWindow(true);
         } else if (id == "fullscreen") {

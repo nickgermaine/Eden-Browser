@@ -4,7 +4,7 @@
 #include <QKeySequence>
 #include <QPointer>
 
-class QShortcut;
+class QKeyEvent;
 
 namespace eden::core {
 
@@ -26,6 +26,11 @@ namespace eden::core {
         Q_INVOKABLE void attach(QObject *window);
         Q_INVOKABLE void execute(const QString &id);
         Q_INVOKABLE void executeRow(int row);
+        Q_INVOKABLE static QString shortcutText(const QString &id);
+        static QString commandFor(const QKeyEvent *event);
+
+      protected:
+        bool eventFilter(QObject *watched, QEvent *event) override;
 
       signals:
         void queryChanged();
@@ -36,14 +41,14 @@ namespace eden::core {
             QString id;
             QString title;
             QKeySequence key;
+            QList<QKeySequence> aliases;
         };
 
         static int fuzzyScore(const QString &query, const QString &text);
+        static const QList<Command> &commands();
         void rebuildVisible();
 
-        QList<Command> m_commands;
         QList<int> m_visible;
-        QList<QShortcut *> m_shortcuts;
         QPointer<QObject> m_window;
         QString m_query;
     };

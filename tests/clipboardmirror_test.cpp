@@ -2,6 +2,7 @@
 
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QMimeData>
 #include <QtTest>
 
 using eden::engine::cef::ClipboardMirror;
@@ -24,6 +25,15 @@ class ClipboardMirrorTest final : public QObject {
         QCOMPARE(QGuiApplication::clipboard()->text(), QString("New"));
         mirror.commit("frame-one:document-one:1", "Old again");
         QCOMPARE(QGuiApplication::clipboard()->text(), QString("New"));
+    }
+
+    void mirrorPreservesMatchingNativeRichData() {
+        auto *mime = new QMimeData;
+        mime->setText("Task");
+        mime->setHtml("<b>Task</b>");
+        QGuiApplication::clipboard()->setMimeData(mime);
+        ClipboardMirror::instance().setText("Task");
+        QCOMPARE(QGuiApplication::clipboard()->mimeData()->html(), QString("<b>Task</b>"));
     }
 
     void nativeCopyInvalidatesExtraction() {

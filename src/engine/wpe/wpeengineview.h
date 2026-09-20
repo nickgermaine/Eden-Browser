@@ -35,8 +35,10 @@ namespace eden::engine {
         QVariantList navigationHistory(int direction, int maximumItems = 20) const override;
         void goToHistoryOffset(int offset) override;
         void reload() override;
+        void reloadBypassingCache() override;
         void stop() override;
         void openDevTools() override;
+        bool devToolsSelfFramed() const override;
         void closeDevTools() override;
         void attachDevTools(QQuickItem *viewport) override;
         void detachDevTools(QQuickItem *viewport) override;
@@ -69,6 +71,9 @@ namespace eden::engine {
         void
         evaluate(const QString &script, std::function<void(QVariant)> callback = {}, const char *world = "eden.forms");
 
+      protected:
+        void applyZoomFactor(qreal factor) override;
+
       private:
         void createNative(WebKitWebView *related = nullptr);
         void destroyNative();
@@ -81,6 +86,8 @@ namespace eden::engine {
         void showError(const QUrl &url, const QString &message);
         QVariantList menuActions(WebKitContextMenu *menu);
         void showContextMenu(WebKitContextMenu *menu, WebKitHitTestResult *hit, bool inspector);
+        void showOptionMenu(WebKitOptionMenu *menu, const QPoint &position, bool inspector);
+        void applyInspectorTheme();
         void updateFavicon(GBytes *bytes);
         bool permissionRequest(WebKitPermissionRequest *request);
         QPointer<WpeProfile> m_profile;
@@ -101,6 +108,8 @@ namespace eden::engine {
         QUrl m_favicon;
         int m_faviconResolution = 0;
         bool m_inspectorMenu = false;
+        bool m_inspectorSelfFramed = false;
+        QMetaObject::Connection m_inspectorThemeConnection;
         QString m_formToken;
         QString m_documentId;
         QUrl m_formOrigin;

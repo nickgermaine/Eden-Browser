@@ -43,6 +43,7 @@ namespace eden::engine {
         QVariantList navigationHistory(int direction, int maximumItems = 20) const override;
         void goToHistoryOffset(int offset) override;
         void reload() override;
+        void reloadBypassingCache() override;
         void stop() override;
         void openDevTools() override;
         void closeDevTools() override;
@@ -75,6 +76,9 @@ namespace eden::engine {
         Q_INVOKABLE void handleCertificateError();
         Q_INVOKABLE void handlePermission(const QVariant &permissionValue);
         Q_INVOKABLE void handleAutofillTarget(const QString &requestId, const QVariant &result);
+
+      protected:
+        void applyZoomFactor(qreal factor) override;
 
       private slots:
         void syncState();

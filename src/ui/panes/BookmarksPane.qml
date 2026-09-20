@@ -6,10 +6,7 @@ Rectangle {
 
     required property var controller
 
-    color: Theme.surfaceContainer
-    radius: Theme.contentRadius
-    border.width: Theme.paneBorderWidth
-    border.color: Theme.paneBorder
+    color: "transparent"
 
     Item {
         id: header

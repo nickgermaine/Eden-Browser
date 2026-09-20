@@ -1,4 +1,6 @@
 #include "engine/wpe/wpeengineview.h"
+#include "core/settings/shortcutregistry.h"
+#include "core/settings/theme/thememanager.h"
 #include "engine/wpe/wpeprofile.h"
 #include "engine/wpe/wperuntime.h"
 #include "engine/wpe/wpesurface.h"
@@ -77,6 +79,16 @@ namespace eden::engine {
     void WpeEngineView::createNative(WebKitWebView *related) {
         m_cancellable = g_cancellable_new();
         m_content = webkit_user_content_manager_new();
+        auto *caretStyle = webkit_user_style_sheet_new(
+            ":is(input,textarea,[contenteditable]:not([contenteditable=false])):focus,"
+            "[contenteditable]:not([contenteditable=false]):focus *{caret-color:currentColor!important}",
+            WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+            WEBKIT_USER_STYLE_LEVEL_USER,
+            nullptr,
+            nullptr
+        );
+        webkit_user_content_manager_add_style_sheet(m_content, caretStyle);
+        webkit_user_style_sheet_unref(caretStyle);
         webkit_user_content_manager_register_script_message_handler(m_content, "forms", "eden.forms");
         g_signal_connect(
             m_content,
@@ -384,26 +396,7 @@ namespace eden::engine {
             G_CALLBACK(
                 +[](WebKitWebView *, WebKitOptionMenu *menu, WebKitRectangle *rectangle, WpeEngineView *self)
                     -> gboolean {
-                    self->dismissContextMenu();
-                    self->m_optionMenu = WEBKIT_OPTION_MENU(g_object_ref(menu));
-                    ContextMenuInfo info;
-                    info.position = QPoint(rectangle->x, rectangle->y + rectangle->height);
-                    for (guint index = 0; index < webkit_option_menu_get_n_items(menu); ++index) {
-                        auto *item = webkit_option_menu_get_item(menu, index);
-                        info.actions.append(
-                            QVariantMap{
-                                {"id", QString("wpe-option-%1").arg(index)},
-                                {"title", QString::fromUtf8(webkit_option_menu_item_get_label(item))},
-                                {"enabled",
-                                 bool(
-                                     webkit_option_menu_item_is_enabled(item) &&
-                                     !webkit_option_menu_item_is_group_label(item)
-                                 )},
-                                {"checked", bool(webkit_option_menu_item_is_selected(item))}
-                            }
-                        );
-                    }
-                    emit self->contextMenuRequested(info);
+                    self->showOptionMenu(menu, QPoint(rectangle->x, rectangle->y + rectangle->height), false);
                     return TRUE;
                 }
             ),
@@ -668,7 +661,8 @@ namespace eden::engine {
         }
         invalidateFormTarget();
         m_errorPage = false;
-        webkit_web_view_load_uri(m_view, uri.toEncoded().constData());
+        const QUrl destination = uri.isEmpty() ? QUrl("about:blank") : uri;
+        webkit_web_view_load_uri(m_view, destination.toEncoded().constData());
     }
     void WpeEngineView::back() {
         if (m_view) {
@@ -694,6 +688,22 @@ namespace eden::engine {
             }
         }
     }
+    void WpeEngineView::reloadBypassingCache() {
+        if (m_view) {
+            if (m_errorPage) {
+                load(m_url);
+                return;
+            }
+            invalidateFormTarget();
+            m_errorPage = false;
+            webkit_web_view_reload_bypass_cache(m_view);
+        }
+    }
+    void WpeEngineView::applyZoomFactor(qreal factor) {
+        if (m_view) {
+            webkit_web_view_set_zoom_level(m_view, factor);
+        }
+    }
     void WpeEngineView::stop() {
         if (m_view) {
             webkit_web_view_stop_loading(m_view);
@@ -707,6 +717,9 @@ namespace eden::engine {
     void WpeEngineView::releaseFocus() {
         if (m_surface) {
             m_surface->setFocus(false);
+        }
+        if (m_inspector) {
+            m_inspector->setFocus(false);
         }
     }
     void WpeEngineView::attach(QQuickItem *viewport) {
@@ -775,11 +788,16 @@ namespace eden::engine {
             if (!item) {
                 break;
             }
+            const QUrl url(QString::fromUtf8(webkit_back_forward_list_item_get_uri(item)));
+            const QString subtitle = url.toDisplayString(QUrl::RemovePassword);
+            const QString title = QString::fromUtf8(webkit_back_forward_list_item_get_title(item));
             result.append(
                 QVariantMap{
+                    {"id", offset},
                     {"offset", offset},
-                    {"url", QUrl(QString::fromUtf8(webkit_back_forward_list_item_get_uri(item)))},
-                    {"title", QString::fromUtf8(webkit_back_forward_list_item_get_title(item))}
+                    {"url", url},
+                    {"subtitle", subtitle},
+                    {"title", title.isEmpty() ? subtitle : title}
                 }
             );
         }
@@ -814,6 +832,17 @@ namespace eden::engine {
         if (flags & FindBackward) {
             options |= WEBKIT_FIND_OPTIONS_BACKWARDS;
         }
+        const char *previous = webkit_find_controller_get_search_text(controller);
+        const unsigned previousOptions = webkit_find_controller_get_options(controller);
+        if (previous && QString::fromUtf8(previous) == text &&
+            ((previousOptions ^ options) & WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE) == 0) {
+            if (flags & FindBackward) {
+                webkit_find_controller_search_previous(controller);
+            } else {
+                webkit_find_controller_search_next(controller);
+            }
+            return;
+        }
         webkit_find_controller_search(controller, text.toUtf8().constData(), options, 10000);
     }
 
@@ -846,9 +875,35 @@ namespace eden::engine {
                 this
             );
         }
+        if (g_signal_lookup("eden-option-menu-v1", WPE_TYPE_VIEW)) {
+            g_signal_connect(
+                view,
+                "eden-option-menu-v1",
+                G_CALLBACK(+[](WPEView *, WebKitOptionMenu *menu, int x, int y, int, int height, WpeEngineView *self) {
+                    self->showOptionMenu(menu, QPoint(x, y + height), true);
+                }),
+                this
+            );
+        }
         m_inspector = new WpeSurface(view);
         m_inspector->setParent(this);
         connect(m_inspector, &WpeSurface::shortcutRequested, this, &EngineView::shortcutRequested);
+        connect(
+            m_inspector,
+            &WpeSurface::inspectorCommand,
+            this,
+            [this](const QString &command) {
+                if (command == "dock") {
+                    toggleDevToolsOrientation();
+                } else if (command == "window") {
+                    toggleDevToolsSeparate();
+                } else if (command == "close") {
+                    closeDevTools();
+                }
+            },
+            Qt::QueuedConnection
+        );
+        connect(this, &EngineView::devToolsPlacementChanged, this, &WpeEngineView::applyInspectorTheme, Qt::UniqueConnection);
         connect(
             m_inspector,
             &WpeSurface::nativeClosed,
@@ -866,11 +921,45 @@ namespace eden::engine {
             },
             Qt::QueuedConnection
         );
+        m_inspectorSelfFramed = g_signal_lookup("eden-inspector-style-v1", WPE_TYPE_VIEW) != 0;
+        if (m_inspectorSelfFramed) {
+            applyInspectorTheme();
+            disconnect(m_inspectorThemeConnection);
+            m_inspectorThemeConnection = connect(
+                core::ThemeManager::instance(),
+                &core::ThemeManager::themeChanged,
+                this,
+                &WpeEngineView::applyInspectorTheme
+            );
+        }
         g_object_unref(view);
         setDevToolsOpen(true);
         if (m_inspectorViewport) {
             m_inspector->attach(m_inspectorViewport);
         }
+    }
+
+    void WpeEngineView::applyInspectorTheme() {
+        if (!m_inspector || !m_inspectorSelfFramed) {
+            return;
+        }
+        const bool separate = devToolsPlacement() == DevToolsSeparate;
+        const QString placement =
+            QStringLiteral(
+                ":root{--eden-controls-display:flex !important;--eden-dock-display:%1 !important;"
+                "--eden-dock-rotation:%2 !important;--eden-window-display:%3 !important;"
+                "--eden-windowed-display:%4 !important;}"
+            )
+                .arg(separate ? "none" : "flex")
+                .arg(devToolsPlacement() == DevToolsRight ? "90deg" : "0deg")
+                .arg(separate ? "none" : "block")
+                .arg(separate ? "block" : "none");
+        const QByteArray css = (core::ThemeManager::instance()->cssVariables() + placement).toUtf8();
+        g_signal_emit_by_name(m_inspector->nativeView(), "eden-inspector-style-v1", css.constData());
+    }
+
+    bool WpeEngineView::devToolsSelfFramed() const {
+        return m_inspector && m_inspectorSelfFramed;
     }
 
     void WpeEngineView::closeDevTools() {
@@ -1030,7 +1119,7 @@ namespace eden::engine {
         case WEBKIT_CONTEXT_MENU_ACTION_RELOAD:
             return "refresh";
         case WEBKIT_CONTEXT_MENU_ACTION_INSPECT_ELEMENT:
-            return "code";
+            return "programming";
         case WEBKIT_CONTEXT_MENU_ACTION_ENTER_VIDEO_FULLSCREEN:
             return "maximize";
         case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_MUTE:
@@ -1058,7 +1147,16 @@ namespace eden::engine {
         }
         const QString text = title.toLower();
         for (const auto &[needle, icon] :
-             {std::pair{"copy", "copy"},
+             {std::pair{"elements", "code"},
+              {"console", "programming"},
+              {"sources", "document-text"},
+              {"network", "globe"},
+              {"timelines", "stopwatch"},
+              {"storage", "database"},
+              {"graphics", "gallery-edit"},
+              {"layers", "layers"},
+              {"audit", "checklist"},
+              {"copy", "copy"},
               {"paste", "clipboard"},
               {"cut", "cut"},
               {"undo", "undo"},
@@ -1120,6 +1218,19 @@ namespace eden::engine {
                 {"icon", menuIcon(webkit_context_menu_item_get_stock_action(item), label)},
                 {"enabled", action && g_action_get_enabled(action)}
             };
+            static const QHash<int, QString> commands{
+                {WEBKIT_CONTEXT_MENU_ACTION_GO_BACK, "back"},
+                {WEBKIT_CONTEXT_MENU_ACTION_GO_FORWARD, "forward"},
+                {WEBKIT_CONTEXT_MENU_ACTION_RELOAD, "reload"},
+                {WEBKIT_CONTEXT_MENU_ACTION_STOP, "stop"},
+                {WEBKIT_CONTEXT_MENU_ACTION_COPY, "copy"},
+                {WEBKIT_CONTEXT_MENU_ACTION_CUT, "cut"},
+                {WEBKIT_CONTEXT_MENU_ACTION_PASTE, "paste"}
+            };
+            value.insert(
+                "shortcut",
+                core::ShortcutRegistry::shortcutText(commands.value(webkit_context_menu_item_get_stock_action(item)))
+            );
             if (auto *submenu = webkit_context_menu_item_get_submenu(item)) {
                 value.insert("children", menuActions(submenu));
             }
@@ -1182,6 +1293,28 @@ namespace eden::engine {
             webkit_web_view_execute_editing_command(m_view, WEBKIT_EDITING_COMMAND_SELECT_ALL);
         }
         dismissContextMenu();
+    }
+
+    void WpeEngineView::showOptionMenu(WebKitOptionMenu *menu, const QPoint &position, bool inspector) {
+        dismissContextMenu();
+        m_inspectorMenu = inspector;
+        m_optionMenu = WEBKIT_OPTION_MENU(g_object_ref(menu));
+        ContextMenuInfo info;
+        info.position = position;
+        info.surface = inspector ? "devtools" : "page";
+        for (guint index = 0; index < webkit_option_menu_get_n_items(menu); ++index) {
+            auto *item = webkit_option_menu_get_item(menu, index);
+            info.actions.append(
+                QVariantMap{
+                    {"id", QString("wpe-option-%1").arg(index)},
+                    {"title", QString::fromUtf8(webkit_option_menu_item_get_label(item))},
+                    {"enabled",
+                     bool(webkit_option_menu_item_is_enabled(item) && !webkit_option_menu_item_is_group_label(item))},
+                    {"checked", bool(webkit_option_menu_item_is_selected(item))}
+                }
+            );
+        }
+        emit contextMenuRequested(info);
     }
 
     void WpeEngineView::dismissContextMenu() {
@@ -1391,21 +1524,52 @@ namespace eden::engine {
             QFile file(":/eden/wpe/wpeforms.js");
             return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
         }();
-        if (source.isEmpty()) {
-            return;
+        webkit_user_content_manager_remove_all_scripts(m_content);
+        if (!source.isEmpty()) {
+            const QByteArray script = QByteArray(source).replace("EDEN_FORM_TOKEN", m_formToken.toUtf8());
+            auto *native = webkit_user_script_new_for_world(
+                script.constData(),
+                WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                "eden.forms",
+                nullptr,
+                nullptr
+            );
+            webkit_user_content_manager_add_script(m_content, native);
+            webkit_user_script_unref(native);
         }
-        const QByteArray script = QByteArray(source).replace("EDEN_FORM_TOKEN", m_formToken.toUtf8());
-        auto *native = webkit_user_script_new_for_world(
-            script.constData(),
-            WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+        static constexpr auto caretScript = R"JS((()=>{
+const editableSelector='input:not([type=hidden]),textarea,[contenteditable]:not([contenteditable=false])';
+const elementFor=node=>node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
+const repairInlineCaret=node=>{
+    const value=node?.style?.getPropertyValue('caret-color');
+    if(!value||value.toLowerCase()==='currentcolor')return;
+    const color=getComputedStyle(node).caretColor;
+    if(color==='transparent'||color==='rgba(0, 0, 0, 0)')node.style.setProperty('caret-color','currentColor','important');
+};
+const repairCaret=()=>{
+    const active=document.activeElement;
+    const anchor=elementFor(document.getSelection()?.anchorNode);
+    const anchorEditor=anchor?.closest?.(editableSelector);
+    let editor=active?.matches?.(editableSelector)?active:active?.closest?.(editableSelector);
+    if(anchorEditor&&(active===document.body||anchorEditor===active||anchorEditor.contains(active)))editor=anchorEditor;
+    if(!editor)return;
+    repairInlineCaret(editor);
+    if(anchor&&editor.contains(anchor))repairInlineCaret(anchor);
+};
+document.addEventListener('focusin',()=>queueMicrotask(repairCaret),true);
+document.addEventListener('selectionchange',repairCaret,true);
+})())JS";
+        auto *caret = webkit_user_script_new_for_world(
+            caretScript,
+            WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
             WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
-            "eden.forms",
+            "eden.caret",
             nullptr,
             nullptr
         );
-        webkit_user_content_manager_remove_all_scripts(m_content);
-        webkit_user_content_manager_add_script(m_content, native);
-        webkit_user_script_unref(native);
+        webkit_user_content_manager_add_script(m_content, caret);
+        webkit_user_script_unref(caret);
     }
 
     void WpeEngineView::handleFormMessage(JSCValue *message) {
@@ -1568,6 +1732,7 @@ namespace eden::engine {
 
     void WpeEngineView::restoreState(const QVariantMap &state) {
         setMuted(state.value("muted").toBool());
+        setZoomFactor(state.value("zoomFactor", 1.0).toReal());
         const QString encoded = state.value("wpeSession").toString();
         if (m_view && !encoded.isEmpty() && encoded.size() <= 12 * 1024 * 1024) {
             const QByteArray decoded =
@@ -1647,7 +1812,9 @@ namespace eden::engine {
                 "var setter=Object.getOwnPropertyDescriptor(prototype,'value').set;setter.call(field,value);field."
                 "dispatchEvent(new Event('input',{bubbles:true}));field.dispatchEvent(new Event('change',{bubbles:"
                 "true}));};Object.keys(aliases).forEach(function(key){var names=aliases[key].map(normalize);var field="
-                "Array.from(document.querySelectorAll('input,textarea')).find(function(item){var candidates=[item."
+                "Array.from(document.querySelectorAll('input,textarea')).find(function(item){"
+                "if(item.disabled||item.readOnly||item.type==='hidden'||!item.getClientRects().length||"
+                "getComputedStyle(item).visibility!=='visible')return false;var candidates=[item."
                 "autocomplete,item.name,item.id,item.placeholder].map(normalize);return candidates.some(function("
                 "candidate){return names.some(function(name){return candidate.indexOf(name)>=0;});});});set(field,"
                 "values[key]);});})(%1)"

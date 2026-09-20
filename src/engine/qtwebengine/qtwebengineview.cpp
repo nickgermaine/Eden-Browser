@@ -459,6 +459,16 @@ connectBridge();
         invoke("reload");
     }
 
+    void QtWebEngineView::reloadBypassingCache() {
+        invoke("reloadAndBypassCache");
+    }
+
+    void QtWebEngineView::applyZoomFactor(qreal factor) {
+        if (m_view) {
+            m_view->setProperty("zoomFactor", factor);
+        }
+    }
+
     void QtWebEngineView::stop() {
         invoke("stop");
     }

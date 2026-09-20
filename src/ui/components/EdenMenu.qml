@@ -8,8 +8,9 @@ Popup {
     property var actions: []
     property Component headerComponent
     property real maximumHeight: 480
-    property real preferredWidth: 240
+    property real preferredWidth: 300
     property double dismissedAt: 0
+    readonly property var shortcutRegistry: menu.contentItem.Window.window && menu.contentItem.Window.window.windowController ? menu.contentItem.Window.window.windowController.shortcuts : null
 
     signal triggered(var actionId)
 
@@ -66,6 +67,7 @@ Popup {
             readonly property bool hasChildren: modelData.children !== undefined && modelData.children.length > 0
             readonly property bool separator: modelData.separator === true
             readonly property bool checked: modelData.checked === true
+            readonly property string shortcut: modelData.shortcut !== undefined ? String(modelData.shortcut) : menu.shortcutRegistry ? menu.shortcutRegistry.shortcutText(modelData.commandId || modelData.id || "") : ""
 
             width: menuList.width
             height: separator ? 9 : subtitle.length > 0 ? 54 : 40
@@ -114,7 +116,7 @@ Popup {
 
                 Column {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - (menuIcon.visible ? menuIcon.width + parent.spacing : 0) - (menuItem.hasChildren ? 24 : 0))
+                    width: Math.max(0, parent.width - (menuIcon.visible ? menuIcon.width + parent.spacing : 0) - (menuItem.hasChildren ? 24 : 0) - (shortcutHint.visible ? shortcutHint.width + parent.spacing : 0))
                     spacing: 2
 
                     Text {
@@ -136,6 +138,17 @@ Popup {
                         font.pixelSize: 11
                         elide: Text.ElideMiddle
                     }
+                }
+
+                Text {
+                    id: shortcutHint
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: text.length > 0
+                    text: menuItem.shortcut
+                    textFormat: Text.PlainText
+                    color: menuItem.actionEnabled ? Theme.surfaceVariantText : Theme.disabledText
+                    font.family: Theme.bodyFont.family
+                    font.pixelSize: 11
                 }
 
                 Icon {
@@ -196,6 +209,7 @@ Popup {
                         readonly property bool checked: modelData.checked === true
                         readonly property string iconName: modelData.icon === undefined || modelData.icon === null || String(modelData.icon).length === 0 ? (checked ? "check" : "menu-dots") : String(modelData.icon)
                         readonly property string trailingIconName: modelData.trailingIcon === undefined || modelData.trailingIcon === null ? "" : String(modelData.trailingIcon)
+                        readonly property string shortcut: modelData.shortcut !== undefined ? String(modelData.shortcut) : menu.shortcutRegistry ? menu.shortcutRegistry.shortcutText(modelData.commandId || modelData.id || "") : ""
 
                         width: childList.width
                         height: separator ? 9 : 40
@@ -237,11 +251,22 @@ Popup {
                             Text {
                                 textFormat: Text.PlainText
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0))
+                                width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0) - (childShortcutHint.visible ? childShortcutHint.width + parent.spacing : 0))
                                 text: childItem.actionTitle
                                 color: Theme.surfaceText
                                 font: Theme.labelFont
                                 elide: Text.ElideRight
+                            }
+
+                            Text {
+                                id: childShortcutHint
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: text.length > 0
+                                text: childItem.shortcut
+                                textFormat: Text.PlainText
+                                color: Theme.surfaceVariantText
+                                font.family: Theme.bodyFont.family
+                                font.pixelSize: 11
                             }
 
                             Icon {

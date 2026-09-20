@@ -230,6 +230,8 @@ if(EDEN_ENGINE_CEF)
         src/engine/cef/cefuibridge.h
         src/engine/cef/devtoolssocketserver.cpp
         src/engine/cef/devtoolssocketserver.h
+        src/engine/cef/devtoolstheme.cpp
+        src/engine/cef/devtoolstheme.h
     )
     set_target_properties(eden-engine-cef PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-cef" BUILD_RPATH "$ORIGIN")
     target_include_directories(eden-engine-cef PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CEF_INCLUDE_PATH})
@@ -326,12 +328,30 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/arrow-right-line-duotone.svg
         resources/icons/solar/arrow-right-linear.svg
         resources/icons/solar/arrow-right-outline.svg
+        resources/icons/solar/bookmark-circle-bold-duotone.svg
+        resources/icons/solar/bookmark-circle-bold.svg
+        resources/icons/solar/bookmark-circle-broken.svg
+        resources/icons/solar/bookmark-circle-line-duotone.svg
+        resources/icons/solar/bookmark-circle-linear.svg
+        resources/icons/solar/bookmark-circle-outline.svg
+        resources/icons/solar/camera-bold-duotone.svg
+        resources/icons/solar/camera-bold.svg
+        resources/icons/solar/camera-broken.svg
+        resources/icons/solar/camera-line-duotone.svg
+        resources/icons/solar/camera-linear.svg
+        resources/icons/solar/camera-outline.svg
         resources/icons/solar/check-bold-duotone.svg
         resources/icons/solar/check-bold.svg
         resources/icons/solar/check-broken.svg
         resources/icons/solar/check-line-duotone.svg
         resources/icons/solar/check-linear.svg
         resources/icons/solar/check-outline.svg
+        resources/icons/solar/checklist-bold-duotone.svg
+        resources/icons/solar/checklist-bold.svg
+        resources/icons/solar/checklist-broken.svg
+        resources/icons/solar/checklist-line-duotone.svg
+        resources/icons/solar/checklist-linear.svg
+        resources/icons/solar/checklist-outline.svg
         resources/icons/solar/chevron-down-bold-duotone.svg
         resources/icons/solar/chevron-down-bold.svg
         resources/icons/solar/chevron-down-broken.svg
@@ -344,6 +364,18 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/chevron-up-line-duotone.svg
         resources/icons/solar/chevron-up-linear.svg
         resources/icons/solar/chevron-up-outline.svg
+        resources/icons/solar/clipboard-bold-duotone.svg
+        resources/icons/solar/clipboard-bold.svg
+        resources/icons/solar/clipboard-broken.svg
+        resources/icons/solar/clipboard-line-duotone.svg
+        resources/icons/solar/clipboard-linear.svg
+        resources/icons/solar/clipboard-outline.svg
+        resources/icons/solar/clipboard-text-bold-duotone.svg
+        resources/icons/solar/clipboard-text-bold.svg
+        resources/icons/solar/clipboard-text-broken.svg
+        resources/icons/solar/clipboard-text-line-duotone.svg
+        resources/icons/solar/clipboard-text-linear.svg
+        resources/icons/solar/clipboard-text-outline.svg
         resources/icons/solar/close-bold-duotone.svg
         resources/icons/solar/close-bold.svg
         resources/icons/solar/close-broken.svg
@@ -356,24 +388,72 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/code-line-duotone.svg
         resources/icons/solar/code-linear.svg
         resources/icons/solar/code-outline.svg
+        resources/icons/solar/collapse-bold-duotone.svg
+        resources/icons/solar/collapse-bold.svg
+        resources/icons/solar/collapse-broken.svg
+        resources/icons/solar/collapse-line-duotone.svg
+        resources/icons/solar/collapse-linear.svg
+        resources/icons/solar/collapse-outline.svg
         resources/icons/solar/copy-bold-duotone.svg
         resources/icons/solar/copy-bold.svg
         resources/icons/solar/copy-broken.svg
         resources/icons/solar/copy-line-duotone.svg
         resources/icons/solar/copy-linear.svg
         resources/icons/solar/copy-outline.svg
+        resources/icons/solar/cpu-bolt-bold-duotone.svg
+        resources/icons/solar/cpu-bolt-bold.svg
+        resources/icons/solar/cpu-bolt-broken.svg
+        resources/icons/solar/cpu-bolt-line-duotone.svg
+        resources/icons/solar/cpu-bolt-linear.svg
+        resources/icons/solar/cpu-bolt-outline.svg
+        resources/icons/solar/cut-bold-duotone.svg
+        resources/icons/solar/cut-bold.svg
+        resources/icons/solar/cut-broken.svg
+        resources/icons/solar/cut-line-duotone.svg
+        resources/icons/solar/cut-linear.svg
+        resources/icons/solar/cut-outline.svg
         resources/icons/solar/danger-bold-duotone.svg
         resources/icons/solar/danger-bold.svg
         resources/icons/solar/danger-broken.svg
         resources/icons/solar/danger-line-duotone.svg
         resources/icons/solar/danger-linear.svg
         resources/icons/solar/danger-outline.svg
+        resources/icons/solar/database-bold-duotone.svg
+        resources/icons/solar/database-bold.svg
+        resources/icons/solar/database-broken.svg
+        resources/icons/solar/database-line-duotone.svg
+        resources/icons/solar/database-linear.svg
+        resources/icons/solar/database-outline.svg
+        resources/icons/solar/document-text-bold-duotone.svg
+        resources/icons/solar/document-text-bold.svg
+        resources/icons/solar/document-text-broken.svg
+        resources/icons/solar/document-text-line-duotone.svg
+        resources/icons/solar/document-text-linear.svg
+        resources/icons/solar/document-text-outline.svg
         resources/icons/solar/download-bold-duotone.svg
         resources/icons/solar/download-bold.svg
         resources/icons/solar/download-broken.svg
         resources/icons/solar/download-line-duotone.svg
         resources/icons/solar/download-linear.svg
         resources/icons/solar/download-outline.svg
+        resources/icons/solar/expand-bold-duotone.svg
+        resources/icons/solar/expand-bold.svg
+        resources/icons/solar/expand-broken.svg
+        resources/icons/solar/expand-line-duotone.svg
+        resources/icons/solar/expand-linear.svg
+        resources/icons/solar/expand-outline.svg
+        resources/icons/solar/eye-bold-duotone.svg
+        resources/icons/solar/eye-bold.svg
+        resources/icons/solar/eye-broken.svg
+        resources/icons/solar/eye-line-duotone.svg
+        resources/icons/solar/eye-linear.svg
+        resources/icons/solar/eye-outline.svg
+        resources/icons/solar/filter-bold-duotone.svg
+        resources/icons/solar/filter-bold.svg
+        resources/icons/solar/filter-broken.svg
+        resources/icons/solar/filter-line-duotone.svg
+        resources/icons/solar/filter-linear.svg
+        resources/icons/solar/filter-outline.svg
         resources/icons/solar/folder-open-bold-duotone.svg
         resources/icons/solar/folder-open-bold.svg
         resources/icons/solar/folder-open-broken.svg
@@ -404,6 +484,30 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/incognito-line-duotone.svg
         resources/icons/solar/incognito-linear.svg
         resources/icons/solar/incognito-outline.svg
+        resources/icons/solar/info-circle-bold-duotone.svg
+        resources/icons/solar/info-circle-bold.svg
+        resources/icons/solar/info-circle-broken.svg
+        resources/icons/solar/info-circle-line-duotone.svg
+        resources/icons/solar/info-circle-linear.svg
+        resources/icons/solar/info-circle-outline.svg
+        resources/icons/solar/layers-bold-duotone.svg
+        resources/icons/solar/layers-bold.svg
+        resources/icons/solar/layers-broken.svg
+        resources/icons/solar/layers-line-duotone.svg
+        resources/icons/solar/layers-linear.svg
+        resources/icons/solar/layers-outline.svg
+        resources/icons/solar/link-bold-duotone.svg
+        resources/icons/solar/link-bold.svg
+        resources/icons/solar/link-broken.svg
+        resources/icons/solar/link-line-duotone.svg
+        resources/icons/solar/link-linear.svg
+        resources/icons/solar/link-outline.svg
+        resources/icons/solar/list-bold-duotone.svg
+        resources/icons/solar/list-bold.svg
+        resources/icons/solar/list-broken.svg
+        resources/icons/solar/list-line-duotone.svg
+        resources/icons/solar/list-linear.svg
+        resources/icons/solar/list-outline.svg
         resources/icons/solar/lock-bold-duotone.svg
         resources/icons/solar/lock-bold.svg
         resources/icons/solar/lock-broken.svg
@@ -428,6 +532,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/menu-dots-line-duotone.svg
         resources/icons/solar/menu-dots-linear.svg
         resources/icons/solar/menu-dots-outline.svg
+        resources/icons/solar/microphone-bold-duotone.svg
+        resources/icons/solar/microphone-bold.svg
+        resources/icons/solar/microphone-broken.svg
+        resources/icons/solar/microphone-line-duotone.svg
+        resources/icons/solar/microphone-linear.svg
+        resources/icons/solar/microphone-outline.svg
         resources/icons/solar/minimize-bold-duotone.svg
         resources/icons/solar/minimize-bold.svg
         resources/icons/solar/minimize-broken.svg
@@ -438,12 +548,6 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/monitor-bold.svg
         resources/icons/solar/monitor-broken.svg
         resources/icons/solar/monitor-line-duotone.svg
-        resources/icons/solar/microphone-linear.svg
-        resources/icons/solar/microphone-bold.svg
-        resources/icons/solar/microphone-bold-duotone.svg
-        resources/icons/solar/microphone-broken.svg
-        resources/icons/solar/microphone-line-duotone.svg
-        resources/icons/solar/microphone-outline.svg
         resources/icons/solar/monitor-linear.svg
         resources/icons/solar/monitor-outline.svg
         resources/icons/solar/muted-bold-duotone.svg
@@ -458,12 +562,42 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/new-window-line-duotone.svg
         resources/icons/solar/new-window-linear.svg
         resources/icons/solar/new-window-outline.svg
+        resources/icons/solar/object-scan-bold-duotone.svg
+        resources/icons/solar/object-scan-bold.svg
+        resources/icons/solar/object-scan-broken.svg
+        resources/icons/solar/object-scan-line-duotone.svg
+        resources/icons/solar/object-scan-linear.svg
+        resources/icons/solar/object-scan-outline.svg
+        resources/icons/solar/password-bold-duotone.svg
+        resources/icons/solar/password-bold.svg
+        resources/icons/solar/password-broken.svg
+        resources/icons/solar/password-line-duotone.svg
+        resources/icons/solar/password-linear.svg
+        resources/icons/solar/password-outline.svg
         resources/icons/solar/pin-bold-duotone.svg
         resources/icons/solar/pin-bold.svg
         resources/icons/solar/pin-broken.svg
         resources/icons/solar/pin-line-duotone.svg
         resources/icons/solar/pin-linear.svg
         resources/icons/solar/pin-outline.svg
+        resources/icons/solar/power-bold-duotone.svg
+        resources/icons/solar/power-bold.svg
+        resources/icons/solar/power-broken.svg
+        resources/icons/solar/power-line-duotone.svg
+        resources/icons/solar/power-linear.svg
+        resources/icons/solar/power-outline.svg
+        resources/icons/solar/programming-bold-duotone.svg
+        resources/icons/solar/programming-bold.svg
+        resources/icons/solar/programming-broken.svg
+        resources/icons/solar/programming-line-duotone.svg
+        resources/icons/solar/programming-linear.svg
+        resources/icons/solar/programming-outline.svg
+        resources/icons/solar/redo-bold-duotone.svg
+        resources/icons/solar/redo-bold.svg
+        resources/icons/solar/redo-broken.svg
+        resources/icons/solar/redo-line-duotone.svg
+        resources/icons/solar/redo-linear.svg
+        resources/icons/solar/redo-outline.svg
         resources/icons/solar/refresh-bold-duotone.svg
         resources/icons/solar/refresh-bold.svg
         resources/icons/solar/refresh-broken.svg
@@ -476,6 +610,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/restore-line-duotone.svg
         resources/icons/solar/restore-linear.svg
         resources/icons/solar/restore-outline.svg
+        resources/icons/solar/round-transfer-vertical-bold-duotone.svg
+        resources/icons/solar/round-transfer-vertical-bold.svg
+        resources/icons/solar/round-transfer-vertical-broken.svg
+        resources/icons/solar/round-transfer-vertical-line-duotone.svg
+        resources/icons/solar/round-transfer-vertical-linear.svg
+        resources/icons/solar/round-transfer-vertical-outline.svg
         resources/icons/solar/search-bold-duotone.svg
         resources/icons/solar/search-bold.svg
         resources/icons/solar/search-broken.svg
@@ -493,13 +633,55 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/sidebar-broken.svg
         resources/icons/solar/sidebar-line-duotone.svg
         resources/icons/solar/sidebar-linear.svg
+        resources/icons/solar/sidebar-minimalistic-bold-duotone.svg
+        resources/icons/solar/sidebar-minimalistic-bold.svg
+        resources/icons/solar/sidebar-minimalistic-broken.svg
+        resources/icons/solar/sidebar-minimalistic-line-duotone.svg
+        resources/icons/solar/sidebar-minimalistic-linear.svg
+        resources/icons/solar/sidebar-minimalistic-outline.svg
         resources/icons/solar/sidebar-outline.svg
+        resources/icons/solar/sort-bold-duotone.svg
+        resources/icons/solar/sort-bold.svg
+        resources/icons/solar/sort-broken.svg
+        resources/icons/solar/sort-line-duotone.svg
+        resources/icons/solar/sort-linear.svg
+        resources/icons/solar/sort-outline.svg
+        resources/icons/solar/soundwave-bold-duotone.svg
+        resources/icons/solar/soundwave-bold.svg
+        resources/icons/solar/soundwave-broken.svg
+        resources/icons/solar/soundwave-line-duotone.svg
+        resources/icons/solar/soundwave-linear.svg
+        resources/icons/solar/soundwave-outline.svg
+        resources/icons/solar/square-top-down-bold-duotone.svg
+        resources/icons/solar/square-top-down-bold.svg
+        resources/icons/solar/square-top-down-broken.svg
+        resources/icons/solar/square-top-down-line-duotone.svg
+        resources/icons/solar/square-top-down-linear.svg
+        resources/icons/solar/square-top-down-outline.svg
         resources/icons/solar/star-bold-duotone.svg
         resources/icons/solar/star-bold.svg
         resources/icons/solar/star-broken.svg
         resources/icons/solar/star-line-duotone.svg
         resources/icons/solar/star-linear.svg
         resources/icons/solar/star-outline.svg
+        resources/icons/solar/stopwatch-bold-duotone.svg
+        resources/icons/solar/stopwatch-bold.svg
+        resources/icons/solar/stopwatch-broken.svg
+        resources/icons/solar/stopwatch-line-duotone.svg
+        resources/icons/solar/stopwatch-linear.svg
+        resources/icons/solar/stopwatch-outline.svg
+        resources/icons/solar/text-focus-bold-duotone.svg
+        resources/icons/solar/text-focus-bold.svg
+        resources/icons/solar/text-focus-broken.svg
+        resources/icons/solar/text-focus-line-duotone.svg
+        resources/icons/solar/text-focus-linear.svg
+        resources/icons/solar/text-focus-outline.svg
+        resources/icons/solar/text-selection-bold-duotone.svg
+        resources/icons/solar/text-selection-bold.svg
+        resources/icons/solar/text-selection-broken.svg
+        resources/icons/solar/text-selection-line-duotone.svg
+        resources/icons/solar/text-selection-linear.svg
+        resources/icons/solar/text-selection-outline.svg
         resources/icons/solar/trash-bold-duotone.svg
         resources/icons/solar/trash-bold.svg
         resources/icons/solar/trash-broken.svg
@@ -512,6 +694,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/tuning-line-duotone.svg
         resources/icons/solar/tuning-linear.svg
         resources/icons/solar/tuning-outline.svg
+        resources/icons/solar/undo-bold-duotone.svg
+        resources/icons/solar/undo-bold.svg
+        resources/icons/solar/undo-broken.svg
+        resources/icons/solar/undo-line-duotone.svg
+        resources/icons/solar/undo-linear.svg
+        resources/icons/solar/undo-outline.svg
         resources/icons/solar/user-circle-bold-duotone.svg
         resources/icons/solar/user-circle-bold.svg
         resources/icons/solar/user-circle-broken.svg
@@ -530,162 +718,6 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/window-line-duotone.svg
         resources/icons/solar/window-linear.svg
         resources/icons/solar/window-outline.svg
-        resources/icons/solar/bookmark-circle-bold-duotone.svg
-        resources/icons/solar/bookmark-circle-bold.svg
-        resources/icons/solar/bookmark-circle-broken.svg
-        resources/icons/solar/bookmark-circle-line-duotone.svg
-        resources/icons/solar/bookmark-circle-linear.svg
-        resources/icons/solar/bookmark-circle-outline.svg
-        resources/icons/solar/cpu-bolt-bold-duotone.svg
-        resources/icons/solar/cpu-bolt-bold.svg
-        resources/icons/solar/cpu-bolt-broken.svg
-        resources/icons/solar/cpu-bolt-line-duotone.svg
-        resources/icons/solar/cpu-bolt-linear.svg
-        resources/icons/solar/cpu-bolt-outline.svg
-        resources/icons/solar/info-circle-bold-duotone.svg
-        resources/icons/solar/info-circle-bold.svg
-        resources/icons/solar/info-circle-broken.svg
-        resources/icons/solar/info-circle-line-duotone.svg
-        resources/icons/solar/info-circle-linear.svg
-        resources/icons/solar/info-circle-outline.svg
-        resources/icons/solar/password-bold-duotone.svg
-        resources/icons/solar/password-bold.svg
-        resources/icons/solar/password-broken.svg
-        resources/icons/solar/password-line-duotone.svg
-        resources/icons/solar/password-linear.svg
-        resources/icons/solar/password-outline.svg
-        resources/icons/solar/eye-bold-duotone.svg
-        resources/icons/solar/eye-bold.svg
-        resources/icons/solar/eye-broken.svg
-        resources/icons/solar/eye-line-duotone.svg
-        resources/icons/solar/eye-linear.svg
-        resources/icons/solar/eye-outline.svg
-        resources/icons/solar/power-bold-duotone.svg
-        resources/icons/solar/power-bold.svg
-        resources/icons/solar/power-broken.svg
-        resources/icons/solar/power-line-duotone.svg
-        resources/icons/solar/power-linear.svg
-        resources/icons/solar/power-outline.svg
-        resources/icons/solar/programming-bold-duotone.svg
-        resources/icons/solar/programming-bold.svg
-        resources/icons/solar/programming-broken.svg
-        resources/icons/solar/programming-line-duotone.svg
-        resources/icons/solar/programming-linear.svg
-        resources/icons/solar/programming-outline.svg
-        resources/icons/solar/round-transfer-vertical-bold-duotone.svg
-        resources/icons/solar/round-transfer-vertical-bold.svg
-        resources/icons/solar/round-transfer-vertical-broken.svg
-        resources/icons/solar/round-transfer-vertical-line-duotone.svg
-        resources/icons/solar/round-transfer-vertical-linear.svg
-        resources/icons/solar/round-transfer-vertical-outline.svg
-        resources/icons/solar/soundwave-bold-duotone.svg
-        resources/icons/solar/soundwave-bold.svg
-        resources/icons/solar/soundwave-broken.svg
-        resources/icons/solar/soundwave-line-duotone.svg
-        resources/icons/solar/soundwave-linear.svg
-        resources/icons/solar/soundwave-outline.svg
-        resources/icons/solar/undo-bold-duotone.svg
-        resources/icons/solar/undo-bold.svg
-        resources/icons/solar/undo-broken.svg
-        resources/icons/solar/undo-line-duotone.svg
-        resources/icons/solar/undo-linear.svg
-        resources/icons/solar/undo-outline.svg
-        resources/icons/solar/redo-bold-duotone.svg
-        resources/icons/solar/redo-bold.svg
-        resources/icons/solar/redo-broken.svg
-        resources/icons/solar/redo-line-duotone.svg
-        resources/icons/solar/redo-linear.svg
-        resources/icons/solar/redo-outline.svg
-        resources/icons/solar/cut-bold-duotone.svg
-        resources/icons/solar/cut-bold.svg
-        resources/icons/solar/cut-broken.svg
-        resources/icons/solar/cut-line-duotone.svg
-        resources/icons/solar/cut-linear.svg
-        resources/icons/solar/cut-outline.svg
-        resources/icons/solar/clipboard-bold-duotone.svg
-        resources/icons/solar/clipboard-bold.svg
-        resources/icons/solar/clipboard-broken.svg
-        resources/icons/solar/clipboard-line-duotone.svg
-        resources/icons/solar/clipboard-linear.svg
-        resources/icons/solar/clipboard-outline.svg
-        resources/icons/solar/clipboard-text-bold-duotone.svg
-        resources/icons/solar/clipboard-text-bold.svg
-        resources/icons/solar/clipboard-text-broken.svg
-        resources/icons/solar/clipboard-text-line-duotone.svg
-        resources/icons/solar/clipboard-text-linear.svg
-        resources/icons/solar/clipboard-text-outline.svg
-        resources/icons/solar/text-selection-bold-duotone.svg
-        resources/icons/solar/text-selection-bold.svg
-        resources/icons/solar/text-selection-broken.svg
-        resources/icons/solar/text-selection-line-duotone.svg
-        resources/icons/solar/text-selection-linear.svg
-        resources/icons/solar/text-selection-outline.svg
-        resources/icons/solar/camera-bold-duotone.svg
-        resources/icons/solar/camera-bold.svg
-        resources/icons/solar/camera-broken.svg
-        resources/icons/solar/camera-line-duotone.svg
-        resources/icons/solar/camera-linear.svg
-        resources/icons/solar/camera-outline.svg
-        resources/icons/solar/text-focus-bold-duotone.svg
-        resources/icons/solar/text-focus-bold.svg
-        resources/icons/solar/text-focus-broken.svg
-        resources/icons/solar/text-focus-line-duotone.svg
-        resources/icons/solar/text-focus-linear.svg
-        resources/icons/solar/text-focus-outline.svg
-        resources/icons/solar/sort-bold-duotone.svg
-        resources/icons/solar/sort-bold.svg
-        resources/icons/solar/sort-broken.svg
-        resources/icons/solar/sort-line-duotone.svg
-        resources/icons/solar/sort-linear.svg
-        resources/icons/solar/sort-outline.svg
-        resources/icons/solar/object-scan-bold-duotone.svg
-        resources/icons/solar/object-scan-bold.svg
-        resources/icons/solar/object-scan-broken.svg
-        resources/icons/solar/object-scan-line-duotone.svg
-        resources/icons/solar/object-scan-linear.svg
-        resources/icons/solar/object-scan-outline.svg
-        resources/icons/solar/expand-bold-duotone.svg
-        resources/icons/solar/expand-bold.svg
-        resources/icons/solar/expand-broken.svg
-        resources/icons/solar/expand-line-duotone.svg
-        resources/icons/solar/expand-linear.svg
-        resources/icons/solar/expand-outline.svg
-        resources/icons/solar/collapse-bold-duotone.svg
-        resources/icons/solar/collapse-bold.svg
-        resources/icons/solar/collapse-broken.svg
-        resources/icons/solar/collapse-line-duotone.svg
-        resources/icons/solar/collapse-linear.svg
-        resources/icons/solar/collapse-outline.svg
-        resources/icons/solar/document-text-bold-duotone.svg
-        resources/icons/solar/document-text-bold.svg
-        resources/icons/solar/document-text-broken.svg
-        resources/icons/solar/document-text-line-duotone.svg
-        resources/icons/solar/document-text-linear.svg
-        resources/icons/solar/document-text-outline.svg
-        resources/icons/solar/filter-bold-duotone.svg
-        resources/icons/solar/filter-bold.svg
-        resources/icons/solar/filter-broken.svg
-        resources/icons/solar/filter-line-duotone.svg
-        resources/icons/solar/filter-linear.svg
-        resources/icons/solar/filter-outline.svg
-        resources/icons/solar/link-bold-duotone.svg
-        resources/icons/solar/link-bold.svg
-        resources/icons/solar/link-broken.svg
-        resources/icons/solar/link-line-duotone.svg
-        resources/icons/solar/link-linear.svg
-        resources/icons/solar/link-outline.svg
-        resources/icons/solar/list-bold-duotone.svg
-        resources/icons/solar/list-bold.svg
-        resources/icons/solar/list-broken.svg
-        resources/icons/solar/list-line-duotone.svg
-        resources/icons/solar/list-linear.svg
-        resources/icons/solar/list-outline.svg
-        resources/icons/solar/square-top-down-bold-duotone.svg
-        resources/icons/solar/square-top-down-bold.svg
-        resources/icons/solar/square-top-down-broken.svg
-        resources/icons/solar/square-top-down-line-duotone.svg
-        resources/icons/solar/square-top-down-linear.svg
-        resources/icons/solar/square-top-down-outline.svg
         resources/themes/eden-default.json
 )
 target_link_libraries(eden-ui PUBLIC eden-core Qt6::Quick Qt6::QuickControls2 Qt6::QuickEffects Qt6::QuickShapes)
@@ -865,6 +897,11 @@ qt_add_executable(eden-omnibox-tests tests/omniboxcontroller_test.cpp)
 target_link_libraries(eden-omnibox-tests PRIVATE eden-core eden-ui Qt6::Test)
 add_test(NAME eden-omnibox-tests COMMAND eden-omnibox-tests)
 set_tests_properties(eden-omnibox-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/omnibox-test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/omnibox-test-config")
+
+qt_add_executable(eden-shortcut-tests tests/shortcutregistry_test.cpp)
+target_link_libraries(eden-shortcut-tests PRIVATE eden-core Qt6::Quick Qt6::Test)
+add_test(NAME eden-shortcut-tests COMMAND eden-shortcut-tests)
+set_tests_properties(eden-shortcut-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(EDEN_ENABLE_AUTOMATION)
     qt_add_executable(eden-automation-tests tests/automationserver_test.cpp)

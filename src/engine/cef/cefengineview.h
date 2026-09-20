@@ -50,6 +50,7 @@ namespace eden::engine::cef {
         QVariantList navigationHistory(int direction, int maximumItems = 20) const override;
         void goToHistoryOffset(int offset) override;
         void reload() override;
+        void reloadBypassingCache() override;
         void stop() override;
         void openDevTools() override;
         void closeDevTools() override;
@@ -73,6 +74,7 @@ namespace eden::engine::cef {
         void requestThumbnail(const QSize &size, ThumbnailCallback callback) override;
 
       protected:
+        void applyZoomFactor(qreal factor) override;
         bool eventFilter(QObject *watched, QEvent *event) override;
 
       private:

@@ -8,11 +8,13 @@ Rectangle {
     property var attachedEngine
     readonly property bool dockedRight: engineView ? engineView.devToolsPlacement === 0 : false
     readonly property bool separateWindow: engineView ? engineView.devToolsPlacement === 2 : false
+    readonly property bool selfFramed: engineView ? engineView.devToolsSelfFramed : false
+    property real surfaceX: 0
+    property real surfaceY: 0
+    property real surfaceWidth: width
+    property real surfaceHeight: height
 
-    color: Theme.surfaceContainer
-    radius: Theme.contentRadius
-    border.width: Theme.paneBorderWidth
-    border.color: Theme.paneBorder
+    color: "transparent"
     Component.onCompleted: {
         attachedEngine = engineView;
         if (attachedEngine)
@@ -42,7 +44,8 @@ Rectangle {
         anchors.top: parent.top
         anchors.leftMargin: 16
         anchors.rightMargin: 8
-        height: 52
+        height: pane.selfFramed ? 0 : 52
+        visible: !pane.selfFramed
 
         Text {
             textFormat: Text.PlainText
@@ -63,7 +66,8 @@ Rectangle {
 
             EdenButton {
                 visible: !pane.separateWindow
-                iconName: pane.dockedRight ? "chevron-down" : "sidebar"
+                iconName: "sidebar-minimalistic"
+                iconRotation: pane.dockedRight ? 90 : 0
                 onClicked: {
                     if (pane.engineView)
                         pane.engineView.toggleDevToolsOrientation();
@@ -88,16 +92,82 @@ Rectangle {
         }
     }
 
-    Item {
-        id: devToolsHost
+    Rectangle {
+        id: devToolsFrame
 
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: parent.bottom
+        radius: Theme.contentRadius
+        color: pane.selfFramed ? "transparent" : Theme.surface
+    }
+
+    Item {
+        id: devToolsHost
+
+        anchors.fill: devToolsFrame
         anchors.margins: Theme.contentBorderWidth
         activeFocusOnTab: true
         focusPolicy: Qt.StrongFocus
         clip: true
+    }
+
+    ChromeCornerMask {
+        anchors.left: devToolsFrame.left
+        anchors.top: devToolsFrame.top
+        corner: "top-left"
+        surfaceHeight: pane.surfaceHeight
+        surfaceWidth: pane.surfaceWidth
+        surfaceX: pane.surfaceX + devToolsFrame.x
+        visible: !pane.selfFramed
+        surfaceY: pane.surfaceY + devToolsFrame.y
+        z: 3
+    }
+
+    ChromeCornerMask {
+        anchors.right: devToolsFrame.right
+        anchors.top: devToolsFrame.top
+        corner: "top-right"
+        surfaceHeight: pane.surfaceHeight
+        surfaceWidth: pane.surfaceWidth
+        surfaceX: pane.surfaceX + devToolsFrame.x + devToolsFrame.width - width
+        visible: !pane.selfFramed
+        surfaceY: pane.surfaceY + devToolsFrame.y
+        z: 3
+    }
+
+    ChromeCornerMask {
+        anchors.right: devToolsFrame.right
+        anchors.bottom: devToolsFrame.bottom
+        corner: "bottom-right"
+        surfaceHeight: pane.surfaceHeight
+        surfaceWidth: pane.surfaceWidth
+        surfaceX: pane.surfaceX + devToolsFrame.x + devToolsFrame.width - width
+        visible: !pane.selfFramed
+        surfaceY: pane.surfaceY + devToolsFrame.y + devToolsFrame.height - height
+        z: 3
+    }
+
+    ChromeCornerMask {
+        anchors.left: devToolsFrame.left
+        anchors.bottom: devToolsFrame.bottom
+        corner: "bottom-left"
+        surfaceHeight: pane.surfaceHeight
+        surfaceWidth: pane.surfaceWidth
+        surfaceX: pane.surfaceX + devToolsFrame.x
+        visible: !pane.selfFramed
+        surfaceY: pane.surfaceY + devToolsFrame.y + devToolsFrame.height - height
+        z: 3
+    }
+
+    Rectangle {
+        anchors.fill: devToolsFrame
+        radius: Theme.contentRadius
+        color: "transparent"
+        border.width: Theme.contentBorderWidth
+        border.color: Theme.contentBorder
+        visible: !pane.selfFramed
+        z: 4
     }
 }

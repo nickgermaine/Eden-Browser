@@ -1,4 +1,6 @@
 #include "engine/cef/cefengineview.h"
+#include "core/settings/shortcutregistry.h"
+#include "core/settings/theme/thememanager.h"
 #if EDEN_ENABLE_AUTOMATION
 #include "core/automation/performancemetrics.h"
 #endif
@@ -8,6 +10,7 @@
 #include "engine/cef/cefuibridge.h"
 #include "engine/cef/clipboardmirror.h"
 #include "engine/cef/devtoolssocketserver.h"
+#include "engine/cef/devtoolstheme.h"
 #include "engine/cef/osrtexture.h"
 
 #include "include/cef_browser.h"
@@ -55,6 +58,7 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QQuickItem>
@@ -529,6 +533,30 @@ namespace eden::engine::cef {
             return 112 + key - Qt::Key_F1;
         }
         switch (key) {
+        case Qt::Key_Shift:
+            return 16;
+        case Qt::Key_Control:
+            return 17;
+        case Qt::Key_Alt:
+        case Qt::Key_AltGr:
+            return 18;
+        case Qt::Key_Pause:
+            return 19;
+        case Qt::Key_CapsLock:
+            return 20;
+        case Qt::Key_Meta:
+        case Qt::Key_Super_L:
+            return 91;
+        case Qt::Key_Super_R:
+            return 92;
+        case Qt::Key_Menu:
+            return 93;
+        case Qt::Key_NumLock:
+            return 144;
+        case Qt::Key_ScrollLock:
+            return 145;
+        case Qt::Key_Print:
+            return 44;
         case Qt::Key_Exclam:
             return '1';
         case Qt::Key_At:
@@ -626,7 +654,7 @@ namespace eden::engine::cef {
         case Qt::Key_Apostrophe:
             return 222;
         default:
-            return key;
+            return key < 0x100 ? key : 0;
         }
     }
 
@@ -1322,6 +1350,121 @@ namespace eden::engine::cef {
         IMPLEMENT_REFCOUNTING(CefNavigationHistoryObserver);
     };
 
+    class CefClipboardWriter final : public CefDevToolsMessageObserver {
+      public:
+        using Completion = std::function<void(bool)>;
+
+        static void write(CefRefPtr<CefBrowser> browser, const QJsonObject &formats, Completion completion) {
+            CefRefPtr<CefClipboardWriter> writer = new CefClipboardWriter(browser, formats, std::move(completion));
+            writer->m_registration = browser->GetHost()->AddDevToolsMessageObserver(writer);
+            if (!CefPostDelayedTask(TID_UI, new CefFunctionTask([writer] { writer->finish(false); }), 3000)) {
+                writer->finish(false);
+                return;
+            }
+            writer->send("Page.getFrameTree", CefDictionaryValue::Create());
+        }
+
+        void
+        OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int id, bool success, const void *result, size_t size) override {
+            if (!m_completion || id != m_messageId) {
+                return;
+            }
+            const QJsonObject value =
+                success && result
+                    ? QJsonDocument::fromJson(QByteArray(static_cast<const char *>(result), qsizetype(size))).object()
+                    : QJsonObject();
+            if (!success || m_deadline.hasExpired() || !m_browser->GetMainFrame() ||
+                m_browser->GetMainFrame()->GetURL() != m_url || value.contains("exceptionDetails")) {
+                finish(false);
+                return;
+            }
+            if (m_stage == 0) {
+                const QString frame =
+                    value.value("frameTree").toObject().value("frame").toObject().value("id").toString();
+                if (frame.isEmpty()) {
+                    finish(false);
+                    return;
+                }
+                auto parameters = CefDictionaryValue::Create();
+                parameters->SetString("frameId", frame.toStdString());
+                parameters->SetString("worldName", "eden.clipboard");
+                ++m_stage;
+                send("Page.createIsolatedWorld", parameters);
+            } else if (m_stage == 1) {
+                const int context = value.value("executionContextId").toInt();
+                if (!context) {
+                    finish(false);
+                    return;
+                }
+                const QString script =
+                    QStringLiteral(R"JS((async(formats)=>{
+const data={};
+for(const [type,encoded] of Object.entries(formats)){
+    const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
+    data[type]=new Blob([bytes],{type});
+}
+if(navigator.clipboard&&navigator.clipboard.write){
+    await navigator.clipboard.write([new ClipboardItem(data)]);
+    return true;
+}
+const copy=e=>{
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    for(const [type,encoded] of Object.entries(formats)){
+        if(type.startsWith('text/'))e.clipboardData.setData(type,new TextDecoder().decode(Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))));
+    }
+};
+window.addEventListener('copy',copy,true);
+try{return document.execCommand('copy');}finally{window.removeEventListener('copy',copy,true);}
+})(%1))JS")
+                        .arg(QString::fromUtf8(QJsonDocument(m_formats).toJson(QJsonDocument::Compact)));
+                auto parameters = CefDictionaryValue::Create();
+                parameters->SetString("expression", script.toStdString());
+                parameters->SetInt("contextId", context);
+                parameters->SetBool("userGesture", true);
+                parameters->SetBool("awaitPromise", true);
+                parameters->SetBool("returnByValue", true);
+                parameters->SetDouble("timeout", 3000);
+                ++m_stage;
+                send("Runtime.evaluate", parameters);
+            } else {
+                finish(value.value("result").toObject().value("value").toBool());
+            }
+        }
+
+      private:
+        CefClipboardWriter(CefRefPtr<CefBrowser> browser, QJsonObject formats, Completion completion)
+            : m_browser(browser),
+              m_url(browser->GetMainFrame()->GetURL()),
+              m_formats(std::move(formats)),
+              m_completion(std::move(completion)) {}
+
+        void send(const char *method, CefRefPtr<CefDictionaryValue> parameters) {
+            m_messageId = nextDevToolsMessageId();
+            if (!m_registration || !m_browser->GetHost()->ExecuteDevToolsMethod(m_messageId, method, parameters)) {
+                finish(false);
+            }
+        }
+
+        void finish(bool success) {
+            auto completion = std::move(m_completion);
+            m_registration = nullptr;
+            if (completion) {
+                completion(success);
+            }
+        }
+
+        CefRefPtr<CefBrowser> m_browser;
+        CefString m_url;
+        QDeadlineTimer m_deadline{3000};
+        QJsonObject m_formats;
+        Completion m_completion;
+        CefRefPtr<CefRegistration> m_registration;
+        int m_messageId = 0;
+        int m_stage = 0;
+        IMPLEMENT_REFCOUNTING(CefClipboardWriter);
+    };
+
     class CefFileChooserObserver final : public CefDevToolsMessageObserver {
       public:
         explicit CefFileChooserObserver(std::shared_ptr<CefViewLifetime> lifetime)
@@ -1361,13 +1504,19 @@ namespace eden::engine::cef {
         bool start(const QString &token, std::shared_ptr<CefViewLifetime> lifetime);
         void sendToInspected(QByteArray message);
         void deliverToFrontend(QByteArray message);
+        void inspectAt(const QPointF &position);
         void close();
 
       private:
+        void requestInspectedNode(const QPointF &position);
+
         CefRefPtr<CefBrowser> m_browser;
         CefRefPtr<CefDevToolsMessageForwarder> m_observer;
         CefRefPtr<CefRegistration> m_registration;
         QString m_token;
+        std::optional<QPointF> m_pendingInspect;
+        bool m_frontendReady = false;
+        std::atomic_int m_inspectMessageId = 0;
         std::atomic_bool m_closed = false;
     };
 
@@ -2358,6 +2507,7 @@ namespace eden::engine::cef {
             browserVisible.reset();
             browserCreationStarted = true;
             browser->GetHost()->SetAudioMuted(muted);
+            q->applyZoomFactor(q->zoomFactor());
             installFileChooserInterception();
             if (loadPendingAfterCreation && !pendingUrl.isEmpty() &&
                 QString::fromStdString(browser->GetMainFrame()->GetURL().ToString()) != pendingUrl.toString()) {
@@ -2366,6 +2516,7 @@ namespace eden::engine::cef {
             loadPendingAfterCreation = false;
             updateGeometry();
             syncFocus();
+            createDevToolsBrowser();
         }
 
         void createDevToolsBrowser() {
@@ -2391,11 +2542,44 @@ namespace eden::engine::cef {
                 q->setDevToolsOpen(false);
                 return;
             }
+            inspectPendingPosition();
+            QObject::disconnect(devToolsThemeConnection);
+            devToolsThemeConnection = QObject::connect(
+                core::ThemeManager::instance(),
+                &core::ThemeManager::themeChanged,
+                q,
+                [this] { applyDevToolsTheme(); }
+            );
             devToolsLifetime = std::make_shared<CefViewLifetime>();
             devToolsLifetime->bind(this);
             devToolsClient = new CefDevToolsClient(devToolsLifetime, client.get());
             if (!devToolsProtocolSession->start(devToolsSocketSession.token, devToolsLifetime)) {
                 devToolsCreationFailed();
+            }
+        }
+
+        void applyDevToolsTheme() {
+            CefUiBridge::assertOnUiThread(q);
+            if (!devToolsBrowser) {
+                return;
+            }
+            const std::string script = devToolsThemeScript().toStdString();
+            const CefRefPtr<CefBrowser> target = devToolsBrowser;
+            postToCefUi([target, script] {
+                if (const CefRefPtr<CefFrame> frame = target->GetMainFrame()) {
+                    frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+                }
+            });
+        }
+
+        void devToolsFrontendLoaded() {
+            applyDevToolsTheme();
+            QTimer::singleShot(1200, q, [this] { applyDevToolsTheme(); });
+        }
+
+        void inspectPendingPosition() {
+            if (devToolsProtocolSession && pendingInspectPosition) {
+                devToolsProtocolSession->inspectAt(*std::exchange(pendingInspectPosition, std::nullopt));
             }
         }
 
@@ -2473,6 +2657,8 @@ namespace eden::engine::cef {
 
         void destroyDevTools() {
             disconnectDevToolsViewport();
+            QObject::disconnect(devToolsThemeConnection);
+            pendingInspectPosition.reset();
             if (!devToolsSocketSession.token.isEmpty()) {
                 sharedDevToolsSocketServer()->closeSession(devToolsSocketSession.token);
                 devToolsSocketSession = {};
@@ -2984,7 +3170,7 @@ namespace eden::engine::cef {
             const CefRefPtr<CefBrowser> currentBrowser = browser;
             QStringList paths;
             for (const QUrl &file : files) {
-                const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+                const QString path = file.isLocalFile() ? file.toLocalFile() : QString();
                 if (!path.isEmpty()) {
                     paths.append(path);
                 }
@@ -3014,33 +3200,104 @@ namespace eden::engine::cef {
             }
         }
 
-        void pasteFromShellClipboard(CefRefPtr<CefBrowser> targetBrowser = nullptr) {
+        void pasteFromShellClipboard(CefRefPtr<CefBrowser> targetBrowser = nullptr, bool plainText = false) {
             CefUiBridge::assertOnUiThread(q);
             const CefRefPtr<CefBrowser> currentBrowser = targetBrowser ? targetBrowser : browser;
             if (!currentBrowser) {
                 return;
             }
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            const QString text = clipboard ? clipboard->text() : QString();
-            if (text.isEmpty() || text == ClipboardMirror::instance().mirroredText()) {
-                postToCefUi([currentBrowser] {
+            if (!pendingPaste.isEmpty()) {
+                pasteInput.push_back([this, currentBrowser, plainText] {
+                    pasteFromShellClipboard(currentBrowser, plainText);
+                });
+                return;
+            }
+            QJsonObject formats;
+            if (osr && QGuiApplication::platformName() == "wayland") {
+                const auto *mime = QGuiApplication::clipboard()->mimeData();
+                if (!mime || (!mime->hasText() && !mime->hasHtml() && !mime->hasImage())) {
+                    return;
+                }
+                if (mime && (!mime->hasText() || ClipboardMirror::instance().mirroredText().isEmpty() ||
+                             mime->text() != ClipboardMirror::instance().mirroredText())) {
+                    if (mime->hasText()) {
+                        formats.insert("text/plain", QString::fromLatin1(mime->text().toUtf8().toBase64()));
+                    }
+                    if (mime->hasHtml()) {
+                        formats.insert("text/html", QString::fromLatin1(mime->html().toUtf8().toBase64()));
+                    }
+                    if (mime->hasImage()) {
+                        QByteArray bytes;
+                        QBuffer buffer(&bytes);
+                        buffer.open(QIODevice::WriteOnly);
+                        qvariant_cast<QImage>(mime->imageData()).save(&buffer, "PNG");
+                        if (!bytes.isEmpty()) {
+                            formats.insert("image/png", QString::fromLatin1(bytes.toBase64()));
+                        }
+                    }
+                }
+            }
+            const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            const auto deadline = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch()
+                                  )
+                                      .count() +
+                                  4000;
+            pendingPaste = token;
+            const auto state = lifetime;
+            const auto failed = [state, token] {
+                CefUiBridge::runOnUiThread([state, token] {
+                    state->runOrQueue([token](void *value) { static_cast<Private *>(value)->finishPaste(token); });
+                });
+            };
+            QTimer::singleShot(5000, q, [this, token] { finishPaste(token); });
+            if (!postToCefUi([currentBrowser, plainText, token, failed, formats, deadline] {
                     CefRefPtr<CefFrame> frame = currentBrowser->GetFocusedFrame();
                     if (!frame) {
                         frame = currentBrowser->GetMainFrame();
                     }
-                    if (frame) {
-                        frame->Paste();
+                    if (!frame || !frame->IsValid()) {
+                        failed();
+                        return;
                     }
-                });
+                    const auto url = frame->GetURL();
+                    const auto paste = [frame, url, token, plainText, failed, deadline](bool success) {
+                        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now().time_since_epoch()
+                        )
+                                             .count();
+                        if (!success || !frame->IsValid() || frame->GetURL() != url || !frame->IsFocused() ||
+                            now >= deadline) {
+                            failed();
+                            return;
+                        }
+                        const auto request = CefProcessMessage::Create("eden_native_paste");
+                        request->GetArgumentList()->SetString(0, token.toStdString());
+                        request->GetArgumentList()->SetBool(1, plainText);
+                        request->GetArgumentList()->SetDouble(2, double(deadline));
+                        request->GetArgumentList()->SetString(3, url);
+                        frame->SendProcessMessage(PID_RENDERER, request);
+                    };
+                    if (formats.isEmpty()) {
+                        paste(true);
+                    } else {
+                        CefClipboardWriter::write(currentBrowser, formats, paste);
+                    }
+                })) {
+                finishPaste(token);
+            }
+        }
+
+        void finishPaste(const QString &token) {
+            if (token != pendingPaste) {
                 return;
             }
-            const std::string encoded = text.toStdString();
-            postToCefUi([currentBrowser, encoded] {
-                CefRefPtr<CefDictionaryValue> parameters = CefDictionaryValue::Create();
-                parameters->SetString("text", encoded);
-                currentBrowser->GetHost()
-                    ->ExecuteDevToolsMethod(nextDevToolsMessageId(), "Input.insertText", parameters);
-            });
+            pendingPaste.clear();
+            while (pendingPaste.isEmpty() && !pasteInput.empty()) {
+                auto next = std::move(pasteInput.front());
+                pasteInput.pop_front();
+                next();
+            }
         }
 
         void updateCaptureDetails(const QString &frame, int activities) {
@@ -3408,6 +3665,21 @@ namespace eden::engine::cef {
             if (!targetBrowser || !targetItem) {
                 return false;
             }
+            if (!pendingPaste.isEmpty() &&
+                (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease ||
+                 event->type() == QEvent::InputMethod || event->type() == QEvent::MouseButtonPress ||
+                 event->type() == QEvent::MouseButtonRelease)) {
+                const auto copy = std::shared_ptr<QEvent>(event->clone());
+                const bool devTools = targetBrowser == devToolsBrowser;
+                pasteInput.push_back([this, copy, devTools] {
+                    if (devTools) {
+                        forwardDevToolsOsrEvent(copy.get());
+                    } else {
+                        forwardOsrEvent(copy.get());
+                    }
+                });
+                return true;
+            }
             switch (event->type()) {
             case QEvent::KeyPress:
             case QEvent::KeyRelease:
@@ -3620,7 +3892,10 @@ namespace eden::engine::cef {
                                     (key->key() == Qt::Key_Insert && modifiers == Qt::ShiftModifier));
                 if (paste) {
                     if (event->type() == QEvent::KeyPress) {
-                        pasteFromShellClipboard(currentBrowser);
+                        pasteFromShellClipboard(
+                            currentBrowser,
+                            key->key() == Qt::Key_V && modifiers.testFlag(Qt::ShiftModifier)
+                        );
                     }
                     return true;
                 }
@@ -3665,6 +3940,10 @@ namespace eden::engine::cef {
         }
 
         CefEngineView *q;
+        QString pendingPaste;
+        QString findText;
+        bool findCaseSensitive = false;
+        std::deque<std::function<void()>> pasteInput;
         QPointer<CefProfile> profile;
         bool osr = false;
         QPointer<QQuickItem> viewport;
@@ -3686,6 +3965,8 @@ namespace eden::engine::cef {
         CefRefPtr<CefBrowser> devToolsBrowser;
         std::optional<bool> devToolsBrowserVisible;
         std::shared_ptr<CefDevToolsProtocolSession> devToolsProtocolSession;
+        std::optional<QPointF> pendingInspectPosition;
+        QMetaObject::Connection devToolsThemeConnection;
         DevToolsSocketServer::Session devToolsSocketSession;
         QUrl pendingUrl = QUrl("about:blank");
         QUrl url;
@@ -3781,6 +4062,7 @@ namespace eden::engine::cef {
         if (m_closed.load(std::memory_order_acquire) || message.isEmpty()) {
             return;
         }
+        const bool frontendBecameReady = !m_frontendReady && message.contains("\"Overlay.enable\"");
         const std::shared_ptr<CefDevToolsProtocolSession> self = shared_from_this();
         postToCefUi([self, message = std::move(message)] {
             if (!self->m_closed.load(std::memory_order_acquire) && self->m_browser) {
@@ -3790,11 +4072,48 @@ namespace eden::engine::cef {
                 );
             }
         });
+        if (frontendBecameReady) {
+            m_frontendReady = true;
+            if (m_pendingInspect) {
+                requestInspectedNode(*std::exchange(m_pendingInspect, std::nullopt));
+            }
+        }
+    }
+
+    void CefDevToolsProtocolSession::inspectAt(const QPointF &position) {
+        if (m_frontendReady) {
+            requestInspectedNode(position);
+        } else {
+            m_pendingInspect = position;
+        }
+    }
+
+    void CefDevToolsProtocolSession::requestInspectedNode(const QPointF &position) {
+        const int id = nextDevToolsMessageId();
+        m_inspectMessageId.store(id, std::memory_order_release);
+        sendToInspected(
+            QByteArray("{\"id\":") + QByteArray::number(id) +
+            ",\"method\":\"DOM.getNodeForLocation\",\"params\":{\"x\":" + QByteArray::number(qRound(position.x())) +
+            ",\"y\":" + QByteArray::number(qRound(position.y())) +
+            ",\"includeUserAgentShadowDOM\":true,\"ignorePointerEventsNone\":true}}"
+        );
     }
 
     void CefDevToolsProtocolSession::deliverToFrontend(QByteArray message) {
         if (m_closed.load(std::memory_order_acquire)) {
             return;
+        }
+        const int inspectId = m_inspectMessageId.load(std::memory_order_acquire);
+        if (inspectId != 0 && message.size() < 1024 &&
+            message.contains(QByteArray("\"id\":") + QByteArray::number(inspectId))) {
+            m_inspectMessageId.store(0, std::memory_order_release);
+            const QJsonValue node =
+                QJsonDocument::fromJson(message).object().value("result").toObject().value("backendNodeId");
+            if (!node.isDouble()) {
+                return;
+            }
+            message = QByteArray("{\"method\":\"Overlay.inspectNodeRequested\",\"params\":{\"backendNodeId\":") +
+                      QByteArray::number(node.toInt()) + "}}";
         }
         const QString token = m_token;
         CefUiBridge::runOnUiThread([token, message = std::move(message)]() mutable {
@@ -3897,7 +4216,10 @@ namespace eden::engine::cef {
             keyCode -= 'a' - 'A';
         }
         if (keyCode == 'V') {
-            dispatch([browser](CefEngineView::Private &state) { state.pasteFromShellClipboard(browser); });
+            const bool plainText = event.modifiers & EVENTFLAG_SHIFT_DOWN;
+            dispatch([browser, plainText](CefEngineView::Private &state) {
+                state.pasteFromShellClipboard(browser, plainText);
+            });
         } else if (keyCode == 'X') {
             const QString selectedText = m_selectedText;
             if (!selectedText.isEmpty()) {
@@ -3947,6 +4269,40 @@ namespace eden::engine::cef {
                 {"enabled", model->IsEnabledAt(index)},
                 {"checked", model->IsCheckedAt(index)}
             };
+            int key = 0;
+            bool shift = false;
+            bool control = false;
+            bool alt = false;
+            if (model->GetAcceleratorAt(index, key, shift, control, alt)) {
+                Qt::KeyboardModifiers modifiers;
+                if (shift) {
+                    modifiers |= Qt::ShiftModifier;
+                }
+                if (control) {
+                    modifiers |= Qt::ControlModifier;
+                }
+                if (alt) {
+                    modifiers |= Qt::AltModifier;
+                }
+                if (key >= 112 && key <= 135) {
+                    key = Qt::Key_F1 + key - 112;
+                }
+                action.insert(
+                    "shortcut",
+                    QKeySequence(QKeyCombination(modifiers, Qt::Key(key))).toString(QKeySequence::NativeText)
+                );
+            } else {
+                static const QHash<int, QString> commands{
+                    {MENU_ID_UNDO, "undo"},
+                    {MENU_ID_REDO, "redo"},
+                    {MENU_ID_CUT, "cut"},
+                    {MENU_ID_COPY, "copy"},
+                    {MENU_ID_PASTE, "paste"},
+                    {MENU_ID_PASTE_MATCH_STYLE, "paste_plain"},
+                    {MENU_ID_SELECT_ALL, "select_all"}
+                };
+                action.insert("shortcut", core::ShortcutRegistry::shortcutText(commands.value(commandId)));
+            }
             if (type == MENUITEMTYPE_SUBMENU) {
                 const QVariantList children = contextMenuActions(model->GetSubMenuAt(index));
                 if (children.isEmpty()) {
@@ -3989,7 +4345,16 @@ namespace eden::engine::cef {
             );
         };
         const auto appendTextAction = [&textActions](const QString &id, const QString &title, const QString &icon) {
-            textActions.append(QVariantMap{{"id", id}, {"title", title}, {"icon", icon}, {"enabled", true}});
+            const QString command = id.sliced(QStringLiteral("devtools:text-").size());
+            textActions.append(
+                QVariantMap{
+                    {"id", id},
+                    {"title", title},
+                    {"icon", icon},
+                    {"enabled", true},
+                    {"shortcut", core::ShortcutRegistry::shortcutText(command == "select-all" ? "select_all" : command)}
+                }
+            );
         };
         const auto editFlags = params->GetEditStateFlags();
         if (params->IsEditable() && (editFlags & CM_EDITFLAG_CAN_CUT) && !hasCommand(MENU_ID_CUT)) {
@@ -4045,8 +4410,12 @@ namespace eden::engine::cef {
             if (!selectedText.isEmpty()) {
                 CefUiBridge::runOnUiThread([selectedText] { setMirroredClipboardText(selectedText); });
             }
-            if (command == "devtools:text-cut" && focusedFrame) {
-                focusedFrame->Cut();
+            if (focusedFrame) {
+                if (command == "devtools:text-cut") {
+                    focusedFrame->Cut();
+                } else {
+                    focusedFrame->Copy();
+                }
             }
             return;
         }
@@ -4071,7 +4440,9 @@ namespace eden::engine::cef {
         }
         if (commandId == MENU_ID_PASTE || commandId == MENU_ID_PASTE_MATCH_STYLE) {
             callback->Cancel();
-            dispatch([browser](CefEngineView::Private &state) { state.pasteFromShellClipboard(browser); });
+            dispatch([browser, commandId](CefEngineView::Private &state) {
+                state.pasteFromShellClipboard(browser, commandId == MENU_ID_PASTE_MATCH_STYLE);
+            });
             return;
         }
         callback->Continue(commandId, EVENTFLAG_NONE);
@@ -4173,6 +4544,12 @@ namespace eden::engine::cef {
             }
             return true;
         }
+        if (message && sourceProcess == PID_RENDERER && message->GetName() == "eden_native_paste_done" &&
+            message->GetArgumentList()->GetSize() == 1 && message->GetArgumentList()->GetType(0) == VTYPE_STRING) {
+            const QString token = QString::fromStdString(message->GetArgumentList()->GetString(0).ToString());
+            dispatch([token](CefEngineView::Private &state) { state.finishPaste(token); });
+            return true;
+        }
         return handleClipboardMessage(sourceProcess, message);
     }
 
@@ -4190,6 +4567,7 @@ namespace eden::engine::cef {
         if (!frame || !frame->IsMain()) {
             return;
         }
+        dispatch([](CefEngineView::Private &state) { state.devToolsFrontendLoaded(); });
         frame->ExecuteJavaScript(
             "(function(){try{"
             "if(!window.InspectorFrontendHost||!InspectorFrontendHost.getPreferences){return;}"
@@ -4825,7 +5203,8 @@ namespace eden::engine::cef {
             keyCode -= 'a' - 'A';
         }
         if (keyCode == 'V') {
-            dispatch([](CefEngineView::Private &state) { state.pasteFromShellClipboard(); });
+            const bool plainText = event.modifiers & EVENTFLAG_SHIFT_DOWN;
+            dispatch([plainText](CefEngineView::Private &state) { state.pasteFromShellClipboard(nullptr, plainText); });
         } else if (keyCode == 'X') {
             focusedFrame->Cut();
         } else if (keyCode == 'C') {
@@ -5099,6 +5478,12 @@ namespace eden::engine::cef {
                     dispatch([clientId](CefEngineView::Private &state) { state.updateRendererClientId(clientId); });
                 }
             }
+            return true;
+        }
+        if (message && sourceProcess == PID_RENDERER && message->GetName() == "eden_native_paste_done" &&
+            message->GetArgumentList()->GetSize() == 1 && message->GetArgumentList()->GetType(0) == VTYPE_STRING) {
+            const QString token = QString::fromStdString(message->GetArgumentList()->GetString(0).ToString());
+            dispatch([token](CefEngineView::Private &state) { state.finishPaste(token); });
             return true;
         }
         if (handleClipboardMessage(sourceProcess, message)) {
@@ -6032,61 +6417,63 @@ namespace eden::engine::cef {
     }
 
     QString CefEngineClient::shortcutFor(const CefKeyEvent &event) {
-        const bool control = event.modifiers & EVENTFLAG_CONTROL_DOWN;
-        const bool shift = event.modifiers & EVENTFLAG_SHIFT_DOWN;
-        const bool alt = event.modifiers & EVENTFLAG_ALT_DOWN;
-        if (alt) {
-            return {};
+        Qt::KeyboardModifiers modifiers;
+        if (event.modifiers & EVENTFLAG_CONTROL_DOWN) {
+            modifiers |= Qt::ControlModifier;
         }
-        if (!control && !shift && event.windows_key_code == 122) {
-            return "fullscreen";
+        if (event.modifiers & EVENTFLAG_SHIFT_DOWN) {
+            modifiers |= Qt::ShiftModifier;
         }
-        if (!control && !shift && event.windows_key_code == 123) {
-            return "devtools";
+        if (event.modifiers & EVENTFLAG_ALT_DOWN) {
+            modifiers |= Qt::AltModifier;
         }
-        if (!control) {
-            return {};
+        if (event.modifiers & EVENTFLAG_COMMAND_DOWN) {
+            modifiers |= Qt::MetaModifier;
         }
-        int keyCode = event.windows_key_code;
-        if (keyCode >= 'a' && keyCode <= 'z') {
-            keyCode -= 'a' - 'A';
+        int key = event.windows_key_code;
+        if (key >= 112 && key <= 135) {
+            key = Qt::Key_F1 + key - 112;
+        } else {
+            switch (key) {
+            case 9:
+                key = Qt::Key_Tab;
+                break;
+            case 33:
+                key = Qt::Key_PageUp;
+                break;
+            case 34:
+                key = Qt::Key_PageDown;
+                break;
+            case 36:
+                key = Qt::Key_Home;
+                break;
+            case 37:
+                key = Qt::Key_Left;
+                break;
+            case 39:
+                key = Qt::Key_Right;
+                break;
+            case 107:
+                key = Qt::Key_Plus;
+                break;
+            case 109:
+                key = Qt::Key_Minus;
+                break;
+            case 187:
+                key = modifiers.testFlag(Qt::ShiftModifier) ? Qt::Key_Plus : Qt::Key_Equal;
+                break;
+            case 188:
+                key = Qt::Key_Comma;
+                break;
+            case 189:
+                key = Qt::Key_Minus;
+                break;
+            default:
+                break;
+            }
         }
-        if (keyCode == 9) {
-            return shift ? "previous_tab" : "next_tab";
-        }
-        if (shift && keyCode == 'T') {
-            return "restore_tab";
-        }
-        if (shift && keyCode == 'P') {
-            return "private_window";
-        }
-        if (shift) {
-            return {};
-        }
-        switch (keyCode) {
-        case 'T':
-            return "new_tab";
-        case 'W':
-            return "close_tab";
-        case 'L':
-            return "focus_omnibox";
-        case 'D':
-            return "bookmark";
-        case 'F':
-            return "find";
-        case 'K':
-            return "command_palette";
-        case 'H':
-            return "history";
-        case 'J':
-            return "downloads";
-        case 'Q':
-            return "quit";
-        case 188:
-            return "settings";
-        default:
-            return {};
-        }
+        const QKeyEvent translated(QEvent::KeyPress, key, modifiers);
+        return core::ShortcutRegistry::commandFor(&translated);
     }
 
     QStringList CefEngineClient::permissionNames(uint32_t permissions, bool media) {
@@ -6557,7 +6944,7 @@ namespace eden::engine::cef {
         if (!d->browser || offset == 0) {
             return;
         }
-        const int index = d->historyCurrentIndex + offset;
+        const qint64 index = qint64(d->historyCurrentIndex) + offset;
         if (d->historyCurrentIndex >= 0 && index >= 0 && index < d->historyEntries.size()) {
             const qint64 entryId = d->historyEntries.at(index).toMap().value("entryId").toLongLong();
             const CefRefPtr<CefBrowser> currentBrowser = d->browser;
@@ -6569,17 +6956,43 @@ namespace eden::engine::cef {
             });
             return;
         }
-        d->browser->GetMainFrame()->ExecuteJavaScript(
-            QString("history.go(%1)").arg(offset).toStdString(),
-            d->url.toString().toStdString(),
-            0
-        );
+        const auto browser = d->browser;
+        postToCefUi([browser, offset] {
+            CefNavigationHistoryObserver::capture(browser, [browser, offset](int current, const QVariantList &entries) {
+                const qint64 target = qint64(current) + offset;
+                if (current < 0 || target < 0 || target >= entries.size()) {
+                    return;
+                }
+                const int entryId = entries.at(target).toMap().value("entryId").toInt();
+                postToCefUi([browser, entryId] {
+                    auto parameters = CefDictionaryValue::Create();
+                    parameters->SetInt("entryId", entryId);
+                    browser->GetHost()
+                        ->ExecuteDevToolsMethod(nextDevToolsMessageId(), "Page.navigateToHistoryEntry", parameters);
+                });
+            });
+        });
     }
 
     void CefEngineView::reload() {
         if (d->browser) {
             d->browser->Reload();
         }
+    }
+
+    void CefEngineView::reloadBypassingCache() {
+        if (d->browser) {
+            d->browser->ReloadIgnoreCache();
+        }
+    }
+
+    void CefEngineView::applyZoomFactor(qreal factor) {
+        if (!d->browser) {
+            return;
+        }
+        const double level = std::log(factor) / std::log(1.2);
+        const CefRefPtr<CefBrowser> currentBrowser = d->browser;
+        postToCefUi([currentBrowser, level] { currentBrowser->GetHost()->SetZoomLevel(level); });
     }
 
     void CefEngineView::stop() {
@@ -6682,6 +7095,8 @@ namespace eden::engine::cef {
                 "field.dispatchEvent(new Event('change',{bubbles:true}));};"
                 "Object.keys(aliases).forEach(function(key){var names=aliases[key].map(normalize);"
                 "var field=Array.from(document.querySelectorAll('input,textarea')).find(function(item){"
+                "if(item.disabled||item.readOnly||item.type==='hidden'||!item.getClientRects().length||"
+                "getComputedStyle(item).visibility!=='visible')return false;"
                 "var candidates=[item.autocomplete,item.name,item.id,item.placeholder].map(normalize);"
                 "return candidates.some(function(candidate){return names.some(function(name){return "
                 "candidate.indexOf(name)>=0;});});});set(field,values[key]);});})(%1)"
@@ -6741,11 +7156,18 @@ namespace eden::engine::cef {
         if (!d->browser) {
             return;
         }
-        if (text.isEmpty()) {
-            d->browser->GetHost()->StopFinding(true);
-            return;
-        }
-        d->browser->GetHost()->Find(text.toStdString(), !(flags & FindBackward), flags & FindCaseSensitive, true);
+        const bool caseSensitive = flags & FindCaseSensitive;
+        const bool next = text == d->findText && caseSensitive == d->findCaseSensitive;
+        d->findText = text;
+        d->findCaseSensitive = caseSensitive;
+        const auto browser = d->browser;
+        postToCefUi([browser, text, flags, caseSensitive, next] {
+            if (text.isEmpty()) {
+                browser->GetHost()->StopFinding(true);
+            } else {
+                browser->GetHost()->Find(text.toStdString(), !(flags & FindBackward), caseSensitive, next);
+            }
+        });
     }
 
     void CefEngineView::attach(QQuickItem *viewport) {
@@ -6754,6 +7176,10 @@ namespace eden::engine::cef {
 
     void CefEngineView::releaseFocus() {
         d->focusShell();
+        d->devToolsPageFocused = false;
+        if (d->devToolsBrowser) {
+            d->devToolsBrowser->GetHost()->SetFocus(false);
+        }
     }
 
     void CefEngineView::setMuted(bool muted) {
@@ -6783,6 +7209,8 @@ namespace eden::engine::cef {
             if (!devToolsOpen()) {
                 openDevTools();
             }
+            d->pendingInspectPosition = QPointF(d->lastContextMenu.position) / zoomFactor();
+            d->inspectPendingPosition();
             return;
         }
         if (command == "paste") {
@@ -6838,7 +7266,7 @@ namespace eden::engine::cef {
         std::vector<CefString> paths;
         paths.reserve(static_cast<std::size_t>(files.size()));
         for (const QUrl &file : files) {
-            const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+            const QString path = file.isLocalFile() ? file.toLocalFile() : QString();
             if (!path.isEmpty()) {
                 paths.emplace_back(path.toStdString());
             }
@@ -6857,10 +7285,29 @@ namespace eden::engine::cef {
 
     bool CefEngineView::eventFilter(QObject *watched, QEvent *event) {
         if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
-            if (d->acceptsDevToolsOsrKeyboardInput()) {
+            const auto *item = qobject_cast<QQuickItem *>(watched);
+            const auto matchesWindow = [watched, item](QQuickWindow *window) {
+                return window && (watched == window || (item && item->window() == window));
+            };
+            const bool pageTarget = matchesWindow(d->osrEventWindow) && d->acceptsOsrKeyboardInput();
+            const bool toolsTarget = matchesWindow(d->devToolsEventWindow) && d->acceptsDevToolsOsrKeyboardInput();
+            if (!pageTarget && !toolsTarget) {
+                return EngineView::eventFilter(watched, event);
+            }
+            if (toolsTarget || pageTarget) {
+                const QString command = core::ShortcutRegistry::commandFor(static_cast<QKeyEvent *>(event));
+                if (!command.isEmpty()) {
+                    event->accept();
+                    if (event->type() == QEvent::KeyPress) {
+                        d->requestShortcut(command);
+                    }
+                    return true;
+                }
+            }
+            if (toolsTarget) {
                 return d->forwardDevToolsOsrEvent(event);
             }
-            if (d->acceptsOsrKeyboardInput()) {
+            if (pageTarget) {
                 return d->forwardOsrEvent(event);
             }
         }

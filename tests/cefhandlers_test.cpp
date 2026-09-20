@@ -47,6 +47,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLibrary>
+#include <QMimeData>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -189,14 +190,17 @@ addEventListener('resize',report);report();
 <div id="editor" contenteditable style="position:absolute;left:10px;top:80px;width:700px;height:200px"></div>
 <script>
 let reports = Promise.resolve();
+let paste=null;
 function report(){
-const body=JSON.stringify({page:location.pathname,value:editor.textContent,cursor:getSelection().anchorOffset});
+const body=JSON.stringify({page:location.pathname,value:editor.textContent,cursor:getSelection().anchorOffset,paste});
 reports=reports.then(()=>fetch('/ime-state',{method:'POST',body}));
 }
 function place(offset){
-editor.textContent='Before after';editor.focus();getSelection().setPosition(editor.firstChild,offset);report();
+editor.innerHTML='<p><span>Before after</span></p>';editor.focus();
+getSelection().setPosition(editor.querySelector('span').firstChild,offset);report();
 }
 document.addEventListener('input',report);
+document.addEventListener('paste',e=>{paste={trusted:e.isTrusted,types:Array.from(e.clipboardData.types),text:e.clipboardData.getData('text/plain'),html:e.clipboardData.getData('text/html')};report();});
 document.addEventListener('keyup',report);
 document.addEventListener('selectionchange',report);
 report();
@@ -767,15 +771,21 @@ class CefNavigateFocusedFrame final : public CefTask {
 void CefHandlersTest::richTextPasteOrdering_data() {
     QTest::addColumn<bool>("devTools");
     QTest::addColumn<bool>("embedded");
-    QTest::newRow("page") << false << false;
-    QTest::newRow("iframe") << false << true;
-    QTest::newRow("devtools") << true << false;
-    QTest::newRow("devtools-iframe") << true << true;
+    QTest::addColumn<bool>("rich");
+    QTest::newRow("page") << false << false << false;
+    QTest::newRow("iframe") << false << true << false;
+    QTest::newRow("devtools") << true << false << false;
+    QTest::newRow("devtools-iframe") << true << true << false;
+    QTest::newRow("page-rich") << false << false << true;
+    QTest::newRow("iframe-rich") << false << true << true;
+    QTest::newRow("devtools-rich") << true << false << true;
+    QTest::newRow("devtools-iframe-rich") << true << true << true;
 }
 
 void CefHandlersTest::richTextPasteOrdering() {
     QFETCH(bool, devTools);
     QFETCH(bool, embedded);
+    QFETCH(bool, rich);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::CefRuntime::instance().browserClientCount(), std::size_t(0), 10000);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
     eden::engine::EngineProfileParameters parameters;
@@ -823,7 +833,12 @@ void CefHandlersTest::richTextPasteOrdering() {
     QTRY_VERIFY_WITH_TIMEOUT(!viewport.childItems().isEmpty(), 5000);
     QQuickItem *item = viewport.childItems().constFirst();
     const QString link = "https://example.test/task";
-    QGuiApplication::clipboard()->setText(link);
+    auto *mime = new QMimeData;
+    mime->setText(link);
+    if (rich) {
+        mime->setHtml(QString("<b>%1</b>").arg(link));
+    }
+    QGuiApplication::clipboard()->setMimeData(mime);
     const auto key = [&](QEvent::Type type, int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         QKeyEvent event(type, code, modifiers);
         QCoreApplication::sendEvent(item, &event);
@@ -838,7 +853,16 @@ void CefHandlersTest::richTextPasteOrdering() {
         key(QEvent::KeyRelease, Qt::Key_Home);
         QString expected = "Before after";
         expected.insert(offset, link);
-        QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("value").toString(), expected, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            m_server.inputState().value("value").toString().replace(QChar(0xa0), QChar(' ')),
+            expected,
+            5000
+        );
+        QVERIFY(m_server.inputState().value("paste").toObject().value("trusted").toBool());
+        QCOMPARE(m_server.inputState().value("paste").toObject().value("text").toString(), link);
+        if (rich) {
+            QVERIFY(m_server.inputState().value("paste").toObject().value("html").toString().contains(link));
+        }
         QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("cursor").toInt(), 0, 5000);
     }
 }
@@ -3654,6 +3678,7 @@ void CefHandlersTest::shellDevToolsSuite() {
     eden::test::ProfileHarness harness;
     QVERIFY(harness.create(&qmlEngine));
     controller->initialize(harness.context, true, "cef", true);
+    controller->navigate(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
     eden::engine::EngineView *view = nullptr;
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&] {
@@ -3674,20 +3699,85 @@ void CefHandlersTest::shellDevToolsSuite() {
         if (shortcutId == "devtools") {
             QCOMPARE(
                 controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
-                QString("F12")
+                QString("Ctrl+Shift+I")
             );
             devToolsShortcutFound = true;
         } else if (shortcutId == "command_palette") {
             QCOMPARE(
                 controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
-                QString("Ctrl+K")
+                QString("Ctrl+Shift+P")
             );
             commandPaletteShortcutFound = true;
         }
     }
     QVERIFY(devToolsShortcutFound);
     QVERIFY(commandPaletteShortcutFound);
-    controller->shortcuts()->execute("devtools");
+    auto *tabList = window->findChild<QQuickItem *>("tabDropView");
+    QVERIFY(tabList);
+    auto *tabItem = tabList->property("currentItem").value<QQuickItem *>();
+    QVERIFY(tabItem);
+    QTest::mouseClick(
+        window,
+        Qt::RightButton,
+        {},
+        tabItem->mapToScene(QPointF(tabItem->width() / 2, tabItem->height() / 2)).toPoint()
+    );
+    const auto visibleText = [window](const QString &text) {
+        QQuickItem *found = nullptr;
+        std::function<void(QQuickItem *)> visit = [&](QQuickItem *item) {
+            if (item->isVisible() && item->property("text").toString() == text) {
+                found = item;
+            }
+            for (auto *child : item->childItems()) {
+                visit(child);
+            }
+        };
+        visit(window->contentItem());
+        return found;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText("Ctrl+T"), 5000);
+    QVERIFY(visibleText("Ctrl+R"));
+    QVERIFY(visibleText("Ctrl+W"));
+    QVERIFY(visibleText("New tab"));
+    QVERIFY(visibleText("Ctrl+T")->mapToScene(QPointF()).x() > visibleText("New tab")->mapToScene(QPointF()).x());
+    const QString menuScreenshot = qEnvironmentVariable("EDEN_MENU_SCREENSHOT");
+    if (!menuScreenshot.isEmpty()) {
+        QVERIFY(window->grabWindow().save(menuScreenshot));
+    }
+    QTest::keyClick(window, Qt::Key_Escape);
+    window->requestActivate();
+    QTRY_VERIFY(window->isActive());
+    for (const auto modifiers :
+         {Qt::KeyboardModifiers(Qt::ControlModifier), Qt::KeyboardModifiers(Qt::ControlModifier | Qt::ShiftModifier)}) {
+        QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+        QSignalSpy reloaded(view, &eden::engine::EngineView::loadingChanged);
+        QTest::keyClick(window, Qt::Key_R, modifiers);
+        QTRY_VERIFY_WITH_TIMEOUT(!reloaded.isEmpty(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!view->isLoading(), 10000);
+    }
+    const auto beforeNewWindow = QGuiApplication::topLevelWindows();
+    QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+    QTest::keyClick(window, Qt::Key_N, Qt::ControlModifier);
+    QPointer<QQuickWindow> createdWindow;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            for (auto *candidate : QGuiApplication::topLevelWindows()) {
+                auto *quick = qobject_cast<QQuickWindow *>(candidate);
+                if (quick && !beforeNewWindow.contains(candidate) &&
+                    quick->findChild<eden::core::WindowController *>("windowController")) {
+                    createdWindow = quick;
+                    return true;
+                }
+            }
+            return false;
+        })(),
+        10000
+    );
+    createdWindow->close();
+    window->requestActivate();
+    QTRY_VERIFY(window->isActive());
+    QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
     QTRY_VERIFY_WITH_TIMEOUT(view->devToolsOpen(), 10000);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
     QImage dockedRight;

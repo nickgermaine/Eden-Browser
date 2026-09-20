@@ -48,7 +48,7 @@ class FakeEngineView : public eden::engine::EngineView {
         return 100;
     }
     bool isLoading() const override {
-        return false;
+        return m_loading;
     }
     bool canGoBack() const override {
         return false;
@@ -112,6 +112,10 @@ class FakeEngineView : public eden::engine::EngineView {
         m_favicon = favicon;
         emit faviconUrlChanged();
     }
+    void setLoading(bool loading) {
+        m_loading = loading;
+        emit loadingChanged();
+    }
     void requestNewView(const QUrl &url, Disposition disposition) {
         FakeNewViewRequest request(url, disposition);
         emit newViewRequested(&request);
@@ -137,6 +141,7 @@ class FakeEngineView : public eden::engine::EngineView {
     QString m_title;
     QUrl m_favicon;
     bool m_muted = false;
+    bool m_loading = false;
     QString m_name;
     Capabilities m_capabilities;
     int m_scroll = 0;
@@ -185,6 +190,8 @@ class TabModelTest final : public QObject {
     void undoCloseRestoresIntoMatchingRegion();
     void faviconChangesReachTheModel();
     void activityIndicatorsFollowCaptureAndMute();
+    void transientViewChangesDoNotDirtySession();
+    void persistentViewChangesDirtySession();
     void internalPageDoesNotCreateEngine();
     void urlCredentialsAreNotExposed();
     void newViewRequestCrossesTheEngineSeam();
@@ -204,6 +211,38 @@ class TabModelTest final : public QObject {
 
 static eden::core::TabModel createModel() {
     return eden::core::TabModel([] { return std::make_unique<FakeEngineView>(); }, false);
+}
+
+void TabModelTest::transientViewChangesDoNotDirtySession() {
+    auto model = createModel();
+    model.addTab(QUrl("https://example.com"));
+    auto *view = static_cast<FakeEngineView *>(model.engineViewAt(0));
+    QSignalSpy operations(&model, &eden::core::TabModel::operationOccurred);
+    QSignalSpy changes(&model, &QAbstractItemModel::dataChanged);
+    for (int index = 0; index < 1000; ++index) {
+        emit view->loadProgressChanged();
+    }
+    QCOMPARE(changes.size(), 1000);
+    emit view->audibleChanged();
+    emit view->activityIndicatorsChanged();
+    emit view->captureChanged();
+    view->setLoading(true);
+    QVERIFY(changes.size() >= 1004);
+    QCOMPARE(operations.size(), 0);
+    view->setLoading(false);
+    QCOMPARE(operations.size(), 1);
+}
+
+void TabModelTest::persistentViewChangesDirtySession() {
+    auto model = createModel();
+    model.addTab(QUrl("https://example.com"));
+    auto *view = static_cast<FakeEngineView *>(model.engineViewAt(0));
+    QSignalSpy operations(&model, &eden::core::TabModel::operationOccurred);
+    emit view->urlChanged();
+    emit view->titleChanged();
+    view->setFavicon(QUrl("https://example.com/icon.png"));
+    view->setMuted(true);
+    QCOMPARE(operations.size(), 4);
 }
 
 void TabModelTest::addUsesSingleInsertRange() {

@@ -54,6 +54,7 @@ namespace eden::engine {
         void renderingFailed(const QString &message);
         void shortcutRequested(const QString &command);
         void nativeClosed();
+        void inspectorCommand(const QString &command);
 
       protected:
         QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
@@ -81,6 +82,7 @@ namespace eden::engine {
         pointerMotion(const QPointF &position, unsigned long time, Qt::KeyboardModifiers modifiers, WPEEventType type);
         void keyEvent(QKeyEvent *event, bool pressed);
         void synchronizeGeometry();
+        void synchronizeActivation();
         void reportRenderingFailure(const QString &message);
         WPEView *m_view;
         QPointer<QQuickItem> m_viewport;

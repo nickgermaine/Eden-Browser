@@ -887,7 +887,10 @@ namespace eden::core {
             tab.state.insert("muted", view->isMuted());
         }
         emit dataChanged(index(row), index(row), roles);
-        emit operationOccurred();
+        if (roles.contains(UrlRole) || roles.contains(TitleRole) || roles.contains(FaviconRole) ||
+            roles.contains(MutedRole) || (roles.contains(LoadingRole) && !view->isLoading())) {
+            emit operationOccurred();
+        }
     }
 
 }

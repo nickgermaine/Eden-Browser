@@ -1,4 +1,5 @@
 #include "engine/wpe/wpesurface.h"
+#include "core/settings/shortcutregistry.h"
 #include "engine/wpe/wperuntime.h"
 
 #include <EGL/egl.h>
@@ -411,7 +412,7 @@ namespace eden::engine {
 
     WpeSurface::WpeSurface(WPEView *view)
         : m_view(WPE_VIEW(g_object_ref(view))),
-          m_acknowledgeOnImport(qEnvironmentVariable("EDEN_WPE_FRAME_ACK") == "import") {
+          m_acknowledgeOnImport(qEnvironmentVariable("EDEN_WPE_FRAME_ACK") != "swap") {
         setFlag(ItemHasContents);
         setFlag(ItemAcceptsInputMethod);
         setAcceptedMouseButtons(Qt::AllButtons);
@@ -429,6 +430,16 @@ namespace eden::engine {
             m_view,
             "resized",
             G_CALLBACK(+[](WPEView *, WpeSurface *surface) { surface->synchronizeGeometry(); }),
+            this
+        );
+        g_signal_connect(
+            m_view,
+            "notify::toplevel",
+            G_CALLBACK(+[](WPEView *, GParamSpec *, WpeSurface *surface) {
+                surface->synchronizeGeometry();
+                surface->synchronizeActivation();
+                surface->synchronizeVisibility();
+            }),
             this
         );
         connect(this, &QQuickItem::visibleChanged, this, &WpeSurface::synchronizeVisibility);
@@ -481,6 +492,15 @@ namespace eden::engine {
         }
         wpe_view_resized(m_view, qMax(1, int(width())), qMax(1, int(height())));
         WpeRuntime::synchronizeScreen(m_view, window(), wpe_view_get_visible(m_view));
+    }
+
+    void WpeSurface::synchronizeActivation() {
+        if (auto *toplevel = wpe_view_get_toplevel(m_view)) {
+            auto state = unsigned(wpe_toplevel_get_state(toplevel));
+            state = m_window && m_window->isActive() ? state | WPE_TOPLEVEL_STATE_ACTIVE
+                                                     : state & ~WPE_TOPLEVEL_STATE_ACTIVE;
+            wpe_toplevel_state_changed(toplevel, WPEToplevelState(state));
+        }
     }
 
     void WpeSurface::synchronizeVisibility() {
@@ -587,14 +607,9 @@ namespace eden::engine {
                 m_windowConnections.append(
                     connect(m_window, &QWindow::visibilityChanged, this, &WpeSurface::synchronizeVisibility)
                 );
-                m_windowConnections.append(connect(m_window, &QWindow::activeChanged, this, [this] {
-                    if (auto *toplevel = wpe_view_get_toplevel(m_view)) {
-                        auto state = unsigned(wpe_toplevel_get_state(toplevel));
-                        state = m_window && m_window->isActive() ? state | WPE_TOPLEVEL_STATE_ACTIVE
-                                                                 : state & ~WPE_TOPLEVEL_STATE_ACTIVE;
-                        wpe_toplevel_state_changed(toplevel, WPEToplevelState(state));
-                    }
-                }));
+                m_windowConnections.append(
+                    connect(m_window, &QWindow::activeChanged, this, &WpeSurface::synchronizeActivation)
+                );
                 m_windowConnections.append(
                     connect(m_window, &QWindow::screenChanged, this, &WpeSurface::synchronizeGeometry)
                 );
@@ -736,6 +751,14 @@ namespace eden::engine {
     }
 
     void WpeSurface::keyEvent(QKeyEvent *event, bool pressed) {
+        const QString command = core::ShortcutRegistry::commandFor(event);
+        if (!command.isEmpty()) {
+            event->accept();
+            if (pressed) {
+                emit shortcutRequested(command);
+            }
+            return;
+        }
         if (event->text().toUcs4().size() > 1 &&
             !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) && m_input &&
             m_inputFocused) {

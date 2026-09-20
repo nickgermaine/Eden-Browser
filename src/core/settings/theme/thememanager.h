@@ -202,6 +202,7 @@ namespace eden::core {
         Q_INVOKABLE bool beginEditing(const QString &id = {});
         Q_INVOKABLE void cancelEditing();
         Q_INVOKABLE bool revertEditing();
+        Q_INVOKABLE QString cssVariables() const;
         Q_INVOKABLE QVariant editorValue(const QString &path) const;
         Q_INVOKABLE bool setEditorToken(const QString &path, const QVariant &value);
         Q_INVOKABLE bool setEditorColor(const QString &path, const QColor &color);

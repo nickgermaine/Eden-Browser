@@ -16,9 +16,11 @@
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QLibrary>
+#include <QMimeData>
 #include <QQuickWindow>
 #include <QScopeGuard>
 #include <QScreen>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QStyleHints>
@@ -26,6 +28,7 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 
 using namespace eden::engine;
 
@@ -433,6 +436,11 @@ class WpeBackendTest final : public QObject {
                     .arg(offset)
             );
             QGuiApplication::clipboard()->setText("https://example.test/link");
+            evaluate(
+                view,
+                "document.addEventListener('paste',e=>{window.pasteTrusted=e.isTrusted;window.pasteText=e."
+                "clipboardData.getData('text/plain')},{once:true})"
+            );
             QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
             QTest::keyClick(&window, Qt::Key_Home);
             const QString expected = QString("Before after").insert(offset, "https://example.test/link");
@@ -441,7 +449,98 @@ class WpeBackendTest final : public QObject {
                 expected,
                 10000
             );
+            QVERIFY(evaluate(view, "window.pasteTrusted").toBool());
+            QCOMPARE(evaluate(view, "window.pasteText").toString(), QString("https://example.test/link"));
         }
+    }
+
+    void browserShortcutsLeaveFocusedEditors() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(700, 500);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("input"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Input"), 15000);
+        QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(30, 25));
+        QSignalSpy shortcuts(&view, &EngineView::shortcutRequested);
+        QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier);
+        QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier | Qt::ShiftModifier);
+        QTest::keyClick(&window, Qt::Key_N, Qt::ControlModifier);
+        QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(shortcuts.size(), 4);
+        QCOMPARE(shortcuts.at(0).first().toString(), QString("reload"));
+        QCOMPARE(shortcuts.at(1).first().toString(), QString("reload_bypass_cache"));
+        QCOMPARE(shortcuts.at(2).first().toString(), QString("new_window"));
+        QCOMPARE(shortcuts.at(3).first().toString(), QString("devtools"));
+        QCOMPARE(evaluate(view, "document.getElementById('text').value").toString(), QString());
+    }
+
+    void pasteHandlersReceiveRichClipboard() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(700, 500);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("editor"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("editor"), 15000);
+        evaluate(
+            view,
+            "document.body.innerHTML='<div id=editor contenteditable "
+            "style=width:600px;height:200px></"
+            "div>';editor.addEventListener('paste',e=>{e.preventDefault();editor.textContent=e.clipboardData.getData('"
+            "text/plain')+'|'+e.clipboardData.getData('text/html')+'|'+e.isTrusted})"
+        );
+        QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(30, 25));
+        auto *mime = new QMimeData;
+        mime->setText("https://example.test/task");
+        mime->setHtml("<b>Task</b>");
+        QGuiApplication::clipboard()->setMimeData(mime);
+        QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            evaluate(
+                view,
+                "(()=>{const parts=editor.textContent.split('|');const html=new "
+                "DOMParser().parseFromString(parts[1]||'', 'text/html');return "
+                "parts[0]+'|'+html.body.textContent+'|'+parts[2]})()"
+            )
+                .toString(),
+            QString("https://example.test/task|Task|true"),
+            10000
+        );
+    }
+
+    void focusedEditorsAlwaysUseAVisibleCaretColor() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        view.load(url("caret-color"));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("caret-color"), 15000);
+        QVERIFY(evaluate(view, R"JS(
+document.body.innerHTML='<div id="editor" contenteditable style="color:rgb(12,34,56);caret-color:transparent!important"><p><span id="nested" style="caret-color:transparent!important">Editable text</span></p></div>';
+const editor=document.getElementById('editor');
+editor.focus();
+getSelection().setPosition(document.getElementById('nested').firstChild,4);
+true
+)JS")
+                    .toBool());
+        QTRY_COMPARE(
+            evaluate(view, "getComputedStyle(document.getElementById('editor')).caretColor").toString(),
+            QString("rgb(12, 34, 56)")
+        );
+        QTRY_COMPARE(
+            evaluate(view, "getComputedStyle(document.getElementById('nested')).caretColor").toString(),
+            QString("rgb(12, 34, 56)")
+        );
+        evaluate(
+            view,
+            "window.caretMutations=0;new "
+            "MutationObserver(records=>window.caretMutations+=records.length).observe(editor,{attributes:true,subtree:"
+            "true});getSelection().setPosition(document.getElementById('nested').firstChild,5)"
+        );
+        QTest::qWait(100);
+        QCOMPARE(evaluate(view, "window.caretMutations").toInt(), 0);
     }
 
     void displayCaptureUsesTemporaryConsent() {
@@ -526,12 +625,20 @@ class WpeBackendTest final : public QObject {
         AutofillTarget target;
         view.requestAutofillTarget([&](AutofillTarget value) { target = std::move(value); });
         QTRY_VERIFY(target.isValid());
+        evaluate(
+            view,
+            "document.body.insertAdjacentHTML('afterbegin','<input id=hidden-email type=hidden value=secret>"
+            "<input id=disabled-email disabled value=disabled><input id=readonly-email readonly value=readonly>');"
+        );
         view.fillForm(target, {{"email", "person@example.test"}});
         QTRY_COMPARE_WITH_TIMEOUT(
             evaluate(view, "document.querySelector('#contact').value").toString(),
             QString("person@example.test"),
             5000
         );
+        QCOMPARE(evaluate(view, "document.getElementById('hidden-email').value").toString(), QString("secret"));
+        QCOMPARE(evaluate(view, "document.getElementById('disabled-email').value").toString(), QString("disabled"));
+        QCOMPARE(evaluate(view, "document.getElementById('readonly-email').value").toString(), QString("readonly"));
     }
 
     void navigationHistoryAndMute() {
@@ -549,6 +656,8 @@ class WpeBackendTest final : public QObject {
         QTRY_VERIFY(!view.isLoading());
         QVERIFY(view.canGoBack());
         QCOMPARE(view.navigationHistory(-1).first().toMap().value("url").toUrl(), url("first"));
+        QCOMPARE(view.navigationHistory(-1).first().toMap().value("id").toInt(), -1);
+        QCOMPARE(view.navigationHistory(-1).first().toMap().value("subtitle").toString(), url("first").toString());
         view.back();
         QTRY_COMPARE_WITH_TIMEOUT(view.url(), url("first"), 15000);
         QTRY_VERIFY(!view.isLoading());
@@ -562,6 +671,170 @@ class WpeBackendTest final : public QObject {
         restored.restoreState(state);
         QTRY_COMPARE_WITH_TIMEOUT(restored.url(), url("second"), 15000);
         QTRY_VERIFY(restored.canGoBack());
+    }
+
+    void subframeLoadingDoesNotChangePageProgress() {
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QSignalSpy progress(&view, &EngineView::loadProgressChanged);
+        view.load(url("main-progress"));
+        QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading() && view.title() == "main-progress", 15000);
+        QVERIFY(!progress.isEmpty());
+        QCOMPARE(view.loadProgress(), 100);
+        progress.clear();
+        QSignalSpy loading(&view, &EngineView::loadingChanged);
+        evaluate(
+            view,
+            "globalThis.frameLoads=0;globalThis.testFrame=document.createElement('iframe');"
+            "testFrame.onload=()=>++frameLoads;document.body.append(testFrame)"
+        );
+        QTRY_COMPARE_WITH_TIMEOUT(evaluate(view, "frameLoads").toInt(), 1, 10000);
+        for (int index = 0; index < 4; ++index) {
+            evaluate(view, QString("testFrame.src='/child-progress-%1'").arg(index));
+            QTRY_COMPARE_WITH_TIMEOUT(evaluate(view, "frameLoads").toInt(), index + 2, 10000);
+        }
+        QVERIFY(loading.isEmpty());
+        QVERIFY(progress.isEmpty());
+        QCOMPARE(view.loadProgress(), 100);
+        view.reload();
+        QTRY_VERIFY_WITH_TIMEOUT(loading.size() >= 2 && !view.isLoading(), 15000);
+        QVERIFY(!progress.isEmpty());
+        QCOMPARE(view.loadProgress(), 100);
+    }
+
+    void frameAcknowledgementDoesNotWaitForSwap_data() {
+        QTest::addColumn<QByteArray>("policy");
+        QTest::addColumn<bool>("acknowledgesBeforeSwap");
+        QTest::newRow("default") << QByteArray() << true;
+        QTest::newRow("swap-control") << QByteArray("swap") << false;
+    }
+
+    void frameAcknowledgementRetainsBufferUntilRelease() {
+        WPEView *native = wpe_view_new(WpeRuntime::display());
+        QVERIFY(native);
+        const quint32 pixel = 0xff20c040;
+        GBytes *bytes = g_bytes_new(&pixel, sizeof(pixel));
+        WPEBuffer *buffer = WPE_BUFFER(
+            wpe_buffer_shm_new(WpeRuntime::display(), 1, 1, WPE_PIXEL_FORMAT_ARGB8888, bytes, sizeof(pixel))
+        );
+        g_bytes_unref(bytes);
+        QVERIFY(buffer);
+        const auto cleanup = qScopeGuard([&] {
+            g_object_unref(buffer);
+            g_object_unref(native);
+        });
+        int acknowledgements = 0;
+        int releases = 0;
+        g_signal_connect(
+            native,
+            "buffer-rendered",
+            G_CALLBACK(+[](WPEView *, WPEBuffer *, int *count) { ++*count; }),
+            &acknowledgements
+        );
+        g_signal_connect(
+            native,
+            "buffer-released",
+            G_CALLBACK(+[](WPEView *, WPEBuffer *, int *count) { ++*count; }),
+            &releases
+        );
+        {
+            WpeFrame frame(native, buffer);
+            frame.rendered();
+            frame.rendered();
+            QCOMPARE(acknowledgements, 1);
+            QCOMPARE(releases, 0);
+        }
+        QCOMPARE(acknowledgements, 1);
+        QCOMPARE(releases, 1);
+        {
+            WpeFrame dropped(native, buffer);
+        }
+        QCOMPARE(acknowledgements, 2);
+        QCOMPARE(releases, 2);
+    }
+
+    void frameAcknowledgementDoesNotWaitForSwap() {
+        QFETCH(QByteArray, policy);
+        QFETCH(bool, acknowledgesBeforeSwap);
+        const bool hadPolicy = qEnvironmentVariableIsSet("EDEN_WPE_FRAME_ACK");
+        const QByteArray previousPolicy = qgetenv("EDEN_WPE_FRAME_ACK");
+        const auto restorePolicy = qScopeGuard([&] {
+            if (hadPolicy) {
+                qputenv("EDEN_WPE_FRAME_ACK", previousPolicy);
+            } else {
+                qunsetenv("EDEN_WPE_FRAME_ACK");
+            }
+        });
+        if (policy.isEmpty()) {
+            qunsetenv("EDEN_WPE_FRAME_ACK");
+        } else {
+            qputenv("EDEN_WPE_FRAME_ACK", policy);
+        }
+        WpeProfile profile(privateParameters());
+        WpeEngineView view(&profile);
+        QQuickWindow window;
+        window.resize(640, 480);
+        view.attach(window.contentItem());
+        window.show();
+        view.load(url("frame-ack"));
+        QTRY_VERIFY_WITH_TIMEOUT(!view.isLoading() && view.title() == "frame-ack", 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(view.surface()->textureImportCount() > 0, 15000);
+        QTest::qWait(100);
+        int acknowledged = 0;
+        WPEView *native = view.surface()->nativeView();
+        const gulong handler = g_signal_connect(
+            native,
+            "buffer-rendered",
+            G_CALLBACK(+[](WPEView *, WPEBuffer *, int *count) { ++*count; }),
+            &acknowledged
+        );
+        const auto disconnectNative = qScopeGuard([&] { g_signal_handler_disconnect(native, handler); });
+        QSemaphore resumeRendering;
+        std::atomic<bool> armed = true;
+        std::atomic<bool> blocked = false;
+        std::atomic<bool> singleThreaded = false;
+        std::atomic<int> swaps = 0;
+        const auto swapConnection =
+            connect(&window, &QQuickWindow::frameSwapped, &window, [&] { ++swaps; }, Qt::DirectConnection);
+        const auto blockConnection = connect(
+            &window,
+            &QQuickWindow::afterRendering,
+            &window,
+            [&] {
+                if (!armed.exchange(false)) {
+                    return;
+                }
+                if (QThread::isMainThread()) {
+                    singleThreaded = true;
+                    return;
+                }
+                blocked = true;
+                resumeRendering.tryAcquire(1, 5000);
+            },
+            Qt::DirectConnection
+        );
+        const auto resume = qScopeGuard([&] {
+            disconnect(blockConnection);
+            disconnect(swapConnection);
+            resumeRendering.release();
+            window.hide();
+        });
+        evaluate(view, "document.querySelector('#box').style.background='blue';true");
+        QTRY_VERIFY_WITH_TIMEOUT(blocked || singleThreaded, 10000);
+        if (singleThreaded) {
+            QSKIP("This regression requires the threaded scene graph");
+        }
+        QCOMPARE(swaps.load(), 0);
+        if (acknowledgesBeforeSwap) {
+            QTRY_VERIFY_WITH_TIMEOUT(acknowledged > 0, 2000);
+        } else {
+            QTest::qWait(100);
+            QCOMPARE(acknowledged, 0);
+        }
+        QCOMPARE(swaps.load(), 0);
+        resumeRendering.release();
+        QTRY_VERIFY_WITH_TIMEOUT(swaps.load() > 0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(acknowledged > 0, 5000);
     }
 
     void renderingResizeVisibilityAndThumbnail() {

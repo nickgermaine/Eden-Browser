@@ -1,6 +1,7 @@
 #include "engine/cef/cefrendererapp.h"
 #include "engine/mediaactivityscript.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 
@@ -601,6 +602,28 @@ Object.defineProperty(mediaDevices, 'getDisplayMedia', {
         CefProcessId sourceProcess,
         CefRefPtr<CefProcessMessage> message
     ) {
+        if (frame && message && sourceProcess == PID_BROWSER && message->GetName() == "eden_native_paste") {
+            const auto values = message->GetArgumentList();
+            if (values->GetSize() != 4 || values->GetType(0) != VTYPE_STRING || values->GetType(1) != VTYPE_BOOL ||
+                values->GetType(2) != VTYPE_DOUBLE || values->GetType(3) != VTYPE_STRING) {
+                return true;
+            }
+            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch()
+            )
+                                 .count();
+            if (frame->IsFocused() && frame->GetURL() == values->GetString(3) && double(now) < values->GetDouble(2)) {
+                if (values->GetBool(1)) {
+                    frame->PasteAndMatchStyle();
+                } else {
+                    frame->Paste();
+                }
+            }
+            const auto response = CefProcessMessage::Create("eden_native_paste_done");
+            response->GetArgumentList()->SetString(0, values->GetString(0));
+            frame->SendProcessMessage(PID_BROWSER, response);
+            return true;
+        }
         if (browser && frame && message && sourceProcess == PID_BROWSER && message->GetName() == "eden_gc_sample") {
             const CefRefPtr<CefListValue> arguments = message->GetArgumentList();
             if (!frame->IsMain() || arguments->GetSize() != 1 || arguments->GetType(0) != VTYPE_STRING) {

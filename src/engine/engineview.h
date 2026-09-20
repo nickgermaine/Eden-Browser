@@ -129,11 +129,13 @@ namespace eden::engine {
         Q_PROPERTY(bool capturing READ isCapturing NOTIFY captureChanged)
         Q_PROPERTY(QString captureDescription READ captureDescription NOTIFY captureChanged)
         Q_PROPERTY(QVariantList activityIndicators READ activityIndicators NOTIFY activityIndicatorsChanged)
+        Q_PROPERTY(qreal zoomFactor READ zoomFactor WRITE setZoomFactor NOTIFY zoomFactorChanged)
         Q_PROPERTY(QString securityState READ securityState NOTIFY securityStateChanged)
         Q_PROPERTY(QVariantMap certificateDetails READ certificateDetails NOTIFY certificateDetailsChanged)
         Q_PROPERTY(QString backendName READ backendName CONSTANT)
         Q_PROPERTY(Capabilities capabilities READ capabilities CONSTANT)
         Q_PROPERTY(bool devToolsOpen READ devToolsOpen NOTIFY devToolsOpenChanged)
+        Q_PROPERTY(bool devToolsSelfFramed READ devToolsSelfFramed NOTIFY devToolsOpenChanged)
         Q_PROPERTY(
             DevToolsPlacement devToolsPlacement READ devToolsPlacement WRITE setDevToolsPlacement NOTIFY
                 devToolsPlacementChanged
@@ -176,12 +178,14 @@ namespace eden::engine {
         bool isCapturing() const;
         QString captureDescription() const;
         QVariantList activityIndicators() const;
+        qreal zoomFactor() const;
         virtual QString securityState() const = 0;
         virtual QVariantMap certificateDetails() const;
         virtual QString backendName() const = 0;
         virtual Capabilities capabilities() const = 0;
         virtual qint64 rendererProcessId() const;
         bool devToolsOpen() const;
+        virtual bool devToolsSelfFramed() const;
         DevToolsPlacement devToolsPlacement() const;
 
         Q_INVOKABLE virtual void load(const QUrl &url) = 0;
@@ -190,7 +194,9 @@ namespace eden::engine {
         Q_INVOKABLE virtual QVariantList navigationHistory(int direction, int maximumItems = 20) const = 0;
         Q_INVOKABLE virtual void goToHistoryOffset(int offset) = 0;
         Q_INVOKABLE virtual void reload() = 0;
+        Q_INVOKABLE virtual void reloadBypassingCache();
         Q_INVOKABLE virtual void stop() = 0;
+        Q_INVOKABLE void setZoomFactor(qreal factor);
         Q_INVOKABLE virtual void openDevTools() = 0;
         Q_INVOKABLE virtual void closeDevTools();
         Q_INVOKABLE virtual void attachDevTools(QQuickItem *viewport);
@@ -234,6 +240,7 @@ namespace eden::engine {
         void audibleChanged();
         void captureChanged();
         void activityIndicatorsChanged();
+        void zoomFactorChanged();
         void mutedChanged();
         void securityStateChanged();
         void certificateDetailsChanged();
@@ -257,6 +264,7 @@ namespace eden::engine {
         void devToolsPlacementChanged();
 
       protected:
+        virtual void applyZoomFactor(qreal factor);
         void setDevToolsOpen(bool open);
         void setMediaCapture(bool video, bool audio);
         void setCaptureDetails(const QString &document, int activities);
@@ -266,6 +274,7 @@ namespace eden::engine {
         bool m_devToolsOpen = false;
         bool m_capturingVideo = false;
         bool m_capturingAudio = false;
+        qreal m_zoomFactor = 1.0;
         QHash<QString, int> m_captureDetails;
         DevToolsPlacement m_devToolsPlacement = DevToolsRight;
         DevToolsPlacement m_lastDockedPlacement = DevToolsRight;

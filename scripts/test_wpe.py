@@ -8,7 +8,7 @@ import tempfile
 import time
 
 
-def inside(build, names, environment, benchmark):
+def inside(build, names, environment, benchmark, test_program):
     runtime = Path(environment["XDG_RUNTIME_DIR"])
     log = runtime / "compositor.log"
     tools = Path(__file__).resolve().parents[1] / "third_party/wpe/tools/usr"
@@ -55,7 +55,7 @@ def inside(build, names, environment, benchmark):
         environment["WAYLAND_DISPLAY"] = "eden-webkit-test"
         environment["QT_QPA_PLATFORM"] = "wayland"
         environment["EDEN_WPE_REQUIRE_GPU"] = "1"
-        program = "eden-wpe-bench" if benchmark else "eden-wpe-tests"
+        program = "eden-wpe-bench" if benchmark else test_program
         arguments = names if benchmark else ["-nocrashhandler", *names]
         result = subprocess.run([str(build / program), *arguments], env=environment, timeout=1830 if benchmark else 300)
         return result.returncode
@@ -73,11 +73,12 @@ def main():
     parser.add_argument("--build", type=Path, default=Path("build-webkit"))
     parser.add_argument("--scale", type=float, default=1)
     parser.add_argument("--benchmark", action="store_true")
+    parser.add_argument("--test-program", choices=["eden-wpe-tests", "eden-cef-handlers-tests"], default="eden-wpe-tests")
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("tests", nargs="*")
     arguments = parser.parse_args()
     build = arguments.build.resolve()
-    program = "eden-wpe-bench" if arguments.benchmark else "eden-wpe-tests"
+    program = "eden-wpe-bench" if arguments.benchmark else arguments.test_program
     if not (build / program).is_file():
         parser.error(f"Build the {program} target first")
     if arguments.scale <= 0 or arguments.scale > 4:
@@ -86,8 +87,8 @@ def main():
     for name in ["LD_LIBRARY_PATH", "PKG_CONFIG_PATH", "WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS"]:
         environment.pop(name, None)
     if arguments.inside:
-        return inside(build, arguments.tests, environment, arguments.benchmark)
-    if not shutil.which("bwrap"):
+        return inside(build, arguments.tests, environment, arguments.benchmark, arguments.test_program)
+    if arguments.test_program != "eden-cef-handlers-tests" and not shutil.which("bwrap"):
         parser.error("Install bubblewrap to isolate the native test display")
     with tempfile.TemporaryDirectory(prefix="eden-webkit-native-") as temporary:
         runtime = Path(temporary)
@@ -97,6 +98,8 @@ def main():
         environment["XDG_CONFIG_HOME"] = str(runtime / "config")
         environment["QT_SCALE_FACTOR"] = str(arguments.scale)
         environment["QTEST_DISABLE_STACK_DUMP"] = "1"
+        if arguments.test_program == "eden-cef-handlers-tests":
+            return inside(build, arguments.tests, environment, arguments.benchmark, arguments.test_program)
         command = [
             "bwrap",
             "--ro-bind",
@@ -117,7 +120,7 @@ def main():
         command += ["--", sys.executable, str(Path(__file__).resolve()), "--inside", "--build", str(build)]
         if arguments.benchmark:
             command.append("--benchmark")
-        command += ["--", *arguments.tests]
+        command += ["--test-program", arguments.test_program, "--", *arguments.tests]
         return subprocess.run(command, env=environment, timeout=1860 if arguments.benchmark else 330).returncode
 
 

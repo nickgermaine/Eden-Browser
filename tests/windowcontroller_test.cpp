@@ -5,6 +5,7 @@
 #include "core/profiles/profilecontext.h"
 #include "core/profiles/profilepaths.h"
 #include "core/profiles/windowregistry.h"
+#include "core/settings/shortcutregistry.h"
 #include "core/window/tabmodel.h"
 #include "core/window/windowcontroller.h"
 #include "engine/engineregistry.h"
@@ -111,12 +112,20 @@ class PermissionEngine final : public eden::engine::EngineView {
         return {};
     }
     void goToHistoryOffset(int) override {}
-    void reload() override {}
+    void reload() override {
+        ++reloads;
+    }
+    void reloadBypassingCache() override {
+        ++cacheReloads;
+    }
     void stop() override {}
     void openDevTools() override {}
     void findInPage(const QString &, FindFlags) override {}
     void attach(QQuickItem *) override {}
     void setMuted(bool) override {}
+    bool containsPageScenePoint(const QPointF &) const override {
+        return pageContainsPoint;
+    }
 
     void exitFullscreen() override {
         ++fullscreenExits;
@@ -129,6 +138,9 @@ class PermissionEngine final : public eden::engine::EngineView {
         filledFields = fields;
     }
     int fullscreenExits = 0;
+    int reloads = 0;
+    int cacheReloads = 0;
+    bool pageContainsPoint = false;
     AutofillTargetCallback autofill;
     eden::engine::AutofillTarget filledTarget;
     QVariantMap filledFields;
@@ -239,7 +251,54 @@ class WindowControllerTest final : public QObject {
     void previewCapturePreservesPendingTabs();
     void previewCaptureRejectsStaleImages();
     void tabSwitchMetricIncludesPreviewWork();
+    void browserCommandsReachTheActiveEngine();
 };
+
+void WindowControllerTest::browserCommandsReachTheActiveEngine() {
+    QQuickWindow window;
+    PermissionHarness harness;
+    QVERIFY(harness.create(false, &window));
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    auto *shortcuts = harness.controller->shortcuts();
+    shortcuts->attach(&window);
+
+    QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier);
+    QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(view->reloads, 1);
+    QCOMPARE(view->cacheReloads, 1);
+    const auto menu = harness.controller->tabContextMenuActions(harness.controller->activeIndex());
+    for (const auto &item : menu) {
+        const auto action = item.toMap();
+        const auto id = action.value("id").toString();
+        if (id == "new" || id == "reload" || id == "close") {
+            QVERIFY(!action.value("shortcut").toString().isEmpty());
+        }
+    }
+
+    shortcuts->execute("zoom_in");
+    QCOMPARE(view->zoomFactor(), 1.1);
+    shortcuts->execute("zoom_out");
+    QCOMPARE(view->zoomFactor(), 1.0);
+    view->setZoomFactor(1.75);
+    shortcuts->execute("zoom_reset");
+    QCOMPARE(view->zoomFactor(), 1.0);
+
+    view->pageContainsPoint = true;
+    QWheelEvent wheel(
+        QPointF(20, 20),
+        QPointF(20, 20),
+        QPoint(),
+        QPoint(0, 120),
+        Qt::NoButton,
+        Qt::ControlModifier,
+        Qt::NoScrollPhase,
+        false
+    );
+    QCoreApplication::sendEvent(&window, &wheel);
+    QVERIFY(wheel.isAccepted());
+    QCOMPARE(view->zoomFactor(), 1.1);
+}
 
 void WindowControllerTest::autofillPopupRequiresFocusedField() {
     PermissionHarness harness;

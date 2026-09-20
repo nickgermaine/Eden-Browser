@@ -1,5 +1,8 @@
 #include "engine/engineview.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace eden::engine {
 
     QUrl autofillOrigin(const QUrl &url) {
@@ -35,8 +38,35 @@ namespace eden::engine {
         return 0;
     }
 
+    qreal EngineView::zoomFactor() const {
+        return m_zoomFactor;
+    }
+
+    void EngineView::setZoomFactor(qreal factor) {
+        if (!std::isfinite(factor)) {
+            return;
+        }
+        factor = std::clamp(factor, 0.25, 5.0);
+        if (qFuzzyCompare(m_zoomFactor, factor)) {
+            return;
+        }
+        m_zoomFactor = factor;
+        applyZoomFactor(factor);
+        emit zoomFactorChanged();
+    }
+
+    void EngineView::applyZoomFactor(qreal) {}
+
+    void EngineView::reloadBypassingCache() {
+        reload();
+    }
+
     bool EngineView::devToolsOpen() const {
         return m_devToolsOpen;
+    }
+
+    bool EngineView::devToolsSelfFramed() const {
+        return false;
     }
 
     EngineView::DevToolsPlacement EngineView::devToolsPlacement() const {
@@ -231,11 +261,13 @@ namespace eden::engine {
         state.insert("title", title());
         state.insert("faviconUrl", faviconUrl());
         state.insert("muted", isMuted());
+        state.insert("zoomFactor", m_zoomFactor);
         return state;
     }
 
     void EngineView::restoreState(const QVariantMap &state) {
         setMuted(state.value("muted").toBool());
+        setZoomFactor(state.value("zoomFactor", 1.0).toReal());
         const QUrl restoredUrl = state.value("url").toUrl();
         load(restoredUrl.isEmpty() ? QUrl("about:blank") : restoredUrl);
     }
