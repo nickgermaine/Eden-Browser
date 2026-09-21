@@ -219,6 +219,7 @@ Item {
                     muted: tab.isMuted
                     audible: tab.isAudible
                     internalPage: tab.internalPage
+                    discarded: tab.discarded
                 }
 
                 Text {

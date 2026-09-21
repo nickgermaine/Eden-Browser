@@ -2,7 +2,9 @@
 
 #include "core/bookmarks/bookmarkstore.h"
 #include "core/downloads/downloadmanager.h"
+#include "core/favicons/faviconstore.h"
 #include "core/history/historystore.h"
+#include "core/history/recentlyclosedstore.h"
 #include "core/profiles/profilesettings.h"
 #include "engine/enginefactory.h"
 #include "engine/engineview.h"
@@ -55,6 +57,8 @@ namespace eden::core {
         Q_PROPERTY(HistoryStore *history READ history NOTIFY profileChanged)
         Q_PROPERTY(BookmarkStore *bookmarks READ bookmarks NOTIFY profileChanged)
         Q_PROPERTY(DownloadManager *downloads READ downloads NOTIFY profileChanged)
+        Q_PROPERTY(FaviconStore *favicons READ favicons NOTIFY profileChanged)
+        Q_PROPERTY(RecentlyClosedStore *recentlyClosed READ recentlyClosed NOTIFY profileChanged)
         Q_PROPERTY(ProfileSettings *profileSettings READ profileSettings NOTIFY profileChanged)
         Q_PROPERTY(QObject *credentialVault READ credentialVault NOTIFY profileChanged)
         Q_PROPERTY(QObject *permissionStore READ permissionStore NOTIFY profileChanged)
@@ -115,6 +119,8 @@ namespace eden::core {
         HistoryStore *history() const;
         BookmarkStore *bookmarks() const;
         DownloadManager *downloads() const;
+        FaviconStore *favicons() const;
+        RecentlyClosedStore *recentlyClosed() const;
         ProfileSettings *profileSettings() const;
         QObject *credentialVault() const;
         QObject *permissionStore() const;
@@ -196,6 +202,13 @@ namespace eden::core {
         Q_INVOKABLE void openSettingsTab();
         Q_INVOKABLE void openAboutTab();
         Q_INVOKABLE void openThemeEditorTab();
+        Q_INVOKABLE void openLibraryTab(const QString &page);
+        Q_INVOKABLE QObject *createLibraryModel(const QString &kind, QObject *owner);
+        Q_INVOKABLE QVariantList historyMenuItems() const;
+        Q_INVOKABLE QVariantList bookmarkMenuItems() const;
+        Q_INVOKABLE bool executeLibraryMenuCommand(const QString &command);
+        Q_INVOKABLE void reopenClosedTab(qint64 closedId);
+        Q_INVOKABLE void clearHistory();
         Q_INVOKABLE QString settingsPath(const QUrl &url) const;
         Q_INVOKABLE QString settingsQueryValue(const QUrl &url, const QString &name) const;
         Q_INVOKABLE QUrl siteSettingsUrl(const QUrl &origin) const;

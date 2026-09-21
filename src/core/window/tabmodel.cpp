@@ -27,6 +27,15 @@ namespace eden::core {
         if (page == "newtab") {
             return "New Tab";
         }
+        if (page == "history") {
+            return "History";
+        }
+        if (page == "bookmarks") {
+            return "Bookmarks";
+        }
+        if (page == "downloads") {
+            return "Downloads";
+        }
         return "Eden";
     }
 
@@ -35,7 +44,8 @@ namespace eden::core {
             return {};
         }
         const QString host = url.host();
-        if (host == "settings" || host == "theme-editor" || host == "newtab") {
+        if (host == "settings" || host == "theme-editor" || host == "newtab" || host == "history" ||
+            host == "bookmarks" || host == "downloads") {
             return host;
         }
         return {};
@@ -117,7 +127,13 @@ namespace eden::core {
             return urlWithoutCredentials(currentUrl);
         }
         if (role == FaviconRole) {
-            return view && !view->faviconUrl().isEmpty() ? view->faviconUrl() : tab.favicon;
+            if (view && !view->faviconUrl().isEmpty()) {
+                return view->faviconUrl();
+            }
+            if (!tab.favicon.isEmpty() || !tab.internalPage.isEmpty() || !m_faviconResolver) {
+                return tab.favicon;
+            }
+            return m_faviconResolver(view && !view->url().isEmpty() ? view->url() : tab.url);
         }
         if (role == LoadingRole) {
             return view && view->isLoading();
@@ -206,6 +222,17 @@ namespace eden::core {
         return row;
     }
 
+    void TabModel::setFaviconResolver(std::function<QUrl(const QUrl &)> resolver) {
+        m_faviconResolver = std::move(resolver);
+        notifyFaviconsChanged();
+    }
+
+    void TabModel::notifyFaviconsChanged() {
+        if (!m_tabs.empty()) {
+            emit dataChanged(index(0), index(rowCount() - 1), {FaviconRole});
+        }
+    }
+
     bool TabModel::closeTab(int row) {
         if (row < 0 || row >= rowCount()) {
             return false;
@@ -226,6 +253,9 @@ namespace eden::core {
         m_closedTab->tab = std::move(removed);
         m_closedTab->index = row;
         m_undoTimer.start();
+        if (!m_privateMode && m_closedTab->tab->internalPage.isEmpty()) {
+            emit tabClosed(m_closedTab->tab->url, m_closedTab->tab->title);
+        }
         emit countChanged();
         if (removedPinned) {
             emit pinnedCountChanged();
@@ -247,10 +277,14 @@ namespace eden::core {
         const bool restoredPinned = m_closedTab->tab->pinned;
         const int row = restoredPinned ? std::clamp(m_closedTab->index, 0, pinnedCount())
                                        : std::clamp(m_closedTab->index, pinnedCount(), rowCount());
+        const QUrl restoredUrl = m_closedTab->tab->url;
         beginInsertRows({}, row, row);
         m_tabs.insert(m_tabs.begin() + row, std::move(m_closedTab->tab));
         endInsertRows();
         m_closedTab.reset();
+        if (!m_privateMode) {
+            emit tabCloseUndone(restoredUrl);
+        }
         m_undoTimer.stop();
         emit countChanged();
         if (restoredPinned) {
@@ -316,9 +350,16 @@ namespace eden::core {
             if (candidate == row || m_tabs.at(candidate)->pinned) {
                 continue;
             }
+            updateCachedState(*m_tabs.at(candidate));
+            const QUrl closedUrl = m_tabs.at(candidate)->url;
+            const QString closedTitle = m_tabs.at(candidate)->title;
+            const bool closedContent = m_tabs.at(candidate)->internalPage.isEmpty();
             beginRemoveRows({}, candidate, candidate);
             m_tabs.erase(m_tabs.begin() + candidate);
             endRemoveRows();
+            if (!m_privateMode && closedContent) {
+                emit tabClosed(closedUrl, closedTitle);
+            }
             removedAny = true;
         }
         if (!removedAny) {

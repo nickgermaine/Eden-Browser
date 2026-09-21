@@ -573,6 +573,24 @@ Window {
                             }
 
                             Loader {
+                                id: libraryPageLoader
+
+                                anchors.fill: parent
+                                active: internalPage === "history" || internalPage === "bookmarks" || internalPage === "downloads"
+                                Component.onCompleted: setSource(Qt.resolvedUrl("../pages/LibraryPage.qml"), {
+                                    "controller": root.windowController,
+                                    "kind": active ? internalPage : "history"
+                                })
+
+                                Binding {
+                                    target: libraryPageLoader.item
+                                    property: "kind"
+                                    value: tabViewportDelegate.internalPage
+                                    when: libraryPageLoader.item !== null && libraryPageLoader.active
+                                }
+                            }
+
+                            Loader {
                                 anchors.fill: parent
                                 active: internalPage === "newtab"
                                 source: Qt.resolvedUrl("../pages/NewTabPage.qml")
@@ -1275,48 +1293,71 @@ Window {
                     x: shell.width - width - 12
                     y: topChrome.height
                     z: 12
-                    actions: [{
-                        "id": "new_tab",
-                        "title": "New tab",
-                        "icon": "add"
-                    }, {
-                        "id": "new_window",
-                        "title": "New window",
-                        "icon": "square-top-down"
-                    }, {
-                        "id": "private_window",
-                        "title": "New private window",
-                        "icon": "incognito"
-                    }, {
-                        "id": "bookmarks",
-                        "title": "Bookmarks",
-                        "icon": "bookmark-circle"
-                    }, {
-                        "id": "history",
-                        "title": "History",
-                        "icon": "history"
-                    }, {
-                        "id": "downloads",
-                        "title": "Downloads",
-                        "icon": "round-transfer-vertical"
-                    }, {
-                        "id": "devtools",
-                        "title": "Developer tools",
-                        "icon": "programming"
-                    }, {
-                        "id": "about_eden",
-                        "title": "About Eden",
-                        "icon": "info-circle"
-                    }, {
-                        "id": "settings",
-                        "title": "Settings",
-                        "icon": "settings"
-                    }, {
-                        "id": "quit",
-                        "title": "Quit",
-                        "icon": "power"
-                    }]
+                    function buildActions() {
+                        return [
+                            {
+                                "id": "new_tab",
+                                "title": "New tab",
+                                "icon": "add"
+                            },
+                            {
+                                "id": "new_window",
+                                "title": "New window",
+                                "icon": "square-top-down"
+                            },
+                            {
+                                "id": "private_window",
+                                "title": "New private window",
+                                "icon": "incognito"
+                            },
+                            {
+                                "id": "bookmarks",
+                                "title": "Bookmarks",
+                                "icon": "bookmark-circle",
+                                "activatable": true,
+                                "children": controller.bookmarkMenuItems()
+                            },
+                            {
+                                "id": "history",
+                                "title": "History",
+                                "icon": "history",
+                                "activatable": true,
+                                "children": controller.historyMenuItems()
+                            },
+                            {
+                                "id": "downloads",
+                                "title": "Downloads",
+                                "icon": "round-transfer-vertical"
+                            },
+                            {
+                                "id": "devtools",
+                                "title": "Developer tools",
+                                "icon": "programming"
+                            },
+                            {
+                                "id": "about_eden",
+                                "title": "About Eden",
+                                "icon": "info-circle"
+                            },
+                            {
+                                "id": "settings",
+                                "title": "Settings",
+                                "icon": "settings"
+                            },
+                            {
+                                "id": "quit",
+                                "title": "Quit",
+                                "icon": "power"
+                            }
+                        ];
+                    }
+
+                    actions: buildActions()
+                    onAboutToShow: actions = buildActions()
                     onTriggered: (actionId) => {
+                        if (controller.executeLibraryMenuCommand(actionId))
+                            return;
+
                         if (actionId === "new_tab")
                             controller.newTabAndFocusOmnibox();
                         else if (actionId === "new_window")

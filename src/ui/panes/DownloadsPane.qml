@@ -37,6 +37,15 @@ Rectangle {
             }
 
             EdenButton {
+                iconName: "expand"
+                Accessible.name: "Open downloads page"
+                onClicked: {
+                    pane.controller.openLibraryTab("downloads");
+                    pane.controller.openPane = "";
+                }
+            }
+
+            EdenButton {
                 iconName: "close"
                 onClicked: pane.controller.openPane = ""
             }

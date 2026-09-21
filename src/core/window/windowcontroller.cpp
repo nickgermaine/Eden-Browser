@@ -5,6 +5,7 @@
 #include "core/bookmarks/bookmarkstore.h"
 #include "core/downloads/downloadmanager.h"
 #include "core/history/historystore.h"
+#include "core/library/librarylistmodel.h"
 #include "core/omni/omniboxcontroller.h"
 #include "core/permissions/permissionstore.h"
 #include "core/profiles/cookiehandoffcoordinator.h"
@@ -378,6 +379,14 @@ namespace eden::core {
         return m_context ? m_context->downloads() : nullptr;
     }
 
+    FaviconStore *WindowController::favicons() const {
+        return m_context ? m_context->favicons() : nullptr;
+    }
+
+    RecentlyClosedStore *WindowController::recentlyClosed() const {
+        return m_context ? m_context->recentlyClosed() : nullptr;
+    }
+
     ProfileSettings *WindowController::profileSettings() const {
         return m_context ? m_context->settings() : nullptr;
     }
@@ -697,6 +706,24 @@ namespace eden::core {
                 emit currentBookmarkedChanged();
             }
         });
+        if (!privateWindow) {
+            if (FaviconStore *faviconStore = context->favicons()) {
+                m_tabs->setFaviconResolver([store = QPointer<FaviconStore>(faviconStore)](const QUrl &url) {
+                    return store ? store->iconFor(url) : QUrl();
+                });
+                connect(faviconStore, &FaviconStore::changed, m_tabs.get(), &TabModel::notifyFaviconsChanged);
+            }
+            connect(m_tabs.get(), &TabModel::tabClosed, this, [this](const QUrl &url, const QString &title) {
+                if (RecentlyClosedStore *store = recentlyClosed()) {
+                    store->add(url, title);
+                }
+            });
+            connect(m_tabs.get(), &TabModel::tabCloseUndone, this, [this](const QUrl &url) {
+                if (RecentlyClosedStore *store = recentlyClosed()) {
+                    store->removeLatest(url);
+                }
+            });
+        }
         connect(m_tabs.get(), &TabModel::tabTransferredOut, this, [this](engine::EngineView *view) {
             if (view) {
                 disconnect(view, nullptr, this, nullptr);
@@ -1790,6 +1817,152 @@ namespace eden::core {
         openInternalTab(QUrl("eden://theme-editor"));
     }
 
+    void WindowController::openLibraryTab(const QString &page) {
+        if (page == "history" || page == "bookmarks" || page == "downloads") {
+            openInternalTab(QUrl("eden://" + page));
+        }
+    }
+
+    QObject *WindowController::createLibraryModel(const QString &kind, QObject *owner) {
+        LibraryListModel *model = nullptr;
+        if (kind == "history") {
+            model = new LibraryListModel(LibraryListModel::Mode::History, owner ? owner : this);
+            model->setHistory(history(), m_privateWindow ? nullptr : recentlyClosed());
+        } else if (kind == "bookmarks") {
+            model = new LibraryListModel(LibraryListModel::Mode::Bookmarks, owner ? owner : this);
+            model->setBookmarks(bookmarks());
+        } else if (kind == "downloads") {
+            model = new LibraryListModel(LibraryListModel::Mode::Downloads, owner ? owner : this);
+            model->setDownloads(downloads());
+        }
+        if (model) {
+            model->setFavicons(favicons());
+            QQmlEngine::setObjectOwnership(model, QQmlEngine::CppOwnership);
+        }
+        return model;
+    }
+
+    static QVariantMap libraryMenuItem(const QString &id, const QString &title, const QUrl &url, const QUrl &favicon) {
+        QVariantMap item;
+        item.insert("id", id);
+        item.insert("title", title.isEmpty() ? url.toString() : title);
+        item.insert("icon", "globe");
+        if (!favicon.isEmpty()) {
+            item.insert("faviconUrl", favicon.toString());
+        }
+        return item;
+    }
+
+    static QVariantMap libraryMenuSeparator() {
+        return {{"separator", true}};
+    }
+
+    static QVariantMap libraryMenuFooter(const QString &id) {
+        return {{"id", id}, {"title", "See More"}, {"icon", ""}, {"trailingIcon", "arrow-right"}, {"plain", true}};
+    }
+
+    QVariantList WindowController::historyMenuItems() const {
+        QVariantList items;
+        const FaviconStore *icons = favicons();
+        const auto iconFor = [icons](const QUrl &url) { return icons ? icons->iconFor(url) : QUrl(); };
+        QSet<QUrl> listed;
+        if (const RecentlyClosedStore *closed = m_privateWindow ? nullptr : recentlyClosed()) {
+            const int count = std::min(closed->rowCount(), 5);
+            for (int row = 0; row < count; ++row) {
+                const QModelIndex index = closed->index(row);
+                const QUrl url = closed->data(index, RecentlyClosedStore::UrlRole).toUrl();
+                listed.insert(url);
+                items.append(libraryMenuItem(
+                    QString("library_closed:%1").arg(closed->data(index, RecentlyClosedStore::ClosedIdRole).toLongLong()),
+                    closed->data(index, RecentlyClosedStore::TitleRole).toString(),
+                    url,
+                    iconFor(url)
+                ));
+            }
+            if (count > 0) {
+                items.prepend(QVariantMap{{"heading", true}, {"title", "Recently closed"}});
+                items.append(libraryMenuSeparator());
+            }
+        }
+        if (const HistoryStore *store = history()) {
+            int added = 0;
+            for (int row = 0; row < store->rowCount() && added < 6; ++row) {
+                const QModelIndex index = store->index(row);
+                const QUrl url = store->data(index, HistoryStore::UrlRole).toUrl();
+                if (listed.contains(url)) {
+                    continue;
+                }
+                items.append(libraryMenuItem(
+                    "library_open:" + url.toString(),
+                    store->data(index, HistoryStore::TitleRole).toString(),
+                    url,
+                    iconFor(url)
+                ));
+                ++added;
+            }
+            if (added > 0) {
+                items.append(libraryMenuSeparator());
+            }
+        }
+        items.append(libraryMenuFooter("history"));
+        return items;
+    }
+
+    QVariantList WindowController::bookmarkMenuItems() const {
+        QVariantList items;
+        const FaviconStore *icons = favicons();
+        if (const BookmarkStore *store = bookmarks()) {
+            const int count = std::min(store->rowCount(), 10);
+            for (int row = 0; row < count; ++row) {
+                const QModelIndex index = store->index(row);
+                const QUrl url = store->data(index, BookmarkStore::UrlRole).toUrl();
+                items.append(libraryMenuItem(
+                    "library_open:" + url.toString(),
+                    store->data(index, BookmarkStore::TitleRole).toString(),
+                    url,
+                    icons ? icons->iconFor(url) : QUrl()
+                ));
+            }
+            if (count > 0) {
+                items.append(libraryMenuSeparator());
+            }
+        }
+        items.append(libraryMenuFooter("bookmarks"));
+        return items;
+    }
+
+    bool WindowController::executeLibraryMenuCommand(const QString &command) {
+        if (command.startsWith("library_open:")) {
+            navigate(QUrl(command.sliced(13)));
+            return true;
+        }
+        if (command.startsWith("library_closed:")) {
+            reopenClosedTab(command.sliced(15).toLongLong());
+            return true;
+        }
+        return false;
+    }
+
+    void WindowController::reopenClosedTab(qint64 closedId) {
+        RecentlyClosedStore *store = recentlyClosed();
+        if (!store || m_privateWindow) {
+            return;
+        }
+        const QUrl url = store->take(closedId);
+        if (url.isValid() && !url.isEmpty()) {
+            newTab(url);
+        }
+    }
+
+    void WindowController::clearHistory() {
+        if (HistoryStore *store = history()) {
+            store->clear();
+        }
+        if (RecentlyClosedStore *store = recentlyClosed()) {
+            store->clear();
+        }
+    }
+
     QString WindowController::settingsPath(const QUrl &url) const {
         return url.path();
     }
@@ -2429,7 +2602,14 @@ namespace eden::core {
                 exitContentFullscreen();
             }
             if (!m_privateWindow && !view->isLoading() && history()) {
-                history()->recordVisit(view->url(), view->title());
+                const QUrl visitedUrl = view->url();
+                if (view->property("edenRecordedVisit").toUrl() != visitedUrl) {
+                    view->setProperty("edenRecordedVisit", visitedUrl);
+                    history()->recordVisit(visitedUrl, view->title());
+                }
+            }
+            if (!m_privateWindow && !view->isLoading() && favicons()) {
+                favicons()->record(view->url(), view->faviconUrl());
             }
             if (!view->isLoading() && view == qobject_cast<engine::EngineView *>(currentEngine())) {
                 QTimer::singleShot(120, this, [this, view] { fillDefaultCredential(view); });
@@ -2438,6 +2618,11 @@ namespace eden::core {
                         captureTabPreview(m_activeIndex);
                     }
                 });
+            }
+        });
+        connect(view, &engine::EngineView::faviconUrlChanged, this, [this, view] {
+            if (!m_privateWindow && !view->isLoading() && favicons()) {
+                favicons()->record(view->url(), view->faviconUrl());
             }
         });
         connect(view, &engine::EngineView::urlChanged, this, [this, view] {

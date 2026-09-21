@@ -44,6 +44,21 @@ Rectangle {
             "icon": "code"
         },
         {
+            "id": "history",
+            "title": "History",
+            "icon": "history"
+        },
+        {
+            "id": "bookmarks",
+            "title": "Bookmarks",
+            "icon": "bookmark-circle"
+        },
+        {
+            "id": "downloads",
+            "title": "Downloads",
+            "icon": "round-transfer-vertical"
+        },
+        {
             "id": "about",
             "title": "About",
             "icon": "info-circle"
@@ -190,6 +205,15 @@ Rectangle {
                 if (settingsPage.currentSection === "extensions")
                     return extensionsPage;
 
+                if (settingsPage.currentSection === "history")
+                    return historyPage;
+
+                if (settingsPage.currentSection === "bookmarks")
+                    return bookmarksPage;
+
+                if (settingsPage.currentSection === "downloads")
+                    return downloadsPage;
+
                 return aboutPage;
             }
         }
@@ -252,6 +276,36 @@ Rectangle {
         PlaceholderSettings {
             title: "Extensions"
             body: "Extension support arrives after the engine migration."
+        }
+    }
+
+    Component {
+        id: historyPage
+
+        LibraryPage {
+            controller: settingsPage.controller
+            kind: "history"
+            embedded: true
+        }
+    }
+
+    Component {
+        id: bookmarksPage
+
+        LibraryPage {
+            controller: settingsPage.controller
+            kind: "bookmarks"
+            embedded: true
+        }
+    }
+
+    Component {
+        id: downloadsPage
+
+        LibraryPage {
+            controller: settingsPage.controller
+            kind: "downloads"
+            embedded: true
         }
     }
 

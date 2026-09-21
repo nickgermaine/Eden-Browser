@@ -27,6 +27,7 @@ namespace eden::core {
         Q_INVOKABLE bool contains(const QUrl &url) const;
         Q_INVOKABLE void add(const QUrl &url, const QString &title, const QString &folder = {});
         Q_INVOKABLE void remove(const QUrl &url);
+        Q_INVOKABLE bool move(int from, int to);
         Q_INVOKABLE void toggle(const QUrl &url, const QString &title);
         QStringList search(const QString &query, int limit = 8) const;
 

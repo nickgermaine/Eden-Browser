@@ -73,6 +73,8 @@ namespace eden::core {
         ~TabModel() override;
 
         void setConversionGate(ConversionGate gate);
+        void setFaviconResolver(std::function<QUrl(const QUrl &)> resolver);
+        void notifyFaviconsChanged();
         const QString &profileToken() const;
 
         int rowCount(const QModelIndex &parent = {}) const override;
@@ -121,6 +123,8 @@ namespace eden::core {
         void operationOccurred();
         void tabAdded(int index, bool background);
         void tabMoved(int from, int to);
+        void tabClosed(const QUrl &url, const QString &title);
+        void tabCloseUndone(const QUrl &url);
         void tabTransferredOut(engine::EngineView *view);
         void tabEngineCreated(int index, engine::EngineView *view);
         void tabCloseRequestedForWindow();
@@ -168,6 +172,7 @@ namespace eden::core {
         bool m_privateMode = false;
         QString m_profileToken;
         ConversionGate m_conversionGate;
+        std::function<QUrl(const QUrl &)> m_faviconResolver;
         std::vector<std::unique_ptr<Tab>> m_tabs;
         std::unique_ptr<ClosedTab> m_closedTab;
         QTimer m_undoTimer;

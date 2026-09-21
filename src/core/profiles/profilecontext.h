@@ -28,10 +28,12 @@ namespace eden::core {
     class BookmarkStore;
     class CookieHandoffCoordinator;
     class DownloadManager;
+    class FaviconStore;
     class HistoryStore;
     class PermissionStore;
     class ProfileDatabase;
     class ProfileSettings;
+    class RecentlyClosedStore;
     class SessionStore;
     class WindowController;
 
@@ -59,6 +61,8 @@ namespace eden::core {
         HistoryStore *history() const;
         BookmarkStore *bookmarks() const;
         DownloadManager *downloads() const;
+        FaviconStore *favicons() const;
+        RecentlyClosedStore *recentlyClosed() const;
         SessionStore *sessions() const;
         CookieHandoffCoordinator *cookieHandoff() const;
         passwords::CredentialVault *credentialVault() const;
@@ -93,6 +97,8 @@ namespace eden::core {
         std::unique_ptr<HistoryStore> m_history;
         std::unique_ptr<BookmarkStore> m_bookmarks;
         std::unique_ptr<DownloadManager> m_downloads;
+        std::unique_ptr<FaviconStore> m_favicons;
+        std::unique_ptr<RecentlyClosedStore> m_recentlyClosed;
         std::unique_ptr<SessionStore> m_sessions;
         std::unique_ptr<CookieHandoffCoordinator> m_cookieHandoff;
         std::unique_ptr<passwords::CredentialVault> m_credentialVault;

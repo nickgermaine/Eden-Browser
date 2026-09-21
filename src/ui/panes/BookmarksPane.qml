@@ -27,49 +27,34 @@ Rectangle {
             font: Theme.titleFont
         }
 
-        EdenButton {
+        Row {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            iconName: "close"
-            onClicked: pane.controller.openPane = ""
-        }
-    }
 
-    ListView {
-        id: bookmarksView
+            EdenButton {
+                iconName: "expand"
+                Accessible.name: "Open bookmarks page"
+                onClicked: {
+                    pane.controller.openLibraryTab("bookmarks");
+                    pane.controller.openPane = "";
+                }
+            }
 
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: header.bottom
-        anchors.bottom: parent.bottom
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        anchors.bottomMargin: 8
-        spacing: 4
-        clip: true
-        model: pane.controller.bookmarks
-
-        delegate: EdenButton {
-            required property string title
-            required property url url
-
-            width: ListView.view.width
-            height: 44
-            text: title.length > 0 ? title : url.toString()
-            iconName: "bookmark-circle"
-            onClicked: {
-                pane.controller.navigate(url);
-                pane.controller.openPane = "";
+            EdenButton {
+                iconName: "close"
+                onClicked: pane.controller.openPane = ""
             }
         }
     }
 
-    Text {
-        textFormat: Text.PlainText
-        anchors.centerIn: parent
-        visible: bookmarksView.count === 0
-        text: "No bookmarks yet"
-        color: Theme.surfaceVariantText
-        font: Theme.bodyFont
+    LibraryView {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: header.bottom
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 8
+        controller: pane.controller
+        kind: "bookmarks"
+        closePaneOnOpen: true
     }
 }

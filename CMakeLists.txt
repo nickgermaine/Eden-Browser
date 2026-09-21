@@ -54,8 +54,14 @@ set(EDEN_CORE_SOURCES
     src/core/bookmarks/bookmarkstore.h
     src/core/downloads/downloadmanager.cpp
     src/core/downloads/downloadmanager.h
+    src/core/favicons/faviconstore.cpp
+    src/core/favicons/faviconstore.h
     src/core/history/historystore.cpp
     src/core/history/historystore.h
+    src/core/history/recentlyclosedstore.cpp
+    src/core/history/recentlyclosedstore.h
+    src/core/library/librarylistmodel.cpp
+    src/core/library/librarylistmodel.h
     src/core/omni/omniboxcontroller.cpp
     src/core/omni/omniboxcontroller.h
     src/core/omni/omniboxinput.cpp
@@ -260,6 +266,8 @@ qt_add_qml_module(eden-ui
         src/ui/components/EdenTextField.qml
         src/ui/components/FindBar.qml
         src/ui/components/Icon.qml
+        src/ui/components/LibraryView.qml
+        src/ui/components/SiteIcon.qml
         src/ui/components/Omnibox.qml
         src/ui/components/OverlaySurface.qml
         src/ui/components/ProfileAvatar.qml
@@ -277,6 +285,7 @@ qt_add_qml_module(eden-ui
         src/ui/panes/HistoryPane.qml
         src/ui/pages/SettingsPage.qml
         src/ui/pages/NewTabPage.qml
+        src/ui/pages/LibraryPage.qml
         src/ui/pages/ThemeEditorPage.qml
         src/ui/pages/settings/AboutSettings.qml
         src/ui/pages/settings/AppearanceSettings.qml
@@ -821,6 +830,12 @@ target_link_libraries(eden-profile-context-tests PRIVATE eden-core Qt6::Test)
 target_link_options(eden-profile-context-tests PRIVATE -Wl,--export-dynamic)
 add_test(NAME eden-profile-context-tests COMMAND eden-profile-context-tests)
 set_tests_properties(eden-profile-context-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(eden-library-tests tests/library_test.cpp)
+target_link_libraries(eden-library-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-library-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-library-tests COMMAND eden-library-tests)
+set_tests_properties(eden-library-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 qt_add_executable(eden-history-store-tests tests/historystore_test.cpp)
 target_link_libraries(eden-history-store-tests PRIVATE eden-core Qt6::Test)
