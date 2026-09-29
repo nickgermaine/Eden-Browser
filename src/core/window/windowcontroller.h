@@ -306,12 +306,13 @@ namespace eden::core {
         void openInternalTab(const QUrl &url);
 
         std::shared_ptr<ProfileContext> m_context;
-        engine::EngineFactory::Backend m_defaultBackend = engine::EngineFactory::Backend::QtWebEngine;
+        engine::EngineFactory::Backend m_defaultBackend = engine::EngineFactory::Backend::Cef;
         std::unique_ptr<engine::EngineProfileMap> m_privateProfiles;
         std::unique_ptr<DownloadManager> m_privateDownloads;
         std::unique_ptr<TabModel> m_tabs;
         std::unique_ptr<class ThumbnailCache> m_thumbnailCache;
         std::unique_ptr<OmniboxController> m_omnibox;
+        QPointer<engine::EngineView> m_navigationPreparationView;
         std::unique_ptr<ShortcutRegistry> m_shortcuts;
         int m_activeIndex = -1;
         quint64 m_closingOpenerTabId = 0;

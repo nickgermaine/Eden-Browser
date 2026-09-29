@@ -1,6 +1,5 @@
 #include <libsecret/secret.h>
 
-#include "core/profiles/cookiehandoffcoordinator.h"
 #include "core/profiles/enginestorage.h"
 #include "engine/cef/cefruntime.h"
 #include "engine/enginefactory.h"
@@ -51,7 +50,7 @@ namespace {
     }
 
     int child(const QString &backendName, const QUrl &url) {
-        const auto backend = backendName == "cef" ? eden::engine::Backend::Cef : eden::engine::Backend::QtWebEngine;
+        const auto backend = eden::engine::Backend::Cef;
         const auto roots = eden::core::ProfilePaths::standardRoots();
         auto *storage = eden::core::EngineStorage::instance();
         bool prepared = false;
@@ -106,53 +105,7 @@ namespace {
                         result = 6;
                     }
                     trace("site storage ready");
-                    if (result == 0 && url.path() == "/write") {
-                        auto otherParameters = parameters;
-                        otherParameters.backend = backend == eden::engine::Backend::Cef
-                                                      ? eden::engine::Backend::QtWebEngine
-                                                      : eden::engine::Backend::Cef;
-                        const QString otherName = backend == eden::engine::Backend::Cef ? "qtwebengine" : "cef";
-                        otherParameters.dataPath =
-                            roots.dataRoot + "/engine-data/" + otherName + "/profiles/native-storage-fixture";
-                        otherParameters.cachePath = roots.cacheRoot + "/profiles/native-storage-fixture/" + otherName;
-                        trace("creating destination engine profile");
-                        auto other = eden::engine::EngineFactory::create(otherParameters, &engine);
-                        trace("destination engine profile created");
-                        if (!other) {
-                            result = 9;
-                        } else {
-                            eden::core::CookieHandoffCoordinator coordinator(parameters.profileId);
-                            bool transferred = false;
-                            eden::core::ProfileError error = eden::core::ProfileError::HandoffFailed;
-                            coordinator.requestHandoff(profile, other, [&](auto status, const QString &) {
-                                error = status;
-                                transferred = true;
-                            });
-                            if (!waitUntil([&] { return transferred; }) || error != eden::core::ProfileError::None) {
-                                result = 10;
-                            } else {
-                                bool received = false;
-                                bool valid = false;
-                                other->exportPortableCookies([&](auto snapshot) {
-                                    for (const auto &cookie : snapshot.cookies) {
-                                        if (cookie.name == "work" && cookie.value == marker && cookie.hostOnly &&
-                                            cookie.path == "/" &&
-                                            cookie.sameSite == eden::engine::CookieSameSite::Strict &&
-                                            cookie.expires.has_value()) {
-                                            valid = true;
-                                        }
-                                    }
-                                    valid = valid && snapshot.errorCode.isEmpty();
-                                    eden::engine::wipePortableCookies(snapshot.cookies);
-                                    received = true;
-                                });
-                                if (!waitUntil([&] { return received; }) || !valid) {
-                                    result = 11;
-                                }
-                            }
-                        }
-                    }
-                    trace("handoff and destination cleanup finished");
+                    trace("destination cleanup finished");
                     bool flushed = false;
                     profile->flushStorage([&] { flushed = true; });
                     if (!waitUntil([&] { return flushed; })) {
@@ -181,7 +134,6 @@ class EngineStorageNativeTest final : public QObject {
 void EngineStorageNativeTest::persistsAllSiteStores_data() {
     QTest::addColumn<QString>("backend");
     QTest::newRow("blink") << QString("cef");
-    QTest::newRow("blink-qt") << QString("qtwebengine");
 }
 
 void EngineStorageNativeTest::persistsAllSiteStores() {
@@ -270,7 +222,6 @@ document.title='storage-ready';
         environment.insert("XDG_CACHE_HOME", directory.filePath("cache"));
         environment.insert("XDG_CONFIG_HOME", directory.filePath("config"));
         const bool sandbox = qEnvironmentVariableIsSet("EDEN_TEST_NATIVE_SANDBOX");
-        environment.insert("QTWEBENGINE_CHROMIUM_FLAGS", sandbox ? "" : "--no-sandbox");
         process.setProcessEnvironment(environment);
         process.setProgram(QCoreApplication::applicationFilePath());
         process.setArguments(
@@ -345,9 +296,6 @@ int main(int argc, char *argv[]) {
         return subprocess;
     }
     eden::engine::EngineFactory::configureApplicationArguments(argc, argv);
-    if (!eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::QtWebEngine)) {
-        return 1;
-    }
     QGuiApplication application(argc, argv);
     QCoreApplication::setApplicationName("EdenStorageNativeFixture");
     const QStringList arguments = application.arguments();

@@ -4,7 +4,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 set(EDEN_WPE_PREFIX "" CACHE PATH "Prefix containing the WPE WebKit installation")
 if(NOT EDEN_WPE_PREFIX)
-    foreach(EDEN_WPE_LOCAL_PREFIX IN ITEMS local-performance-engine-experiments local-performance local)
+    foreach(EDEN_WPE_LOCAL_PREFIX IN ITEMS local-performance local-performance-engine-experiments local)
         if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/wpe/${EDEN_WPE_LOCAL_PREFIX}/lib/pkgconfig/wpe-webkit-2.0.pc")
             set(EDEN_WPE_PREFIX "${CMAKE_SOURCE_DIR}/third_party/wpe/${EDEN_WPE_LOCAL_PREFIX}")
             break()
@@ -55,7 +55,18 @@ target_compile_definitions(eden-engine-wpe PRIVATE EDEN_WPE_BUILD_PREFIX="${EDEN
 if(EXISTS "${EDEN_WPE_PREFIX}/share/eden-wpe-build.json")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${EDEN_WPE_PREFIX}/share/eden-wpe-build.json")
     file(READ "${EDEN_WPE_PREFIX}/share/eden-wpe-build.json" EDEN_WPE_BUILD_MANIFEST)
-    foreach(EDEN_WPE_FIELD IN ITEMS mode variant profileSHA256 effectiveProfileSHA256 canvasReplayPatch engineExperiments hugePageAlignment)
+    foreach(EDEN_WPE_FIELD IN ITEMS
+        mode
+        variant
+        profileSHA256
+        effectiveProfileSHA256
+        canvasReplayPatch
+        engineExperiments
+        hugePageAlignment
+        adoptedPatches
+        boltMode
+        experiments
+    )
         string(JSON EDEN_WPE_FIELD_VALUE ERROR_VARIABLE EDEN_WPE_FIELD_ERROR GET "${EDEN_WPE_BUILD_MANIFEST}" ${EDEN_WPE_FIELD})
         if(NOT EDEN_WPE_FIELD_ERROR)
             target_compile_definitions(eden-engine-wpe PRIVATE "EDEN_WPE_BUILD_${EDEN_WPE_FIELD}=\"${EDEN_WPE_FIELD_VALUE}\"")
@@ -64,6 +75,14 @@ if(EXISTS "${EDEN_WPE_PREFIX}/share/eden-wpe-build.json")
     string(JSON EDEN_WPE_HAS_CANVAS_REPLAY ERROR_VARIABLE EDEN_WPE_MANIFEST_ERROR GET "${EDEN_WPE_BUILD_MANIFEST}" canvasReplayPatch)
     if(EDEN_WPE_TUNED_DEFAULTS AND NOT EDEN_WPE_MANIFEST_ERROR AND EDEN_WPE_HAS_CANVAS_REPLAY)
         target_compile_definitions(eden-engine-wpe PRIVATE EDEN_WPE_CANVAS_REPLAY_DEFAULT=2)
+    endif()
+    string(JSON EDEN_WPE_HAS_EXPERIMENTS ERROR_VARIABLE EDEN_WPE_EXPERIMENTS_ERROR GET "${EDEN_WPE_BUILD_MANIFEST}" experiments)
+    if(EDEN_WPE_TUNED_DEFAULTS AND NOT EDEN_WPE_EXPERIMENTS_ERROR AND EDEN_WPE_HAS_EXPERIMENTS)
+        target_compile_definitions(eden-engine-wpe PRIVATE EDEN_WPE_JSC_POLICY_SCALE_DEFAULT=1)
+    endif()
+    string(JSON EDEN_WPE_WEBRTC_BACKEND ERROR_VARIABLE EDEN_WPE_WEBRTC_BACKEND_ERROR GET "${EDEN_WPE_BUILD_MANIFEST}" webrtcBackend)
+    if(NOT EDEN_WPE_WEBRTC_BACKEND_ERROR AND EDEN_WPE_WEBRTC_BACKEND STREQUAL "libwebrtc")
+        target_compile_definitions(eden-engine-wpe PRIVATE EDEN_WPE_LIBWEBRTC=1)
     endif()
 endif()
 find_package(Qt6 6.8 REQUIRED COMPONENTS OpenGL)
@@ -79,17 +98,49 @@ add_executable(eden-wpe-tests
     src/platform/waylandglibeventdispatcher.cpp
     src/platform/waylandglibeventdispatcher.h
 )
-target_link_libraries(eden-wpe-tests PRIVATE eden-core eden-engine-wpe PkgConfig::WPE Qt6::Test)
+target_link_libraries(eden-wpe-tests PRIVATE eden-core eden-ui eden-engine-wpe PkgConfig::WPE Qt6::Test)
 if(EDEN_ENGINE_CEF)
     add_dependencies(eden-wpe-tests eden-engine-cef eden-helper)
     eden_stage_cef_runtime(eden-wpe-tests)
 endif()
 find_program(EDEN_WPE_TEST_PYTHON NAMES python3 REQUIRED)
 add_test(NAME eden-wpe-native COMMAND "${EDEN_WPE_TEST_PYTHON}" "${CMAKE_SOURCE_DIR}/scripts/test_wpe.py" --build "${CMAKE_BINARY_DIR}")
-set_tests_properties(eden-wpe-native PROPERTIES TIMEOUT 340 LABELS "native;webkit")
+set_tests_properties(eden-wpe-native PROPERTIES TIMEOUT 660 LABELS "native;webkit")
+foreach(EDEN_WPE_WEBRTC_TEST
+    wpe_webrtc_source_identity_test
+    wpe_webrtc_remote_interop_test
+    wpe_display_capture_portal_test
+    wpe_display_capture_frames_test
+    wpe_voice_processing_test
+    wpe_microphone_level_test
+    wpe_webrtc_video_test
+)
+    add_test(
+        NAME eden-${EDEN_WPE_WEBRTC_TEST}
+        COMMAND "${EDEN_WPE_TEST_PYTHON}" "${CMAKE_SOURCE_DIR}/tests/${EDEN_WPE_WEBRTC_TEST}.py" --build "${CMAKE_BINARY_DIR}"
+    )
+    set_tests_properties(eden-${EDEN_WPE_WEBRTC_TEST} PROPERTIES TIMEOUT 480 LABELS "native;webkit;webrtc" RUN_SERIAL TRUE)
+endforeach()
+set_tests_properties(eden-wpe_display_capture_frames_test PROPERTIES TIMEOUT 1200)
 add_executable(eden-wpe-bench EXCLUDE_FROM_ALL
     scripts/bench/wpe/main.cpp
     src/platform/waylandglibeventdispatcher.cpp
     src/platform/waylandglibeventdispatcher.h
 )
 target_link_libraries(eden-wpe-bench PRIVATE eden-core eden-engine-wpe PkgConfig::WPE)
+add_executable(eden-wpt-host EXCLUDE_FROM_ALL
+    tests/wpt/host.cpp
+    src/platform/waylandglibeventdispatcher.cpp
+    src/platform/waylandglibeventdispatcher.h
+)
+target_link_libraries(eden-wpt-host PRIVATE eden-core eden-engine-wpe PkgConfig::WPE)
+add_test(
+    NAME eden-wpt_host_webdriver_test
+    COMMAND "${EDEN_WPE_TEST_PYTHON}" "${CMAKE_SOURCE_DIR}/tests/wpt_host_webdriver_test.py" --build "${CMAKE_BINARY_DIR}"
+)
+set_tests_properties(eden-wpt_host_webdriver_test PROPERTIES TIMEOUT 1560 LABELS "native;webkit" RUN_SERIAL TRUE)
+find_program(EDEN_NODE_EXECUTABLE NAMES node nodejs)
+if(EDEN_NODE_EXECUTABLE)
+    add_test(NAME eden-wpt-samples-runner-tests COMMAND ${EDEN_NODE_EXECUTABLE} --test "${CMAKE_SOURCE_DIR}/tests/wpt/samples/runner_test.mjs")
+    set_tests_properties(eden-wpt-samples-runner-tests PROPERTIES TIMEOUT 120 LABELS "webkit")
+endif()

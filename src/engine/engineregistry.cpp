@@ -24,9 +24,6 @@ namespace eden::engine {
 #if EDEN_ENGINE_WPE
             {Backend::Wpe, "wpe", "WebKit", false},
 #endif
-#if EDEN_ENGINE_QTWEBENGINE
-            {Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
-#endif
         });
         return &registry;
     }

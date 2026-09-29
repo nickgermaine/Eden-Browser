@@ -243,7 +243,7 @@ def shell_memory_details(process):
                 current_path = header.group(1) or "anonymous"
             elif line.startswith("Rss:"):
                 value = float(line.split()[1]) / 1024.0
-                category = "libcef" if "libcef.so" in current_path else "qtwebengine" if "Qt6WebEngine" in current_path else "other"
+                category = "libcef" if "libcef.so" in current_path else "other"
                 mapped[category] = mapped.get(category, 0.0) + value
     return details, mapped
 

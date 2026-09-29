@@ -15,6 +15,8 @@ namespace eden::engine {
       public:
         static bool initialize(const QString &product, const QString &version);
         static QVariantMap diagnostics();
+        static QVariantMap counters();
+        static void noteThumbnailRequest();
         static void shutdown();
         static void initializeSpellChecking(WebKitWebContext *context);
         static WPEDisplay *display();

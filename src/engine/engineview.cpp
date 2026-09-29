@@ -249,6 +249,8 @@ namespace eden::engine {
         return {};
     }
 
+    void EngineView::prepareNavigation(const QList<QUrl> &, const QUrl &) {}
+
     void EngineView::requestThumbnail(const QSize &, ThumbnailCallback callback) {
         if (callback) {
             callback({});

@@ -344,7 +344,7 @@ var flushField = function(){
     if (!relevantField(field) || document.activeElement !== field) { clearField(); return; }
     var rect = field.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) { clearField(); return; }
-    var value = secretType(field) ? '' : field.value || '';
+    var value = (secretType(field) || autocompleteHas(field, 'one-time-code')) ? '' : field.value || '';
     var type = field.type || 'text';
     var name = field.name || field.id || '';
     var autocomplete = field.autocomplete || '';

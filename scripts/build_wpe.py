@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -10,12 +11,22 @@ import tarfile
 import tempfile
 import urllib.request
 
+from wpe.adopted_patches import adopted_sources, load as load_adopted_patches, prepare_adopted_patches, render
+from wpe import autoplay_activation, capture_device_enumeration, capture_frames, display_capture, dmabuf_video_frames, hang_recorder, libwebrtc_glue, mediastream_playback, video_encoder_tuning, video_frame_conversion, voice_processing, webcodecs_bitstreams, webgl_teardown, webrtc_interop, webrtc_source_identity
+from wpe.patch_support import without_cmake_comments
 from wpe.canvas_replay import prepare_canvas_replay
-from wpe.engine_experiments import prepare_engine_experiments
+from wpe.bolt import STAGES as BOLT_STAGES, run_stage as run_bolt_stage
 from wpe.rendering_experiments import prepare_rendering_experiments
-from wpe.pgo import prepare_profile
-from wpe.jsc_experiments import prepare_jsc_experiments
+from wpe.pgo import prepare_profile, profile_identity
 from wpe.inspector_theme import apply_inspector_theme
+from wpe.performance_patches import (
+    DEFAULT_PATCHES,
+    DEFAULT_PROFILE_VARIANT,
+    EXPERIMENTAL_PATCHES,
+    names as patch_names,
+    resolve_patches,
+    selections as patch_selections,
+)
 
 
 def replace_once(text, before, after):
@@ -24,7 +35,44 @@ def replace_once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def prepare_source(root, version, digest, variant=""):
+def prepare_libwebrtc_source(root, source, version, digest):
+    archive = root / "third_party" / "wpe" / "packages" / f"libwebrtc-wpewebkit-{version}.tar.xz"
+    if not archive.is_file():
+        raise RuntimeError(f"The pinned libwebrtc archive is missing; run scripts/wpe/libwebrtc_fetch.py first ({archive})")
+    with archive.open("rb") as stream:
+        archive_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if archive_digest != digest:
+        raise RuntimeError("The libwebrtc archive failed SHA-256 verification")
+    if (source / LIBWEBRTC_SOURCE_SUBTREE / "CMakeLists.txt").is_file():
+        return
+    third_party = source / "Source" / "ThirdParty"
+    third_party.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=third_party) as staging:
+        with tarfile.open(archive) as package:
+            package.extractall(staging, filter="data")
+        (Path(staging) / f"libwebrtc-wpewebkit-{version}" / "Source" / "ThirdParty" / "libwebrtc").rename(
+            source / LIBWEBRTC_SOURCE_SUBTREE
+        )
+
+
+def libwebrtc_subtree_patches(archive, version):
+    with tarfile.open(archive) as package:
+        originals = {
+            name: package.extractfile(f"libwebrtc-wpewebkit-{version}/{name}").read().decode()
+            for name in libwebrtc_glue.SUBTREE_PATCHES
+        }
+    return {name: without_cmake_comments(patch(originals[name])) for name, patch in libwebrtc_glue.SUBTREE_PATCHES.items()}
+
+
+def apply_libwebrtc_subtree_patches(root, source, version):
+    archive = root / "third_party" / "wpe" / "packages" / f"libwebrtc-wpewebkit-{version}.tar.xz"
+    for name, content in libwebrtc_subtree_patches(archive, version).items():
+        destination = source / name
+        if destination.read_text() != content:
+            destination.write_text(content)
+
+
+def prepare_source(root, version, digest, variant="", reset_performance=False, webrtc_backend="gstreamer", libwebrtc_digest=None):
     dependency = root / "third_party" / "wpe"
     archive = dependency / "packages" / f"wpewebkit-{version}.tar.xz"
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +80,9 @@ def prepare_source(root, version, digest, variant=""):
         temporary = archive.with_suffix(".download")
         urllib.request.urlretrieve(f"https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz", temporary)
         temporary.rename(archive)
-    if hashlib.file_digest(archive.open("rb"), "sha256").hexdigest() != digest:
+    with archive.open("rb") as stream:
+        archive_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if archive_digest != digest:
         raise RuntimeError("The WebKit archive failed SHA-256 verification")
     source = dependency / "source" / (f"wpewebkit-{version}" + ("-" + variant if variant else ""))
     if not (source / "CMakeLists.txt").exists():
@@ -41,20 +91,197 @@ def prepare_source(root, version, digest, variant=""):
             with tarfile.open(archive) as package:
                 package.extractall(staging, filter="data")
             (Path(staging) / f"wpewebkit-{version}").rename(source)
-    paths = [
-        "Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp",
-        "Source/WebKit/UIProcess/Inspector/wpe/WebInspectorUIProxyWPE.cpp",
-        "Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp",
-        "Source/WebKit/UIProcess/API/glib/WebKitUserMediaPermissionRequest.cpp",
-        "Source/WebCore/platform/mediastream/gstreamer/GStreamerDisplayCaptureDeviceManager.cpp",
-        "Source/WebKit/UIProcess/UserMediaPermissionRequestProxy.h",
-        "Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp",
-        "Source/WebKit/UIProcess/API/wpe/WebKitPopupMenu.cpp",
-        "Source/WebInspectorUI/UserInterface/Views/Main.css",
-        "Source/WebKit/UIProcess/glib/SystemSettingsManagerProxy.cpp",
-    ]
+    if reset_performance:
+        prepare_canvas_replay(root, source, version, False)
+        prepare_rendering_experiments(root, source, version, False)
+        prepare_adopted_patches(root, source, version, False)
+    if webrtc_backend == "libwebrtc":
+        prepare_libwebrtc_source(root, source, version, libwebrtc_digest)
+        apply_libwebrtc_subtree_patches(root, source, version)
     with tarfile.open(archive) as package:
-        original = {name: package.extractfile(f"wpewebkit-{version}/{name}").read().decode() for name in paths}
+        original = archive_originals(package, version)
+    for name, content in embedded_patches(original, version).items():
+        destination = source / name
+        if destination.read_text() != content:
+            destination.write_text(content)
+    active = {path for module in correctness_modules(webrtc_backend) for path in module.PATCHES}
+    inactive = {path for module in GSTREAMER_CORRECTNESS_MODULES + LIBWEBRTC_CORRECTNESS_MODULES for path in module.PATCHES} - active
+    for name in sorted(inactive):
+        destination = source / name
+        if name in original and destination.is_file() and destination.read_text() != original[name]:
+            destination.write_text(original[name])
+    restore_dropped_embedded_paths(source, archive, version, EMBEDDED_PATHS)
+    return source
+
+
+def archive_originals(package, version):
+    members = set(package.getnames())
+    module_paths = {path for module in GSTREAMER_CORRECTNESS_MODULES + LIBWEBRTC_CORRECTNESS_MODULES for path in module.PATCHES}
+    originals = {}
+    for name in EMBEDDED_PATHS:
+        member = f"wpewebkit-{version}/{name}"
+        if member not in members and version != "2.53.92" and name in module_paths:
+            continue
+        originals[name] = package.extractfile(member).read().decode()
+    return originals
+
+
+def restore_dropped_embedded_paths(source, archive, version, current):
+    manifest = source / EMBEDDED_MANIFEST
+    previous = set(json.loads(manifest.read_text())) if manifest.is_file() else set(RETIRED_EMBEDDED_PATHS)
+    dropped = sorted(previous - set(current))
+    if dropped:
+        with tarfile.open(archive) as package:
+            for name in dropped:
+                destination = source / name
+                if not destination.is_file():
+                    continue
+                try:
+                    member = package.getmember(f"wpewebkit-{version}/{name}")
+                except KeyError:
+                    destination.unlink()
+                    continue
+                pristine = package.extractfile(member).read()
+                if destination.read_bytes() != pristine:
+                    destination.write_bytes(pristine)
+    manifest.write_text(json.dumps(sorted(set(current)), indent=1) + "\n")
+    return dropped
+
+
+EMBEDDED_PATHS = [
+    "Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp",
+    "Source/WebKit/UIProcess/Inspector/wpe/WebInspectorUIProxyWPE.cpp",
+    "Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp",
+    "Source/WebKit/UIProcess/API/glib/WebKitUserMediaPermissionRequest.cpp",
+    "Source/WebCore/platform/mediastream/gstreamer/GStreamerDisplayCaptureDeviceManager.cpp",
+    "Source/WebKit/UIProcess/UserMediaPermissionRequestProxy.h",
+    "Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp",
+    "Source/WebKit/UIProcess/API/wpe/WebKitPopupMenu.cpp",
+    "Source/WebInspectorUI/UserInterface/Views/Main.css",
+    "Source/WebKit/UIProcess/glib/SystemSettingsManagerProxy.cpp",
+    "Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp",
+]
+
+GSTREAMER_CORRECTNESS_MODULES = (webrtc_source_identity, webrtc_interop, mediastream_playback, display_capture, voice_processing, video_frame_conversion, video_encoder_tuning, capture_frames, autoplay_activation, capture_device_enumeration, hang_recorder, webgl_teardown, dmabuf_video_frames, webcodecs_bitstreams)
+LIBWEBRTC_CORRECTNESS_MODULES = (mediastream_playback, display_capture, voice_processing, video_frame_conversion, video_encoder_tuning, capture_frames, libwebrtc_glue, autoplay_activation, capture_device_enumeration, hang_recorder, webgl_teardown, dmabuf_video_frames, webcodecs_bitstreams)
+EMBEDDED_CORRECTNESS_MODULES = GSTREAMER_CORRECTNESS_MODULES
+EMBEDDED_MANIFEST = ".eden-embedded-paths.json"
+RETIRED_EMBEDDED_PATHS = (
+    "Source/WebCore/platform/mediastream/gstreamer/GStreamerMockDeviceProvider.cpp",
+)
+EMBEDDED_PATHS += list(dict.fromkeys(path for module in GSTREAMER_CORRECTNESS_MODULES + LIBWEBRTC_CORRECTNESS_MODULES for path in module.PATCHES))
+LIBWEBRTC_SOURCE_SUBTREE = "Source/ThirdParty/libwebrtc"
+
+
+def correctness_modules(backend):
+    if backend == "libwebrtc":
+        return LIBWEBRTC_CORRECTNESS_MODULES
+    return GSTREAMER_CORRECTNESS_MODULES
+
+
+def embedded_generator_sha256(modules):
+    generator_source = (
+        inspect.getsource(replace_once).encode()
+        + inspect.getsource(embedded_patches).encode()
+        + b"".join(Path(module.__file__).read_bytes() for module in modules)
+    )
+    generator_paths = json.dumps(EMBEDDED_PATHS, separators=(",", ":")).encode()
+    return hashlib.sha256(generator_source + b"\0" + generator_paths).hexdigest()
+
+
+def profile_matches_backend(profile, generator_sha256):
+    sidecar = profile.with_suffix(profile.suffix + ".json")
+    if not sidecar.is_file():
+        return False
+    metadata = json.loads(sidecar.read_text())
+    identity = metadata.get("trainingIdentity")
+    return isinstance(identity, dict) and identity.get("embeddedPatchGeneratorSHA256") == generator_sha256
+
+
+def select_profile(dependency, version, variant, variant_suffix, webrtc_backend, generator_sha256, no_profile):
+    if no_profile:
+        return None
+    profiles = []
+    if variant:
+        profiles.append(dependency / "profiles" / f"{version}{variant_suffix}.profdata")
+    profiles.extend(
+        [
+            dependency / "profiles" / f"{version}-{DEFAULT_PROFILE_VARIANT}.profdata",
+            dependency / "profiles" / f"{version}.profdata",
+        ]
+    )
+    if webrtc_backend == "libwebrtc":
+        profiles = [profile for profile in profiles if profile_matches_backend(profile, generator_sha256)]
+    return next((profile for profile in profiles if profile.is_file()), None)
+
+
+def automatic_variant(experiments, frame_pointers, webrtc_backend):
+    variant = ""
+    if experiments and frame_pointers:
+        variant = "experiments-frame-profile"
+    elif experiments:
+        variant = "experiments"
+    elif frame_pointers:
+        variant = "frame-profile"
+    if webrtc_backend == "libwebrtc":
+        variant = "-".join(["libwebrtc", variant] if variant else ["libwebrtc"])
+    return variant
+
+
+def webrtc_configure_flags(backend):
+    if backend == "libwebrtc":
+        return ["-DENABLE_WEB_RTC=ON", "-DUSE_GSTREAMER_WEBRTC=OFF", "-DUSE_LIBWEBRTC=ON"]
+    return ["-DENABLE_WEB_RTC=ON", "-DUSE_GSTREAMER_WEBRTC=ON", "-DUSE_LIBWEBRTC=OFF"]
+
+
+def managed_source_paths(source, adopted_patches, canvas_replay_enabled, webrtc_backend="gstreamer"):
+    paths = set(EMBEDDED_PATHS)
+    if adopted_patches:
+        patches, files, _ = load_adopted_patches(adopted_patches)
+        paths.update(patches)
+        paths.update(files)
+    if canvas_replay_enabled:
+        paths.update({
+            "Source/WebCore/platform/graphics/skia/ImageBufferSkiaAcceleratedBackend.cpp",
+            "Source/WebCore/platform/graphics/skia/ImageBufferSkiaAcceleratedBackend.h",
+            "Source/WebCore/platform/graphics/skia/EdenSkiaCanvasReplay.h",
+            "Source/ThirdParty/skia/src/gpu/ganesh/GrDDLTask.cpp",
+        })
+    if webrtc_backend == "libwebrtc":
+        subtree = source / LIBWEBRTC_SOURCE_SUBTREE
+        if subtree.is_dir():
+            paths.update(str(path.relative_to(source)) for path in sorted(subtree.rglob("*")) if path.is_file())
+    return paths
+
+
+def snapshot_managed_sources(source, paths):
+    snapshot = {}
+    for relative_path in paths:
+        path = source / relative_path
+        if path.is_file():
+            snapshot[relative_path] = (path.stat().st_mtime_ns, file_digest(path))
+    return snapshot
+
+
+def restore_unchanged_source_timestamps(source, snapshot):
+    for relative_path, (modified, digest) in snapshot.items():
+        path = source / relative_path
+        if path.is_file() and file_digest(path) == digest:
+            os.utime(path, ns=(path.stat().st_atime_ns, modified))
+
+
+def prepared_managed_source_digest(source, adopted_patches, canvas_replay_enabled, webrtc_backend="gstreamer"):
+    paths = managed_source_paths(source, adopted_patches, canvas_replay_enabled, webrtc_backend)
+    result = hashlib.sha256()
+    for path in sorted(paths):
+        result.update(path.encode())
+        result.update(b"\0")
+        result.update(file_digest(source / path))
+    return result.hexdigest()
+
+
+def embedded_patches(original, version):
+    paths = EMBEDDED_PATHS
     client = original[paths[0]]
     client = replace_once(
         client,
@@ -471,17 +698,103 @@ static void webkit_web_view_class_init(WebKitWebViewClass* webViewClass)""",
     )
     system_settings = replace_once(
         system_settings,
-        "#include <WebCore/Theme.h>",
-        "#include <WebCore/Theme.h>\n#include <glib.h>",
+        "#include <WebCore/SystemSettings.h>",
+        "#include <WebCore/SystemSettings.h>\n#include <glib.h>",
     )
-    for name, content in zip(
-        paths,
-        [client, inspector, view, media, capture, request, page_client, popup, inspector_style, system_settings],
-    ):
-        destination = source / name
-        if destination.read_text() != content:
-            destination.write_text(content)
-    return source
+    launcher = replace_once(
+        original[paths[10]],
+        """    if (processType == ProcessLauncher::ProcessType::DBusProxy)
+        return false;""",
+        """    if (processType == ProcessLauncher::ProcessType::DBusProxy)
+        return false;
+
+#if USE(GSTREAMER_WEBRTC)
+    if (processType == ProcessLauncher::ProcessType::Web && !g_getenv("EDEN_WEBKIT_ISOLATE_WEB_PROCESS_NETWORK"))
+        return false;
+#endif""",
+    )
+    launcher = replace_once(
+        launcher,
+        """static int createFlatpakInfo(const char* instanceID)
+{
+    static NeverDestroyed<GUniquePtr<char>> data;
+    static size_t size;
+
+    if (!data.get()) {
+        GUniquePtr<GKeyFile> keyFile(g_key_file_new());
+        g_key_file_set_string(keyFile.get(), "Application", "name", WTF::applicationID().data());
+        g_key_file_set_string(keyFile.get(), "Instance", "instance-id", instanceID);
+
+        if (remoteInspectorEnabled())
+            g_key_file_set_string(keyFile.get(), "Context", "shared", "network;");
+
+        data->reset(g_key_file_to_data(keyFile.get(), &size, nullptr));
+    }
+
+    return createSealedMemFdWithData("flatpak-info", data->get(), size);
+}""",
+        """static int createFlatpakInfo(const char* instanceID)
+{
+    GUniquePtr<GKeyFile> keyFile(g_key_file_new());
+    g_key_file_set_string(keyFile.get(), "Application", "name", WTF::applicationID().data());
+    g_key_file_set_string(keyFile.get(), "Instance", "instance-id", instanceID);
+
+    if (remoteInspectorEnabled())
+        g_key_file_set_string(keyFile.get(), "Context", "shared", "network;");
+
+    size_t size;
+    GUniquePtr<char> data(g_key_file_to_data(keyFile.get(), &size, nullptr));
+    return createSealedMemFdWithData("flatpak-info", data.get(), size);
+}""",
+    )
+    launcher = replace_once(
+        launcher,
+        "#include <sys/mman.h>\n",
+        "#include <sys/mman.h>\n#include <sys/stat.h>\n#include <sys/sysmacros.h>\n",
+    )
+    launcher = replace_once(
+        launcher,
+        """        CString path = FileSystem::pathByAppendingComponent("/dev"_s, fileName).utf8();
+""",
+        """        CString path = FileSystem::pathByAppendingComponent("/dev"_s, fileName).utf8();
+        struct stat deviceStatus;
+        if (!stat(path.data(), &deviceStatus) && S_ISCHR(deviceStatus.st_mode)) {
+            CString udevEntry = makeString("/run/udev/data/c"_s, major(deviceStatus.st_rdev), ':', minor(deviceStatus.st_rdev)).utf8();
+            args.append(CString("--ro-bind-try"));
+            args.append(udevEntry);
+            args.append(udevEntry);
+        }
+""",
+    )
+    patched = dict(
+        zip(
+            paths,
+            [
+                client,
+                inspector,
+                view,
+                media,
+                capture,
+                request,
+                page_client,
+                popup,
+                inspector_style,
+                system_settings,
+                launcher,
+            ],
+        )
+    )
+    root = Path(__file__).resolve().parents[1]
+    module_patches = {}
+    for module in EMBEDDED_CORRECTNESS_MODULES:
+        for name, patch in module.PATCHES.items():
+            module_patches.setdefault(name, []).append(patch)
+    for name, patches in module_patches.items():
+        if version == "2.53.92":
+            patched[name] = render(root, original[name], patches, name)
+        elif name in original:
+            patched[name] = original[name]
+    return patched
 
 
 def file_digest(path):
@@ -541,37 +854,63 @@ def stage_runtime_libraries(dependency, prefix):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--jobs", type=int, default=8)
-    parser.add_argument("--link-jobs", type=int)
+    parser = argparse.ArgumentParser(
+        description="Build WPE WebKit with the known-good performance patch registry"
+    )
+    parser.add_argument("--jobs", type=int, default=16, help="combined worker budget, default: 16")
+    parser.add_argument("--link-jobs", type=int, help="workers reserved for linking, default: 4")
     parser.add_argument("--cpus", default="0-7,16-23")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--mode", choices=["baseline", "profile-generate", "performance"], default="performance")
+    parser.add_argument(
+        "--webrtc-backend",
+        choices=["libwebrtc", "gstreamer"],
+        default="libwebrtc",
+        help="WebRTC implementation inside WebKit, default: libwebrtc",
+    )
     parser.add_argument("--profile", type=Path)
+    parser.add_argument("--no-profile", action="store_true", help="performance build without PGO, for verification runtimes")
     parser.add_argument("--configure-only", action="store_true")
     parser.add_argument("--variant", default="")
-    parser.add_argument("--canvas-replay", action="store_true")
-    parser.add_argument("--engine-experiments", action="store_true")
-    parser.add_argument("--jsc-experiments", action="store_true")
-    parser.add_argument("--huge-page-alignment", action="store_true")
+    parser.add_argument(
+        "--experiments",
+        action="store_true",
+        help="add every experimental registry patch in an isolated build variant",
+    )
     parser.add_argument("--frame-pointers", action="store_true")
-    parser.add_argument("--rendering-experiments", action="store_true")
+    parser.add_argument("--verify-patches", action="store_true")
+    parser.add_argument("--bolt", choices=BOLT_STAGES)
+    parser.add_argument("--bolt-only", action="store_true", help="operate on an existing runtime without rebuilding")
+    parser.add_argument("--bolt-plan", type=Path, help="JSON workload commands for BOLT training or validation")
+    parser.add_argument("--bolt-tool-dir", type=Path)
     arguments = parser.parse_args()
     if arguments.variant and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", arguments.variant):
         parser.error("--variant accepts lowercase letters, digits and hyphens")
-    if arguments.canvas_replay and (not arguments.variant or arguments.mode == "baseline"):
-        parser.error("--canvas-replay requires an isolated --variant and a performance source build")
-    if arguments.engine_experiments and (not arguments.variant or arguments.mode == "baseline"):
-        parser.error("--engine-experiments requires an isolated --variant and a performance source build")
-    if arguments.jsc_experiments and (not arguments.variant or arguments.mode == "baseline"):
-        parser.error("--jsc-experiments requires an isolated --variant and a performance source build")
-    if arguments.rendering_experiments and (not arguments.variant or arguments.mode == "baseline" or not arguments.canvas_replay):
-        parser.error("--rendering-experiments requires --canvas-replay, an isolated --variant and a performance source build")
-    if arguments.frame_pointers and (not arguments.variant or arguments.mode == "baseline"):
-        parser.error("--frame-pointers requires an isolated --variant and a performance source build")
-    if arguments.huge_page_alignment and not arguments.engine_experiments:
-        parser.error("--huge-page-alignment requires --engine-experiments")
+    if arguments.experiments and arguments.mode == "baseline":
+        parser.error("--experiments requires a performance source build")
+    if arguments.frame_pointers and arguments.mode == "baseline":
+        parser.error("--frame-pointers requires a performance source build")
+    if arguments.verify_patches and not arguments.experiments:
+        parser.error("--verify-patches requires --experiments")
+    if arguments.bolt and arguments.mode != "performance":
+        parser.error("--bolt requires performance mode")
+    if arguments.bolt and arguments.frame_pointers:
+        parser.error("BOLT uses the ordinary optimized runtime, without frame pointers")
+    if arguments.bolt_only and not arguments.bolt:
+        parser.error("--bolt-only requires --bolt")
+    if arguments.bolt and arguments.bolt != "instrument" and not arguments.bolt_only:
+        parser.error("Later BOLT stages require --bolt-only to preserve the trained binary")
+    if arguments.bolt in ("train", "validate", "validate-performance") and not arguments.bolt_plan:
+        parser.error("BOLT training and validation require --bolt-plan")
+    if arguments.bolt_plan and arguments.bolt not in ("train", "validate", "validate-performance"):
+        parser.error("--bolt-plan is used only by BOLT training and validation")
+    if arguments.bolt and (arguments.prepare_only or arguments.configure_only or arguments.runtime_only):
+        parser.error("BOLT cannot be combined with preparation, configuration or runtime staging only")
+    if arguments.webrtc_backend == "libwebrtc" and arguments.mode == "baseline":
+        parser.error("--webrtc-backend libwebrtc requires a performance source build; the baseline tracks the GStreamer backend")
+    global EMBEDDED_CORRECTNESS_MODULES
+    EMBEDDED_CORRECTNESS_MODULES = correctness_modules(arguments.webrtc_backend)
     topology = subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET"], text=True)
     actual = {
         int(row.split(",")[0]): tuple(row.split(",")[1:])
@@ -582,6 +921,8 @@ def main():
     for interval in arguments.cpus.split(","):
         limits = [int(value) for value in interval.split("-")]
         selected.update(range(limits[0], limits[-1] + 1))
+    if not selected.issubset(actual):
+        parser.error("--cpus includes a CPU absent from this host")
     cores = {actual[cpu] for cpu in selected}
     if not 1 <= arguments.jobs <= min(len(actual) // 2, len(selected)) or len(cores) > len(set(actual.values())) // 2:
         raise RuntimeError("The requested CPU set or worker count exceeds the half-machine build budget")
@@ -590,37 +931,76 @@ def main():
     if arguments.mode != "baseline" and not 1 <= arguments.link_jobs < arguments.jobs:
         parser.error("--link-jobs must leave at least one other slot in the total --jobs budget")
     build_jobs = arguments.jobs if arguments.mode == "baseline" else arguments.jobs - arguments.link_jobs
+    patches = () if arguments.mode == "baseline" else resolve_patches(arguments.experiments)
+    enabled_names = patch_names(patches)
+    adopted_patches = patch_selections(patches, "adopted")
+    if not arguments.variant:
+        arguments.variant = automatic_variant(arguments.experiments, arguments.frame_pointers, arguments.webrtc_backend)
     root = Path(__file__).resolve().parents[1]
     dependency = root / "third_party/wpe"
+    print("Enabled performance patches: " + (", ".join(enabled_names) if enabled_names else "none"), flush=True)
     suffix = {"baseline": "", "profile-generate": "-profile", "performance": "-performance"}[arguments.mode]
     variant_suffix = "-" + arguments.variant if arguments.variant else ""
     prefix = dependency / f"local{suffix}{variant_suffix}"
+    if arguments.bolt_only:
+        run_bolt_stage(root, prefix, arguments.bolt, arguments.bolt_tool_dir,
+                       ["taskset", "--cpu-list", arguments.cpus], arguments.jobs, arguments.bolt_plan)
+        print(prefix / "share/eden-bolt/state.json")
+        return
+    if (prefix / "share/eden-bolt/state.json").exists() and not arguments.runtime_only:
+        parser.error("This runtime has a BOLT journal; use a fresh --variant for a source rebuild")
     if arguments.runtime_only:
         stage_runtime_libraries(dependency, prefix)
         apply_inspector_theme(root, prefix)
         return
     if arguments.profile and (arguments.mode != "performance" or not arguments.profile.is_file()):
         parser.error("--profile requires performance mode and an existing merged profile")
+    if arguments.no_profile and (arguments.mode != "performance" or arguments.profile):
+        parser.error("--no-profile requires performance mode and no --profile")
     versions = (root / "cmake" / "WpeVersion.cmake").read_text()
     version_key = "EDEN_WPE_MINIMUM_VERSION" if arguments.mode == "baseline" else "EDEN_WPE_PERFORMANCE_VERSION"
     digest_key = "EDEN_WPE_SOURCE_SHA256" if arguments.mode == "baseline" else "EDEN_WPE_PERFORMANCE_SHA256"
     version = re.search(version_key + r' "([^"]+)"', versions)[1]
     digest = re.search(digest_key + r' "([^"]+)"', versions)[1]
+    libwebrtc_digest = None
+    if arguments.webrtc_backend == "libwebrtc":
+        libwebrtc_digest = re.search(r'EDEN_LIBWEBRTC_SHA256 "([^"]+)"', versions)[1]
     build = dependency / (("build" if arguments.mode == "baseline" else f"build-{version}{suffix}") + variant_suffix)
     if arguments.mode == "performance" and not arguments.profile:
-        profiles = [dependency / "profiles" / f"{version}{variant_suffix}.profdata"]
-        if arguments.variant:
-            profiles.append(dependency / "profiles" / f"{version}.profdata")
-        for saved_profile in profiles:
-            if saved_profile.is_file():
-                arguments.profile = saved_profile
-                break
-    source = prepare_source(root, version, digest, arguments.variant)
-    if arguments.variant and arguments.mode != "baseline":
-        prepare_canvas_replay(root, source, version, arguments.canvas_replay)
-        prepare_engine_experiments(root, source, version, arguments.engine_experiments)
-        prepare_jsc_experiments(root, source, version, arguments.jsc_experiments)
-        prepare_rendering_experiments(root, source, version, arguments.rendering_experiments)
+        arguments.profile = select_profile(
+            dependency,
+            version,
+            arguments.variant,
+            variant_suffix,
+            arguments.webrtc_backend,
+            embedded_generator_sha256(EMBEDDED_CORRECTNESS_MODULES) if arguments.webrtc_backend == "libwebrtc" else None,
+            arguments.no_profile,
+        )
+    if arguments.mode == "performance":
+        print(
+            "Selected PGO profile: " + (str(arguments.profile) if arguments.profile else "none"),
+            flush=True,
+        )
+    expected_source = dependency / "source" / (f"wpewebkit-{version}" + variant_suffix)
+    source_snapshot = snapshot_managed_sources(
+        expected_source,
+        managed_source_paths(expected_source, adopted_patches, "canvas-replay" in enabled_names, arguments.webrtc_backend),
+    )
+    source = prepare_source(
+        root,
+        version,
+        digest,
+        arguments.variant,
+        arguments.mode != "baseline",
+        arguments.webrtc_backend,
+        libwebrtc_digest,
+    )
+    if arguments.mode != "baseline":
+        if "canvas-replay" in enabled_names:
+            prepare_canvas_replay(root, source, version, True)
+        if adopted_patches:
+            prepare_adopted_patches(root, source, version, True, names=adopted_patches)
+    restore_unchanged_source_timestamps(source, source_snapshot)
     if arguments.prepare_only:
         print(source)
         return
@@ -634,19 +1014,46 @@ def main():
         [str(dependency / "usr" / "lib" / "pkgconfig"), environment.get("PKG_CONFIG_PATH", "")]
     )
     environment["CPATH"] = os.pathsep.join([str(tools / "include"), environment.get("CPATH", "")])
-    environment["RUBYLIB"] = os.pathsep.join(
-        [str(tools / "lib" / "ruby" / "3.4.0"), str(tools / "lib" / "ruby" / "3.4.0" / "x86_64-linux")]
-    )
+    if (tools / "bin" / "ruby").is_file():
+        environment["RUBYLIB"] = os.pathsep.join(
+            [str(tools / "lib" / "ruby" / "3.4.0"), str(tools / "lib" / "ruby" / "3.4.0" / "x86_64-linux")]
+        )
+        environment["GEM_PATH"] = os.pathsep.join(
+            [str(tools / "lib" / "ruby" / "gems" / "3.4.0"), "/usr/lib/ruby/gems/3.4.0"]
+        )
     environment["WEBKIT_NINJA_LINK_MAX"] = "1"
     environment["WEBKIT_NINJA_COMPILE_MAX"] = str(build_jobs)
-    environment["GEM_PATH"] = os.pathsep.join(
-        [str(tools / "lib" / "ruby" / "gems" / "3.4.0"), "/usr/lib/ruby/gems/3.4.0"]
-    )
     affinity = ["taskset", "--cpu-list", arguments.cpus]
+    compiler = "gcc" if arguments.mode == "baseline" else "clang"
+    identity_values = {
+        "version": version,
+        "sourceSHA256": digest,
+        "patches": list(enabled_names),
+        "patchCatalogSHA256": file_digest(root / "scripts/wpe/performance_patches.py").hex(),
+        "adoptedPatchSources": {
+            path.name: file_digest(path).hex() for path in adopted_sources(adopted_patches)
+        } if adopted_patches else {},
+        "canvasReplayPatch": "canvas-replay" in enabled_names,
+        "canvasReplaySources": {
+            path.name: file_digest(path).hex()
+            for path in [root / "scripts/wpe/canvas_replay.py", root / "scripts/wpe/EdenSkiaCanvasReplay.h"]
+        } if "canvas-replay" in enabled_names else {},
+        "hugePageAlignment": "huge-page-alignment" in enabled_names,
+        "verifyPatches": arguments.verify_patches,
+        "embeddedPatchGeneratorSHA256": embedded_generator_sha256(EMBEDDED_CORRECTNESS_MODULES),
+        "preparedManagedSourceSHA256": prepared_managed_source_digest(
+            source, adopted_patches, "canvas-replay" in enabled_names, arguments.webrtc_backend
+        ),
+        "compiler": subprocess.check_output([compiler, "--version"], env=environment, text=True).splitlines()[0],
+    }
+    training_identity = profile_identity(identity_values) if arguments.mode != "baseline" else None
     effective_profile = arguments.profile
     profile_paths = {}
     if arguments.profile:
-        effective_profile, profile_paths = prepare_profile(arguments.profile, source, build, affinity, environment)
+        effective_profile, profile_paths = prepare_profile(
+            arguments.profile, source, build, affinity, environment, training_identity
+        )
+    webrtc_configure = webrtc_configure_flags(arguments.webrtc_backend)
     configure = [
         "cmake",
         "-S",
@@ -660,9 +1067,7 @@ def main():
         f"-DCMAKE_INSTALL_PREFIX={prefix}",
         f'-DCMAKE_INSTALL_RPATH={prefix / "lib"};{tools / "lib"};{dependency / "usr" / "lib"}',
         f'-DCMAKE_PREFIX_PATH={tools};{dependency / "usr"}',
-        "-DENABLE_WEB_RTC=ON",
-        "-DUSE_GSTREAMER_WEBRTC=ON",
-        "-DUSE_LIBWEBRTC=OFF",
+        *webrtc_configure,
         "-DCMAKE_C_COMPILER=/usr/bin/gcc",
         "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
         "-DENABLE_DOCUMENTATION=OFF",
@@ -688,8 +1093,11 @@ def main():
         flags = "-march=native -mtune=native -fno-semantic-interposition -fno-plt"
         if arguments.frame_pointers:
             flags += " -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer"
+        if arguments.verify_patches:
+            flags += " -DWEBKIT_EDEN_VERIFY_PATCHES=1"
         linker_flags = f'-fuse-ld=lld -Wl,--threads=1,--thinlto-jobs={arguments.link_jobs},--thinlto-cache-dir={build / "lto-cache"}'
-        if arguments.huge_page_alignment:
+        linker_flags += " -Wl,--emit-relocs"
+        if "huge-page-alignment" in enabled_names:
             linker_flags += " -Wl,-z,max-page-size=0x200000"
         configure += [
             "-DCMAKE_C_COMPILER=clang",
@@ -730,26 +1138,32 @@ def main():
     subprocess.run(affinity + ["cmake", "--install", str(build)], env=environment, check=True)
     stage_runtime_libraries(dependency, prefix)
     apply_inspector_theme(root, prefix)
-    compiler = "gcc" if arguments.mode == "baseline" else "clang"
     manifest = {
         "version": version,
         "sourceSHA256": digest,
         "mode": arguments.mode,
         "variant": arguments.variant,
-        "canvasReplayPatch": arguments.canvas_replay,
-        "engineExperiments": arguments.engine_experiments,
-        "jscExperiments": arguments.jsc_experiments,
-        "jscExperimentSources": {"jsc_experiments.py": file_digest(root / "scripts/wpe/jsc_experiments.py").hex()} if arguments.jsc_experiments else {},
-        "hugePageAlignment": arguments.huge_page_alignment,
+        "webrtcBackend": arguments.webrtc_backend,
+        "libwebrtcSHA256": libwebrtc_digest,
+        "patches": identity_values["patches"],
+        "defaultPatches": list(patch_names(DEFAULT_PATCHES)),
+        "experimentalPatches": list(patch_names(EXPERIMENTAL_PATCHES)) if arguments.experiments else [],
+        "experiments": arguments.experiments,
+        "patchCatalogSHA256": identity_values["patchCatalogSHA256"],
+        "canvasReplayPatch": identity_values["canvasReplayPatch"],
+        "hugePageAlignment": identity_values["hugePageAlignment"],
+        "embeddedPatchGeneratorSHA256": identity_values["embeddedPatchGeneratorSHA256"],
+        "preparedManagedSourceSHA256": identity_values["preparedManagedSourceSHA256"],
+        "profileTrainingIdentity": training_identity,
         "framePointers": arguments.frame_pointers,
-        "renderingExperiments": arguments.rendering_experiments,
-        "renderingExperimentSources": {path.name: file_digest(path).hex() for path in [root / "scripts/wpe/rendering_experiments.py", root / "scripts/wpe/EdenHarfBuzzTransforms.inc", root / "scripts/wpe/EdenSkiaCanvasCpuRaster.h"]} if arguments.rendering_experiments else {},
-        "engineExperimentSources": {path.name: file_digest(path).hex() for path in [root / "scripts/wpe/engine_experiments.py"]} if arguments.engine_experiments else {},
-        "canvasReplaySources": {
-            path.name: file_digest(path).hex()
-            for path in [root / "scripts/wpe/canvas_replay.py", root / "scripts/wpe/EdenSkiaCanvasReplay.h"]
-        } if arguments.canvas_replay else {},
-        "compiler": subprocess.check_output([compiler, "--version"], env=environment, text=True).splitlines()[0],
+        "renderingExperiments": False,
+        "adoptedPatches": bool(adopted_patches),
+        "verifyPatches": arguments.verify_patches,
+        "boltPipeline": "share/eden-bolt/state.json",
+        "adoptedPatchSources": identity_values["adoptedPatchSources"],
+        "renderingExperimentSources": {},
+        "canvasReplaySources": identity_values["canvasReplaySources"],
+        "compiler": identity_values["compiler"],
         "profileSHA256": file_digest(arguments.profile).hex() if arguments.profile else None,
         "effectiveProfileSHA256": file_digest(effective_profile).hex() if effective_profile else None,
         "profilePaths": profile_paths,
@@ -758,6 +1172,9 @@ def main():
     manifest_path = prefix / "share" / "eden-wpe-build.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    if arguments.bolt:
+        run_bolt_stage(root, prefix, arguments.bolt, arguments.bolt_tool_dir,
+                       affinity, arguments.jobs, arguments.bolt_plan)
     print(prefix)
 
 

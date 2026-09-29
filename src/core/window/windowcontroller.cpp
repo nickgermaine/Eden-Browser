@@ -131,7 +131,7 @@ namespace eden::core {
         return 1000 - gaps * 4 - normalizedCandidate.size();
     }
 
-    static qint64 residentMemoryKiB(qint64 processId) {
+    static qint64 privateFootprintKiB(qint64 processId) {
         if (processId <= 0) {
             return -1;
         }
@@ -139,21 +139,39 @@ namespace eden::core {
         if (!status.open(QIODevice::ReadOnly)) {
             return -1;
         }
+        qint64 anonymous = -1;
+        qint64 swap = 0;
+        qint64 resident = -1;
         const QList<QByteArray> lines = status.readAll().split('\n');
         for (const QByteArray &line : lines) {
-            if (!line.startsWith("VmRSS:")) {
+            const bool isAnonymous = line.startsWith("RssAnon:");
+            const bool isSwap = line.startsWith("VmSwap:");
+            const bool isResident = line.startsWith("VmRSS:");
+            if (!isAnonymous && !isSwap && !isResident) {
                 continue;
             }
             const QList<QByteArray> fields = line.simplified().split(' ');
             bool valid = false;
             const qint64 value = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
-            return valid ? value : -1;
+            if (!valid || value < 0) {
+                continue;
+            }
+            if (isAnonymous) {
+                anonymous = value;
+            } else if (isSwap) {
+                swap = value;
+            } else {
+                resident = value;
+            }
         }
-        return -1;
+        if (anonymous >= 0) {
+            return anonymous + swap;
+        }
+        return resident;
     }
 
-    static qint64 browserResidentMemoryKiB() {
-        const qint64 value = residentMemoryKiB(QCoreApplication::applicationPid());
+    static qint64 browserFootprintKiB() {
+        const qint64 value = privateFootprintKiB(QCoreApplication::applicationPid());
         if (value >= 0) {
             return value;
         }
@@ -162,10 +180,15 @@ namespace eden::core {
             return -1;
         }
         const QList<QByteArray> fields = statm.readAll().simplified().split(' ');
-        bool valid = false;
-        const qint64 pages = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
+        bool residentValid = false;
+        bool sharedValid = false;
+        const qint64 pages = fields.size() > 1 ? fields.at(1).toLongLong(&residentValid) : 0;
+        const qint64 shared = fields.size() > 2 ? fields.at(2).toLongLong(&sharedValid) : 0;
         const long pageBytes = sysconf(_SC_PAGESIZE);
-        return valid && pages >= 0 && pageBytes > 0 ? pages * pageBytes / 1024 : -1;
+        if (!residentValid || !sharedValid || pages < 0 || shared < 0 || pageBytes <= 0) {
+            return -1;
+        }
+        return std::max<qint64>(0, pages - shared) * pageBytes / 1024;
     }
 
     static QString memoryLabel(qint64 kibibytes) {
@@ -207,7 +230,8 @@ namespace eden::core {
         return value;
     }
 
-    static QVariantMap sharedProcessMemory() {
+    static QVariantMap sharedProcessMemory(const QString &engineName) {
+        const bool webkit = engineName == "WebKit";
         qint64 gpuMemory = 0;
         qint64 networkMemory = 0;
         bool gpuAvailable = false;
@@ -216,25 +240,32 @@ namespace eden::core {
             const QByteArray commandLine = processCommandLine(processId);
             const QString executable =
                 QFileInfo(QFile::symLinkTarget(QString("/proc/%1/exe").arg(processId))).fileName();
-            const qint64 memory = residentMemoryKiB(processId);
+            const bool isGpu = webkit ? executable == "WPEGPUProcess" : commandLine.contains("--type=gpu-process");
+            const bool isNetwork = webkit ? executable == "WPENetworkProcess"
+                                          : commandLine.contains("--type=utility") &&
+                                                (commandLine.contains("network.mojom.NetworkService") ||
+                                                 commandLine.contains("network-service"));
+            if (!isGpu && !isNetwork) {
+                continue;
+            }
+            const qint64 memory = privateFootprintKiB(processId);
             if (memory < 0) {
                 continue;
             }
-            if (executable == "WPEGPUProcess" || commandLine.contains("--type=gpu-process")) {
+            if (isGpu) {
                 gpuMemory += memory;
                 gpuAvailable = true;
-            } else if (
-                executable == "WPENetworkProcess" ||
-                (commandLine.contains("--type=utility") &&
-                 (commandLine.contains("network.mojom.NetworkService") || commandLine.contains("network-service")))
-            ) {
+            } else {
                 networkMemory += memory;
                 networkAvailable = true;
             }
         }
         QVariantMap result;
-        result.insert("sharedBrowserMemory", memoryLabel(browserResidentMemoryKiB()));
-        result.insert("sharedGpuMemory", gpuAvailable ? memoryLabel(gpuMemory) : QString("Unavailable"));
+        result.insert("sharedBrowserMemory", memoryLabel(browserFootprintKiB()));
+        result.insert(
+            "sharedGpuMemory",
+            gpuAvailable ? memoryLabel(gpuMemory) : QString(webkit ? "In renderer" : "Unavailable")
+        );
         result.insert("sharedNetworkMemory", networkAvailable ? memoryLabel(networkMemory) : QString("Unavailable"));
         return result;
     }
@@ -311,6 +342,9 @@ namespace eden::core {
     }
 
     WindowController::~WindowController() {
+        if (m_navigationPreparationView) {
+            m_navigationPreparationView->prepareNavigation({}, {});
+        }
         if (m_window) {
             m_window->removeEventFilter(this);
         }
@@ -569,8 +603,7 @@ namespace eden::core {
         const QString requestedEngineName = engineName.isEmpty() ? context->settings()->defaultEngine() : engineName;
         const std::optional<engine::Backend> requestedBackend = registry->backendForId(requestedEngineName);
         m_defaultBackend = requestedBackend.value_or(
-            registry->descriptors().isEmpty() ? engine::Backend::QtWebEngine
-                                              : registry->descriptors().constFirst().backend
+            registry->descriptors().isEmpty() ? engine::Backend::Cef : registry->descriptors().constFirst().backend
         );
         m_engineName = registry->idForBackend(m_defaultBackend);
         QObject *windowCandidate = parent();
@@ -694,6 +727,27 @@ namespace eden::core {
             context->bookmarks(),
             context->settings()
         );
+        connect(
+            m_omnibox.get(),
+            &OmniboxController::navigationCandidatesChanged,
+            this,
+            [this](const QList<QUrl> &candidates, const QUrl &preferred) {
+                auto *view = qobject_cast<engine::EngineView *>(currentEngine());
+                if (m_navigationPreparationView && m_navigationPreparationView != view) {
+                    m_navigationPreparationView->prepareNavigation({}, {});
+                }
+                m_navigationPreparationView = view;
+                if (view) {
+                    view->prepareNavigation(candidates, preferred);
+                }
+            }
+        );
+        connect(this, &WindowController::currentEngineChanged, this, [this] {
+            if (m_navigationPreparationView) {
+                m_navigationPreparationView->prepareNavigation({}, {});
+                m_navigationPreparationView.clear();
+            }
+        });
         connect(m_tabs.get(), &TabModel::tabAdded, this, [this](int index, bool background) {
             if (!background) {
                 setActiveIndex(index);
@@ -1063,7 +1117,7 @@ namespace eden::core {
             preview.insert("rendererAttribution", "Shell page");
         } else if (sampleMemory) {
             const qint64 processId = m_tabs->rendererProcessIdAt(index);
-            const qint64 memory = residentMemoryKiB(processId);
+            const qint64 memory = privateFootprintKiB(processId);
             preview.insert("rendererPid", processId);
             if (processId > 0 && memory >= 0) {
                 preview.insert("rendererMemory", memoryLabel(memory));
@@ -1079,12 +1133,13 @@ namespace eden::core {
             preview.insert("rendererMemory", "Unavailable");
             preview.insert("rendererAttribution", "Not sampled yet");
         }
-        const QVariantMap shared = sampleMemory ? sharedProcessMemory()
-                                                : QVariantMap{
-                                                      {"sharedBrowserMemory", "Unavailable"},
-                                                      {"sharedGpuMemory", "Unavailable"},
-                                                      {"sharedNetworkMemory", "Unavailable"}
-                                                  };
+        const QVariantMap shared =
+            sampleMemory ? sharedProcessMemory(m_tabs->data(modelIndex, TabModel::EngineNameRole).toString())
+                         : QVariantMap{
+                               {"sharedBrowserMemory", "Unavailable"},
+                               {"sharedGpuMemory", "Unavailable"},
+                               {"sharedNetworkMemory", "Unavailable"}
+                           };
         for (auto iterator = shared.cbegin(); iterator != shared.cend(); ++iterator) {
             preview.insert(iterator.key(), iterator.value());
         }
@@ -1864,7 +1919,9 @@ namespace eden::core {
     QVariantList WindowController::historyMenuItems() const {
         QVariantList items;
         const FaviconStore *icons = favicons();
-        const auto iconFor = [icons](const QUrl &url) { return icons ? icons->iconFor(url) : QUrl(); };
+        const auto iconFor = [icons](const QUrl &url) {
+            return icons ? icons->iconFor(url) : QUrl();
+        };
         QSet<QUrl> listed;
         if (const RecentlyClosedStore *closed = m_privateWindow ? nullptr : recentlyClosed()) {
             const int count = std::min(closed->rowCount(), 5);
@@ -1873,7 +1930,8 @@ namespace eden::core {
                 const QUrl url = closed->data(index, RecentlyClosedStore::UrlRole).toUrl();
                 listed.insert(url);
                 items.append(libraryMenuItem(
-                    QString("library_closed:%1").arg(closed->data(index, RecentlyClosedStore::ClosedIdRole).toLongLong()),
+                    QString("library_closed:%1")
+                        .arg(closed->data(index, RecentlyClosedStore::ClosedIdRole).toLongLong()),
                     closed->data(index, RecentlyClosedStore::TitleRole).toString(),
                     url,
                     iconFor(url)

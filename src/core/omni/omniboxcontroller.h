@@ -55,6 +55,7 @@ namespace eden::core {
       signals:
         void queryChanged();
         void completionSuffixChanged();
+        void navigationCandidatesChanged(const QList<QUrl> &candidates, const QUrl &preferred);
 
       private:
         enum class RemoteSuggestionProvider { None, DuckDuckGo, Google };
@@ -66,6 +67,7 @@ namespace eden::core {
             int score;
             quint64 tabId = 0;
             QString completion;
+            bool knownDestination = false;
         };
 
         static int fuzzyScore(const QString &needle, const QString &haystack);

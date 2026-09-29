@@ -63,7 +63,7 @@ namespace eden::core {
               },
               [profileLease = std::move(profileLease)](engine::Backend) { return profileLease; },
               engine::EngineRegistry::instance(),
-              engine::Backend::QtWebEngine,
+              engine::Backend::Cef,
               privateMode,
               {},
               parent

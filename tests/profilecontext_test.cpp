@@ -285,7 +285,8 @@ void ProfileContextTest::legacyMigrationMovesDataIntoProfile() {
     QVERIFY(!QFileInfo::exists(roots.dataRoot + "/session.json"));
     QVERIFY(QFileInfo::exists(paths.databasePath()));
     QVERIFY(QFileInfo::exists(paths.sessionPath()));
-    QVERIFY(QFileInfo::exists(paths.engineDataDirectory("qtwebengine") + "/storage/Cookies"));
+    QVERIFY(QFileInfo::exists(roots.dataRoot + "/webengine/storage/Cookies"));
+    QVERIFY(!QFileInfo::exists(paths.engineDataDirectory("qtwebengine")));
 
     const QByteArray databaseKey(32, 'k');
     eden::core::ProfileDatabase database(paths.databasePath());

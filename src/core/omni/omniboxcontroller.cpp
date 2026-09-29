@@ -370,7 +370,8 @@ namespace eden::core {
                      kind,
                      bonus + std::max(0, score) + (completion.isEmpty() ? 0 : 2000),
                      tabId,
-                     completion}
+                     completion,
+                     true}
                 );
             }
         };
@@ -599,6 +600,31 @@ namespace eden::core {
         m_suggestionsQuery = query;
         updateCompletionSuffix();
         endResetModel();
+        QList<QUrl> candidates;
+        QUrl preferred;
+        QSet<QUrl> origins;
+        for (qsizetype row = 0; row < m_suggestions.size(); ++row) {
+            const auto &suggestion = m_suggestions[row];
+            const QUrl &url = suggestion.url;
+            if ((!suggestion.knownDestination && suggestion.kind != "search" && suggestion.kind != "remote") ||
+                (url.scheme() != "https" && url.scheme() != "http") || !url.isValid() || url.host().isEmpty() ||
+                !url.userInfo().isEmpty()) {
+                continue;
+            }
+            QUrl origin;
+            origin.setScheme(url.scheme());
+            origin.setHost(url.host());
+            origin.setPort(url.port());
+            origin.setPath("/");
+            if (!origins.contains(origin)) {
+                origins.insert(origin);
+                candidates.append(origin);
+            }
+            if (!row) {
+                preferred = origin;
+            }
+        }
+        emit navigationCandidatesChanged(candidates, preferred);
     }
 
     void OmniboxController::updateCompletionSuffix() {

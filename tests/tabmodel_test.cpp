@@ -3,7 +3,6 @@
 #include "engine/engineprofilemap.h"
 #include "engine/engineregistry.h"
 #include "engine/engineview.h"
-#include "engine/qtwebengine/qtwebengineview.h"
 
 #include <QMetaMethod>
 #include <QPointer>
@@ -30,7 +29,7 @@ class FakeEngineView : public eden::engine::EngineView {
     Q_OBJECT
 
   public:
-    explicit FakeEngineView(QString name = "Blink (Qt)", Capabilities capabilityFlags = {})
+    explicit FakeEngineView(QString name = "Blink", Capabilities capabilityFlags = {})
         : EngineView(),
           m_name(std::move(name)),
           m_capabilities(capabilityFlags) {}
@@ -197,8 +196,6 @@ class TabModelTest final : public QObject {
     void newViewRequestCrossesTheEngineSeam();
     void engineCloseTargetsItsTab();
     void staleEngineCloseIsIgnored();
-    void qtWebEngineBridgeMethodsArePublic();
-    void qmlCanInvokeQtWebEngineBridge();
     void registryExposesOnlyCompiledBackends();
     void registryBuildsSelectionActions();
     void backendOverrideCreatesMixedWindow();
@@ -573,59 +570,13 @@ void TabModelTest::newViewRequestCrossesTheEngineSeam() {
     QVERIFY(received);
 }
 
-void TabModelTest::qtWebEngineBridgeMethodsArePublic() {
-    const QMetaObject &metaObject = eden::engine::QtWebEngineView::staticMetaObject;
-    const QList<QByteArray> methods = {
-        "handleNewWindow(QObject*)",
-        "handleFullScreen(bool)",
-        "handleContextMenu(QPoint,QUrl,QUrl,QString,bool)",
-        "handleCertificateError()"
-    };
-    for (const QByteArray &signature : methods) {
-        const int index = metaObject.indexOfMethod(signature);
-        QVERIFY2(index >= 0, signature.constData());
-        QCOMPARE(metaObject.method(index).access(), QMetaMethod::Public);
-    }
-}
-
-void TabModelTest::qmlCanInvokeQtWebEngineBridge() {
-    eden::engine::QtWebEngineView view(nullptr);
-    QSignalSpy fullscreenRequested(&view, &eden::engine::EngineView::fullscreenRequested);
-    QSignalSpy contextMenuRequested(&view, &eden::engine::EngineView::contextMenuRequested);
-    QQmlEngine engine;
-    QQmlComponent component(&engine);
-    component.setData(
-        R"QML(import QtQml
-QtObject {
-    required property var bridge
-    Component.onCompleted: {
-        bridge.handleNewWindow(null)
-        bridge.handleContextMenu(Qt.point(0, 0), "https://link.example", "https://image.example/picture.png", "", false)
-        bridge.handleFullScreen(true)
-    }
-}
-)QML",
-        QUrl()
-    );
-    std::unique_ptr<QObject> object(component.createWithInitialProperties({{"bridge", QVariant::fromValue(&view)}}));
-    QVERIFY2(object, qPrintable(component.errorString()));
-    QCOMPARE(fullscreenRequested.size(), 1);
-    QVERIFY(fullscreenRequested.first().at(0).toBool());
-    QCOMPARE(contextMenuRequested.size(), 1);
-    const eden::engine::ContextMenuInfo info =
-        contextMenuRequested.first().at(0).value<eden::engine::ContextMenuInfo>();
-    QCOMPARE(info.position, QPoint(0, 0));
-    QCOMPARE(info.linkUrl, QUrl("https://link.example"));
-    QCOMPARE(info.mediaUrl, QUrl("https://image.example/picture.png"));
-}
-
 void TabModelTest::registryExposesOnlyCompiledBackends() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Wpe, "wpe", "WebKit", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     QCOMPARE(registry.engines().size(), 2);
-    QCOMPARE(registry.displayName(eden::engine::Backend::QtWebEngine), QString("Blink (Qt)"));
+    QCOMPARE(registry.displayName(eden::engine::Backend::Wpe), QString("WebKit"));
     QCOMPARE(registry.backendForId("SERVO"), std::optional(eden::engine::Backend::Servo));
     QVERIFY(!registry.contains(eden::engine::Backend::Cef));
 }
@@ -633,39 +584,42 @@ void TabModelTest::registryExposesOnlyCompiledBackends() {
 void TabModelTest::registryBuildsSelectionActions() {
     eden::engine::EngineRegistry registry({
         {eden::engine::Backend::Cef, "cef", "Blink", false},
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Wpe, "wpe", "WebKit", false},
     });
     const QVariantList actions = registry.selectionActions("cef");
     QCOMPARE(actions.size(), 2);
     QCOMPARE(actions.at(0).toMap().value("title").toString(), QString("Blink"));
     QCOMPARE(actions.at(0).toMap().value("icon").toString(), QString("check"));
-    QCOMPARE(actions.at(1).toMap().value("title").toString(), QString("Blink (Qt)"));
+    QCOMPARE(actions.at(1).toMap().value("title").toString(), QString("WebKit"));
     QCOMPARE(actions.at(1).toMap().value("icon").toString(), QString("programming"));
 }
 
 void TabModelTest::backendOverrideCreatesMixedWindow() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     auto factory = [](eden::engine::Backend backend,
                       eden::engine::EngineProfile *) -> std::unique_ptr<eden::engine::EngineView> {
-        if (backend == eden::engine::Backend::QtWebEngine) {
-            return std::make_unique<eden::engine::QtWebEngineView>(nullptr);
+        if (backend == eden::engine::Backend::Cef) {
+            return std::make_unique<FakeEngineView>(
+                "Blink",
+                eden::engine::EngineView::ThumbnailCapture | eden::engine::EngineView::PerTabMute
+            );
         }
         return std::make_unique<FakeEngineView>("Servo");
     };
-    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
-    const int qt = model.addTab(QUrl("https://qt.example"));
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::Cef, false);
+    const int blink = model.addTab(QUrl("https://blink.example"));
     const int servo = model.addTab(QUrl("https://servo.example"), true, "servo");
-    QCOMPARE(model.backendIdAt(qt), QString("qtwebengine"));
+    QCOMPARE(model.backendIdAt(blink), QString("cef"));
     QCOMPARE(model.backendIdAt(servo), QString("servo"));
-    QCOMPARE(model.data(model.index(qt), eden::core::TabModel::EngineNameRole).toString(), QString("Blink (Qt)"));
+    QCOMPARE(model.data(model.index(blink), eden::core::TabModel::EngineNameRole).toString(), QString("Blink"));
     QCOMPARE(model.data(model.index(servo), eden::core::TabModel::EngineNameRole).toString(), QString("Servo"));
-    auto *qtView = qobject_cast<eden::engine::QtWebEngineView *>(model.engineAt(qt));
-    QVERIFY(qtView);
-    QVERIFY(qtView->capabilities().testFlag(eden::engine::EngineView::ThumbnailCapture));
-    QVERIFY(qtView->capabilities().testFlag(eden::engine::EngineView::PerTabMute));
+    auto *blinkView = qobject_cast<FakeEngineView *>(model.engineAt(blink));
+    QVERIFY(blinkView);
+    QVERIFY(blinkView->capabilities().testFlag(eden::engine::EngineView::ThumbnailCapture));
+    QVERIFY(blinkView->capabilities().testFlag(eden::engine::EngineView::PerTabMute));
     QCOMPARE(qobject_cast<FakeEngineView *>(model.engineAt(servo))->backendName(), QString("Servo"));
 }
 
@@ -676,30 +630,30 @@ void TabModelTest::profilesAreSeparatedByBackendAndPrivacy() {
     eden::engine::EngineProfileMap privateProfiles(true, [](eden::engine::Backend backend) {
         return std::make_shared<FakeEngineProfile>(true, backend);
     });
-    auto normalQt = normal.profile(eden::engine::Backend::QtWebEngine);
+    auto normalWpe = normal.profile(eden::engine::Backend::Wpe);
     auto normalServo = normal.profile(eden::engine::Backend::Servo);
-    auto privateQt = privateProfiles.profile(eden::engine::Backend::QtWebEngine);
-    QCOMPARE(normal.profile(eden::engine::Backend::QtWebEngine), normalQt);
-    QVERIFY(normalQt != normalServo);
-    QVERIFY(normalQt != privateQt);
-    QVERIFY(!normalQt->isPrivate());
-    QVERIFY(privateQt->isPrivate());
+    auto privateWpe = privateProfiles.profile(eden::engine::Backend::Wpe);
+    QCOMPARE(normal.profile(eden::engine::Backend::Wpe), normalWpe);
+    QVERIFY(normalWpe != normalServo);
+    QVERIFY(normalWpe != privateWpe);
+    QVERIFY(!normalWpe->isPrivate());
+    QVERIFY(privateWpe->isPrivate());
     normal.clearData();
-    QCOMPARE(static_cast<FakeEngineProfile *>(normalQt.get())->clearCount, 1);
+    QCOMPARE(static_cast<FakeEngineProfile *>(normalWpe.get())->clearCount, 1);
     QCOMPARE(static_cast<FakeEngineProfile *>(normalServo.get())->clearCount, 1);
 }
 
 void TabModelTest::conversionRetagsAndPreservesState() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     int created = 0;
     auto factory = [&created](eden::engine::Backend backend, eden::engine::EngineProfile *) {
         ++created;
-        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink");
     };
-    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::Cef, false);
     const QUrl url("https://conversion.example/path");
     const int row = model.addTab(url);
     qobject_cast<FakeEngineView *>(model.engineAt(row))->setScroll(840);
@@ -714,15 +668,15 @@ void TabModelTest::conversionRetagsAndPreservesState() {
 
 void TabModelTest::globalConversionRehydratesOnlyActiveTab() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     int created = 0;
     auto factory = [&created](eden::engine::Backend backend, eden::engine::EngineProfile *) {
         ++created;
-        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink");
     };
-    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::Cef, false);
     model.addTab(QUrl("https://one.example"));
     model.addTab(QUrl("https://two.example"));
     model.addTab(QUrl("https://three.example"));
@@ -739,13 +693,13 @@ void TabModelTest::globalConversionRehydratesOnlyActiveTab() {
 
 void TabModelTest::discardedRoleTracksLazyConversion() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     auto factory = [](eden::engine::Backend backend, eden::engine::EngineProfile *) {
-        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink (Qt)");
+        return std::make_unique<FakeEngineView>(backend == eden::engine::Backend::Servo ? "Servo" : "Blink");
     };
-    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::Cef, false);
     model.addTab(QUrl("https://active.example"));
     model.addTab(QUrl("https://background.example"));
     const quint64 backgroundId = model.tabIdAt(1);
@@ -760,7 +714,7 @@ void TabModelTest::discardedRoleTracksLazyConversion() {
 
 void TabModelTest::restoreKeepsPinnedRegionAndBackend() {
     eden::engine::EngineRegistry registry({
-        {eden::engine::Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+        {eden::engine::Backend::Cef, "cef", "Blink", false},
         {eden::engine::Backend::Servo, "servo", "Servo", true},
     });
     int created = 0;
@@ -768,24 +722,20 @@ void TabModelTest::restoreKeepsPinnedRegionAndBackend() {
         ++created;
         return std::make_unique<FakeEngineView>();
     };
-    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::QtWebEngine, false);
+    eden::core::TabModel model(factory, {}, &registry, eden::engine::Backend::Cef, false);
     QJsonArray tabs;
     tabs.append(
         QJsonObject{{"url", "https://normal.example"}, {"title", "Normal"}, {"pinned", false}, {"backend", "servo"}}
     );
     tabs.append(
-        QJsonObject{
-            {"url", "https://pinned.example"},
-            {"title", "Pinned"},
-            {"pinned", true},
-            {"backend", "qtwebengine"}
-        }
+        QJsonObject{{"url", "https://pinned.example"}, {"title", "Pinned"}, {"pinned", true}, {"backend", "cef"}}
     );
     model.restoreTabs(tabs);
     QCOMPARE(created, 0);
     QCOMPARE(model.pinnedCount(), 1);
     QVERIFY(model.data(model.index(0), eden::core::TabModel::PinnedRole).toBool());
     QCOMPARE(model.data(model.index(0), eden::core::TabModel::UrlRole).toUrl(), QUrl("https://pinned.example"));
+    QCOMPARE(model.backendIdAt(0), QString("cef"));
     QCOMPARE(model.backendIdAt(1), QString("servo"));
     QCOMPARE(model.sessionTabs().at(1).toObject().value("backend").toString(), QString("servo"));
     QVERIFY(model.ensureEngine(1));

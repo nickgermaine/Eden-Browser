@@ -184,6 +184,7 @@ namespace eden::engine {
         virtual QString backendName() const = 0;
         virtual Capabilities capabilities() const = 0;
         virtual qint64 rendererProcessId() const;
+        virtual void prepareNavigation(const QList<QUrl> &suggestions, const QUrl &preferred);
         bool devToolsOpen() const;
         virtual bool devToolsSelfFramed() const;
         DevToolsPlacement devToolsPlacement() const;

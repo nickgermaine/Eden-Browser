@@ -107,7 +107,7 @@ void ProfileCoreTest::pathsDeriveFromRoots() {
     );
     QCOMPARE(paths.engineCacheDirectory("cef"), paths.cacheDirectory() + "/cef");
     QCOMPARE(eden::core::ProfilePaths::registryDatabasePath(roots), QString("/data/root/profiles.sqlite"));
-    const QStringList owned = paths.ownedDirectories({"cef", "qtwebengine"});
+    const QStringList owned = paths.ownedDirectories({"cef", "wpe"});
     QCOMPARE(owned.size(), 4);
     QVERIFY(owned.contains(paths.dataDirectory()));
     QVERIFY(owned.contains(paths.cacheDirectory()));
@@ -131,7 +131,7 @@ void ProfileCoreTest::deletionStagingNames() {
     QVERIFY(!eden::core::ProfilePaths::isDeletionStagingName(id.toString()));
     QVERIFY(!eden::core::ProfilePaths::isDeletionStagingName("profiles"));
     const eden::core::ProfilePaths::Roots roots{QStringLiteral("/data/root"), QStringLiteral("/cache/root")};
-    const QStringList parents = eden::core::ProfilePaths::deletionStagingParents(roots, {"cef", "qtwebengine"});
+    const QStringList parents = eden::core::ProfilePaths::deletionStagingParents(roots, {"cef", "wpe"});
     QCOMPARE(parents.size(), 4);
     QVERIFY(parents.contains(QString("/data/root/profiles")));
     QVERIFY(parents.contains(QString("/data/root/engine-data/cef/profiles")));

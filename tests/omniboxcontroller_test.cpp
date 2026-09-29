@@ -271,11 +271,43 @@ class OmniboxControllerTest final : public QObject {
     void explicitTabSelectionTracksMoves();
     void plaintextDatabaseMigratesToCiphertext();
     void corruptDatabaseIsNotReplaced();
+    void navigationCandidatesUseCompleteOrigins();
 
   private:
     std::unique_ptr<QQmlEngine> m_uiEngine;
     std::unique_ptr<QSignalSpy> m_warnings;
 };
+
+void OmniboxControllerTest::navigationCandidatesUseCompleteOrigins() {
+    using eden::core::OmniboxController;
+    eden::core::TabModel tabs([] { return std::make_unique<OmniboxEngineView>(); }, false);
+    tabs.addTab(QUrl("https://known.example/private/path?query=private#fragment"));
+    tabs.addTab(QUrl("https://known.example/another"));
+    tabs.addTab(QUrl("https://user:password@credentials.example/path"));
+    OmniboxController controller(&tabs, nullptr, nullptr);
+    QSignalSpy changes(&controller, &OmniboxController::navigationCandidatesChanged);
+    controller.setQuery("know");
+    QVERIFY(!changes.isEmpty());
+    const auto known = changes.last();
+    const auto candidates = known[0].value<QList<QUrl>>();
+    QCOMPARE(candidates.count(QUrl("https://known.example/")), 1);
+    QCOMPARE(known[1].toUrl(), QUrl("https://known.example/"));
+    for (const auto &candidate : candidates) {
+        QCOMPARE(candidate.path(), QString("/"));
+        QVERIFY(candidate.query().isEmpty());
+        QVERIFY(candidate.fragment().isEmpty());
+        QVERIFY(candidate.userInfo().isEmpty());
+    }
+    controller.setQuery("https://partial.exa");
+    QVERIFY(!changes.last()[0].value<QList<QUrl>>().contains(QUrl("https://partial.exa/")));
+    QVERIFY(changes.last()[1].toUrl().isEmpty());
+    controller.setQuery("ordinary search words");
+    QVERIFY(!changes.last()[0].value<QList<QUrl>>().isEmpty());
+    QCOMPARE(changes.last()[1].toUrl().path(), QString("/"));
+    controller.setQuery({});
+    QVERIFY(changes.last()[0].value<QList<QUrl>>().isEmpty());
+    QVERIFY(changes.last()[1].toUrl().isEmpty());
+}
 
 void OmniboxControllerTest::initTestCase() {
     qmlRegisterSingletonInstance("Eden.Ui", 1, 0, "Settings", eden::core::SettingsStore::instance());

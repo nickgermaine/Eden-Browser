@@ -141,7 +141,7 @@ namespace eden::core {
             QString internalPage;
             quint64 id = 0;
             quint64 openerId = 0;
-            engine::Backend backend = engine::Backend::QtWebEngine;
+            engine::Backend backend = engine::Backend::Cef;
             bool pinned = false;
             bool privateMode = false;
         };

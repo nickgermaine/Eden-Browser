@@ -1,11 +1,11 @@
 #include "engine/wpe/wperuntime.h"
+#include "engine/fontpolicy.h"
 #include "engine/wpe/wpedisplaysync.h"
 #include "engine/wpe/wpesurface.h"
 
 #include <EGL/egl.h>
 #include <QClipboard>
 #include <QCoreApplication>
-#include <QFont>
 #include <QGuiApplication>
 #include <QImage>
 #include <QInputMethod>
@@ -15,7 +15,6 @@
 #include <QThread>
 #include <algorithm>
 #include <dlfcn.h>
-#include <gio/gio.h>
 #include <wpe/headless/wpe-headless.h>
 
 namespace eden::engine {
@@ -61,7 +60,26 @@ namespace eden::engine {
     G_DEFINE_TYPE(EdenWpeClipboard, eden_wpe_clipboard, WPE_TYPE_CLIPBOARD)
     G_DEFINE_TYPE(EdenWpeDisplay, eden_wpe_display, WPE_TYPE_DISPLAY)
 
+    static void preferHardwareVideoEncoders() {
+        QStringList ranks = qEnvironmentVariable("GST_PLUGIN_FEATURE_RANK").split(',', Qt::SkipEmptyParts);
+        bool changed = false;
+        for (const char *encoder : {"vah264enc", "vah264lpenc", "vah265enc", "vah265lpenc", "vaav1enc", "vavp9enc"}) {
+            const QString name = QString::fromLatin1(encoder);
+            const bool configured = std::ranges::any_of(ranks, [&](const QString &entry) {
+                return entry.section(':', 0, 0).trimmed() == name;
+            });
+            if (!configured) {
+                ranks.append(name + QStringLiteral(":257"));
+                changed = true;
+            }
+        }
+        if (changed) {
+            qputenv("GST_PLUGIN_FEATURE_RANK", ranks.join(',').toUtf8());
+        }
+    }
+
     static WPEDisplay *runtimeDisplay = nullptr;
+    static std::atomic<quint64> runtimeThumbnailRequests{0};
     static std::unique_ptr<WpeDisplaySync> runtimeDisplaySync;
     static QString runtimeUserAgentSuffix;
     static bool spellCheckingInitialized = false;
@@ -99,6 +117,11 @@ namespace eden::engine {
         };
         viewClass->can_be_mapped = [](WPEView *) -> gboolean {
             return TRUE;
+        };
+        viewClass->buffers_changed = [](WPEView *view, WPEBuffer **buffers, guint count) {
+            if (auto *surface = surfaceFor(view)) {
+                surface->buffersChanged(buffers, count);
+            }
         };
         viewClass->set_cursor_from_name = [](WPEView *view, const char *name) {
             if (auto *surface = surfaceFor(view)) {
@@ -192,12 +215,7 @@ namespace eden::engine {
         inputClass->set_surrounding =
             [](WPEInputMethodContext *context, const char *text, guint length, guint cursor, guint selection) {
                 if (auto *surface = inputSurface(context)) {
-                    const QByteArray bytes(text, length);
-                    surface->setInputSurrounding(
-                        QString::fromUtf8(bytes),
-                        QString::fromUtf8(bytes.first(qMin(cursor, length))).size(),
-                        QString::fromUtf8(bytes.first(qMin(selection, length))).size()
-                    );
+                    surface->setInputSurrounding(text, length, cursor, selection);
                 }
             };
         inputClass->get_preedit_string =
@@ -205,10 +223,21 @@ namespace eden::engine {
                 auto *surface = inputSurface(context);
                 const QString preedit = surface ? surface->inputPreedit() : QString();
                 *text = g_strdup(preedit.toUtf8().constData());
-                *underlines = preedit.isEmpty()
-                                  ? nullptr
-                                  : g_list_append(nullptr, wpe_input_method_underline_new(0, preedit.toUcs4().size()));
-                *cursor = surface ? preedit.left(surface->inputPreeditCursor()).toUcs4().size() : 0;
+                const auto codePoints = [&preedit](qsizetype units) {
+                    guint count = 0;
+                    const qsizetype limit = qBound(qsizetype(0), units, preedit.size());
+                    for (qsizetype index = 0; index < limit; ++index) {
+                        if (!preedit.at(index).isLowSurrogate()) {
+                            ++count;
+                        }
+                    }
+                    return count;
+                };
+                *underlines =
+                    preedit.isEmpty()
+                        ? nullptr
+                        : g_list_append(nullptr, wpe_input_method_underline_new(0, codePoints(preedit.size())));
+                *cursor = surface ? codePoints(surface->inputPreeditCursor()) : 0;
             };
         inputClass->reset = [](WPEInputMethodContext *context) {
             if (auto *surface = inputSurface(context)) {
@@ -376,7 +405,8 @@ namespace eden::engine {
                  .arg(webkit_get_minor_version())
                  .arg(webkit_get_micro_version())},
             {"selectedPrefix", QStringLiteral(EDEN_WPE_BUILD_PREFIX)},
-            {"frameAcknowledgement", qEnvironmentVariable("EDEN_WPE_FRAME_ACK") == "swap" ? "swap" : "import"}
+            {"frameAcknowledgement", frameAcknowledgementName(frameAcknowledgementPolicy())},
+            {"displaySync", qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") != "0"}
         };
 #if defined(EDEN_WPE_BUILD_mode)
         result.insert("buildMode", QStringLiteral(EDEN_WPE_BUILD_mode));
@@ -402,6 +432,10 @@ namespace eden::engine {
               "EDEN_WPE_EXPLICIT_SYNC",
               "EDEN_WPE_CANVAS_ACCELERATION",
               "JSC_jitPolicyScale",
+              "JSC_forceUnlinkedDFG",
+              "JSC_numberOfDFGCompilerThreads",
+              "JSC_thresholdForFTLOptimizeAfterWarmUp",
+              "WEBKIT_EDEN_DISABLE_CANVAS_THREAD",
               "WEBKIT_EDEN_EDITOR_WINDOW",
               "WEBKIT_EDEN_EARLY_SCENE_COMPLETION",
               "WEBKIT_EDEN_HELPER_NICE",
@@ -429,6 +463,15 @@ namespace eden::engine {
             qputenv("WEBKIT_SKIA_CANVAS_REPLAY_THREADS", QByteArray::number(EDEN_WPE_CANVAS_REPLAY_DEFAULT));
         }
 #endif
+#if defined(EDEN_WPE_JSC_POLICY_SCALE_DEFAULT)
+        if (qEnvironmentVariable("EDEN_WPE_TUNED_DEFAULTS") != "0" &&
+            !qEnvironmentVariableIsSet("JSC_jitPolicyScale")) {
+            qputenv("JSC_jitPolicyScale", "1.5");
+        }
+#endif
+        if (qEnvironmentVariable("EDEN_WPE_HARDWARE_VIDEO_ENCODING") != "0") {
+            preferHardwareVideoEncoders();
+        }
         g_log_set_handler(
             "libenchant",
             G_LOG_LEVEL_WARNING,
@@ -468,51 +511,23 @@ namespace eden::engine {
         updateColorScheme();
         {
             auto *settings = wpe_display_get_settings(display);
-            QString fontName = QGuiApplication::font().family() + QLatin1Char(' ') +
-                               QString::number(std::max(1, QGuiApplication::font().pointSize()));
-            QString antialiasing = QStringLiteral("grayscale");
-            QString hinting = QStringLiteral("slight");
-            QString subpixelOrder = QStringLiteral("rgb");
-            auto *source = g_settings_schema_source_get_default();
-            auto *schema = source ? g_settings_schema_source_lookup(source, "org.gnome.desktop.interface", TRUE) : nullptr;
-            if (schema) {
-                auto *desktop = g_settings_new("org.gnome.desktop.interface");
-                const auto read = [desktop, schema](const char *key, QString &value) {
-                    if (g_settings_schema_has_key(schema, key)) {
-                        gchar *text = g_settings_get_string(desktop, key);
-                        if (text && *text) {
-                            value = QString::fromUtf8(text);
-                        }
-                        g_free(text);
-                    }
-                };
-                read("font-name", fontName);
-                read("font-antialiasing", antialiasing);
-                read("font-hinting", hinting);
-                read("font-rgba-order", subpixelOrder);
-                g_object_unref(desktop);
-                g_settings_schema_unref(schema);
-            }
-            const guint8 hintingStyle = hinting == "none"     ? WPE_SETTINGS_HINTING_STYLE_NONE
-                                        : hinting == "medium" ? WPE_SETTINGS_HINTING_STYLE_MEDIUM
-                                        : hinting == "full"   ? WPE_SETTINGS_HINTING_STYLE_FULL
-                                                              : WPE_SETTINGS_HINTING_STYLE_SLIGHT;
-            const guint8 subpixelLayout = antialiasing != "rgba"      ? WPE_SETTINGS_SUBPIXEL_LAYOUT_NONE
-                                          : subpixelOrder == "bgr"  ? WPE_SETTINGS_SUBPIXEL_LAYOUT_BGR
-                                          : subpixelOrder == "vrgb" ? WPE_SETTINGS_SUBPIXEL_LAYOUT_VRGB
-                                          : subpixelOrder == "vbgr" ? WPE_SETTINGS_SUBPIXEL_LAYOUT_VBGR
-                                                                    : WPE_SETTINGS_SUBPIXEL_LAYOUT_RGB;
+            const QByteArray fontDescription = FontPolicy::systemDescription().toUtf8();
+            const FontHinting hinting = FontPolicy::hinting();
+            const guint8 hintingStyle = hinting == FontHinting::None     ? WPE_SETTINGS_HINTING_STYLE_NONE
+                                        : hinting == FontHinting::Medium ? WPE_SETTINGS_HINTING_STYLE_MEDIUM
+                                        : hinting == FontHinting::Full   ? WPE_SETTINGS_HINTING_STYLE_FULL
+                                                                         : WPE_SETTINGS_HINTING_STYLE_SLIGHT;
             wpe_settings_set_string(
                 settings,
                 WPE_SETTING_FONT_NAME,
-                fontName.toUtf8().constData(),
+                fontDescription.constData(),
                 WPE_SETTINGS_SOURCE_PLATFORM,
                 nullptr
             );
             wpe_settings_set_boolean(
                 settings,
                 WPE_SETTING_FONT_ANTIALIAS,
-                antialiasing != "none",
+                FontPolicy::antialiasing(),
                 WPE_SETTINGS_SOURCE_PLATFORM,
                 nullptr
             );
@@ -526,14 +541,15 @@ namespace eden::engine {
             wpe_settings_set_byte(
                 settings,
                 WPE_SETTING_FONT_SUBPIXEL_LAYOUT,
-                subpixelLayout,
+                FontPolicy::subpixelAntialiasing() ? WPE_SETTINGS_SUBPIXEL_LAYOUT_RGB
+                                                   : WPE_SETTINGS_SUBPIXEL_LAYOUT_NONE,
                 WPE_SETTINGS_SOURCE_PLATFORM,
                 nullptr
             );
         }
         colorSchemeConnection =
             QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, qApp, updateColorScheme);
-        if (qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") == "1") {
+        if (qEnvironmentVariable("EDEN_WPE_DISPLAY_SYNC") != "0") {
             runtimeDisplaySync = std::make_unique<WpeDisplaySync>(display);
         }
         wpe_display_set_primary(display);
@@ -553,7 +569,26 @@ namespace eden::engine {
         webkit_web_context_set_spell_checking_enabled(context, loaded && *loaded);
     }
 
+    QVariantMap WpeRuntime::counters() {
+        return {
+            {"thumbnailRequests", qulonglong(runtimeThumbnailRequests.load())},
+            {"heldBuffersPeak", WpeFrame::heldPeak()},
+            {"displayPulses", qulonglong(displayPulseCount())}
+        };
+    }
+
+    void WpeRuntime::noteThumbnailRequest() {
+        runtimeThumbnailRequests.fetch_add(1);
+        if (qEnvironmentVariableIsSet("EDEN_PERF")) {
+            qInfo("EDEN_PERF wpe.thumbnail_request=%llu", qulonglong(runtimeThumbnailRequests.load()));
+        }
+    }
+
     void WpeRuntime::shutdown() {
+        if (runtimeDisplay) {
+            qInfo().noquote() << "Eden WebKit runtime counters:"
+                              << QJsonDocument::fromVariant(counters()).toJson(QJsonDocument::Compact);
+        }
         spellCheckingInitialized = false;
         QObject::disconnect(clipboardConnection);
         QObject::disconnect(colorSchemeConnection);

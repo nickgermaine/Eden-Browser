@@ -9,8 +9,65 @@
 #include <QStandardPaths>
 #include <QTimeZone>
 #include <QTimer>
+#include <dlfcn.h>
 
 namespace eden::engine {
+
+    struct ProcessWarmingApi {
+        using SetEnabled = void (*)(WebKitWebContext *, gboolean);
+        using Prewarm = gboolean (*)(WebKitWebContext *, WebKitNetworkSession *);
+        SetEnabled setEnabled = nullptr;
+        Prewarm prewarm = nullptr;
+    };
+
+    static const ProcessWarmingApi &processWarmingApi() {
+        static const ProcessWarmingApi api{
+            reinterpret_cast<ProcessWarmingApi::SetEnabled>(
+                dlsym(RTLD_DEFAULT, "webkit_web_context_set_automatic_process_warming_enabled")
+            ),
+            reinterpret_cast<ProcessWarmingApi::Prewarm>(dlsym(RTLD_DEFAULT, "webkit_web_context_prewarm_web_process"))
+        };
+        return api;
+    }
+
+    static WebKitWebContext *createWebContext() {
+        const int configured = qEnvironmentVariableIntValue("EDEN_WPE_MEMORY_LIMIT_MB");
+        if (configured <= 0) {
+            return webkit_web_context_new();
+        }
+        const double conservative = qEnvironmentVariableIsSet("EDEN_WPE_MEMORY_CONSERVATIVE")
+                                        ? qEnvironmentVariable("EDEN_WPE_MEMORY_CONSERVATIVE").toDouble()
+                                        : 0.33;
+        const double strict = qEnvironmentVariableIsSet("EDEN_WPE_MEMORY_STRICT")
+                                  ? qEnvironmentVariable("EDEN_WPE_MEMORY_STRICT").toDouble()
+                                  : 0.5;
+        auto *settings = webkit_memory_pressure_settings_new();
+        webkit_memory_pressure_settings_set_memory_limit(settings, guint(configured));
+        if (conservative > 0 && conservative < 1) {
+            webkit_memory_pressure_settings_set_conservative_threshold(settings, conservative);
+        }
+        if (strict > 0 && strict < 1) {
+            webkit_memory_pressure_settings_set_strict_threshold(settings, strict);
+        }
+        auto *context =
+            WEBKIT_WEB_CONTEXT(g_object_new(WEBKIT_TYPE_WEB_CONTEXT, "memory-pressure-settings", settings, nullptr));
+        webkit_memory_pressure_settings_free(settings);
+        return context;
+    }
+
+    static WebKitNetworkSession *createNetworkSession(const EngineProfileParameters &parameters, WebKitWebContext *context) {
+        if (parameters.controlledByAutomation) {
+            webkit_web_context_set_automation_allowed(context, TRUE);
+            if (auto *session = webkit_web_context_get_network_session_for_automation(context)) {
+                return WEBKIT_NETWORK_SESSION(g_object_ref(session));
+            }
+            qWarning("WebKit automation is unavailable, so the automation profile uses its own private session");
+        }
+        if (parameters.privateProfile || parameters.controlledByAutomation) {
+            return webkit_network_session_new_ephemeral();
+        }
+        return webkit_network_session_new(parameters.dataPath.toUtf8().constData(), parameters.cachePath.toUtf8().constData());
+    }
 
     static std::optional<PortableCookie> portableCookie(SoupCookie *native) {
         PortableCookie cookie;
@@ -315,18 +372,21 @@ namespace eden::engine {
 
     WpeProfile::WpeProfile(const EngineProfileParameters &parameters, QObject *parent)
         : EngineProfile(parameters, parent),
-          m_session(
-              parameters.privateProfile ? webkit_network_session_new_ephemeral()
-                                        : webkit_network_session_new(
-                                              parameters.dataPath.toUtf8().constData(),
-                                              parameters.cachePath.toUtf8().constData()
-                                          )
-          ),
-          m_context(webkit_web_context_new()),
+          m_context(createWebContext()),
+          m_session(createNetworkSession(parameters, m_context)),
           m_cancellable(g_cancellable_new()) {
-        m_storageReady =
-            parameters.privateProfile || (QDir().mkpath(parameters.dataPath) && QDir().mkpath(parameters.cachePath));
-        if (!parameters.privateProfile && m_storageReady) {
+        m_connectionClock.start();
+        const QString webRtcEvents = qEnvironmentVariable("WEBKIT_WEBRTC_JSON_EVENTS_FILE");
+        if (!webRtcEvents.isEmpty()) {
+            const QFileInfo events(webRtcEvents);
+            if (events.isAbsolute() && QDir().mkpath(events.absolutePath())) {
+                webkit_web_context_add_path_to_sandbox(m_context, QFile::encodeName(events.absolutePath()).constData(), FALSE);
+            } else {
+                qWarning("WEBKIT_WEBRTC_JSON_EVENTS_FILE must be an absolute path in a directory Eden can create");
+            }
+        }
+        m_storageReady = isPrivate() || (QDir().mkpath(parameters.dataPath) && QDir().mkpath(parameters.cachePath));
+        if (!isPrivate() && m_storageReady) {
             const auto cookiePath = QDir(parameters.dataPath).filePath("cookies.sqlite").toUtf8();
             webkit_cookie_manager_set_persistent_storage(
                 webkit_network_session_get_cookie_manager(m_session),
@@ -337,6 +397,14 @@ namespace eden::engine {
         webkit_network_session_set_persistent_credential_storage_enabled(m_session, FALSE);
         webkit_network_session_set_tls_errors_policy(m_session, WEBKIT_TLS_ERRORS_POLICY_FAIL);
         webkit_web_context_set_cache_model(m_context, WEBKIT_CACHE_MODEL_WEB_BROWSER);
+        const auto &warming = processWarmingApi();
+        if (warming.setEnabled && warming.prewarm) {
+            static const bool enabled = qEnvironmentVariable("EDEN_WPE_PREWARM") != "0";
+            warming.setEnabled(m_context, enabled && m_storageReady);
+            if (enabled && m_storageReady) {
+                warming.prewarm(m_context, m_session);
+            }
+        }
         g_signal_connect(
             m_session,
             "download-started",
@@ -349,6 +417,9 @@ namespace eden::engine {
 
     WpeProfile::~WpeProfile() {
         m_closing = true;
+        if (const auto setEnabled = processWarmingApi().setEnabled) {
+            setEnabled(m_context, FALSE);
+        }
         const auto operations = std::move(m_operations);
         for (const auto &operation : operations) {
             operation->cancel();
@@ -382,12 +453,57 @@ namespace eden::engine {
     WebKitWebContext *WpeProfile::context() const {
         return m_context;
     }
+    bool WpeProfile::controlledByAutomation() const {
+        return webkit_web_context_is_automation_allowed(m_context);
+    }
     bool WpeProfile::supportsPortableCookies() const {
         return !isPrivate() && m_storageReady;
     }
 
     bool WpeProfile::storageReady() const {
         return m_storageReady;
+    }
+
+    bool WpeProfile::connectionWarmupEnabled() {
+        static const bool enabled = qEnvironmentVariable("EDEN_WPE_PRECONNECT") != "0";
+        return enabled;
+    }
+
+    void WpeProfile::prefetchNavigationHosts(const QList<QUrl> &urls) {
+        if (!connectionWarmupEnabled() || m_closing || !m_storageReady) {
+            return;
+        }
+        const qint64 now = m_connectionClock.elapsed();
+        for (const auto &url : urls) {
+            if (m_connectionWarmup.reserve(url, WpeConnectionWarmup::Kind::Dns, now)) {
+                const auto host = WpeConnectionWarmup::origin(url).host(QUrl::FullyEncoded).toUtf8();
+                webkit_network_session_prefetch_dns(m_session, host.constData());
+                ++m_dnsPrefetchRequests;
+            }
+        }
+    }
+
+    void WpeProfile::preconnectNavigation(WebKitWebView *view, const QUrl &url) {
+        using Preconnect = void (*)(WebKitWebView *, const gchar *);
+        static const auto preconnect =
+            reinterpret_cast<Preconnect>(dlsym(RTLD_DEFAULT, "webkit_web_view_preconnect_to_uri"));
+        if (!preconnect || !connectionWarmupEnabled() || m_closing || !m_storageReady || !view ||
+            webkit_web_view_get_network_session(view) != m_session) {
+            return;
+        }
+        const QUrl origin = WpeConnectionWarmup::origin(url);
+        if (m_connectionWarmup.reserve(origin, WpeConnectionWarmup::Kind::Connection, m_connectionClock.elapsed())) {
+            preconnect(view, origin.toEncoded().constData());
+            ++m_preconnectRequests;
+        }
+    }
+
+    QVariantMap WpeProfile::connectionWarmupCounters() const {
+        return {
+            {"dnsRequests", m_dnsPrefetchRequests},
+            {"preconnectRequests", m_preconnectRequests},
+            {"rememberedHosts", m_connectionWarmup.hostCount()}
+        };
     }
 
     void WpeProfile::clearData() {

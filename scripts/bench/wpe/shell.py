@@ -12,7 +12,7 @@ import time
 
 project = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(project / "scripts/bench/wpe"))
-from sweep import conditions
+from sweep import CONFIGURATIONS, available_configurations, conditions
 
 
 def fingerprints(paths):
@@ -29,7 +29,8 @@ parser.add_argument("--perf-tool", type=Path)
 parser.add_argument("--mode", choices=["shell", "private", "adapter"], required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--inside", action="store_true")
-parser.add_argument("--ack", choices=["default", "import", "swap"], default="default")
+parser.add_argument("--ack", choices=["default", "arrival", "import", "swap"], default="default")
+parser.add_argument("--configuration", choices=CONFIGURATIONS, default="default")
 parser.add_argument("--profile", action="store_true")
 parser.add_argument("--diagnostic", action="store_true")
 args = parser.parse_args()
@@ -74,6 +75,8 @@ if not args.inside:
         str(output),
         "--ack",
         args.ack,
+        "--configuration",
+        args.configuration,
     ]
     if args.profile:
         command += ["--profile", "--perf-tool", str(args.perf_tool)]
@@ -166,6 +169,13 @@ try:
     cache = (build / "CMakeCache.txt").read_text()
     prefix_line = next(line for line in cache.splitlines() if line.startswith("EDEN_WPE_SELECTED_PREFIX:"))
     prefix = Path(prefix_line.split("=", 1)[1])
+    runtime_build = json.loads((prefix / "share/eden-wpe-build.json").read_text())
+    if args.configuration not in available_configurations(runtime_build):
+        raise RuntimeError("The selected configuration requires patches absent from this runtime")
+    settings = CONFIGURATIONS[args.configuration]
+    if "EDEN_WPE_FRAME_ACK" in settings and args.ack != "default":
+        raise RuntimeError("The selected configuration conflicts with --ack")
+    environment.update(settings)
     binaries = [
         build / "eden-browser",
         build / "eden-wpe-bench",
@@ -186,6 +196,8 @@ try:
     metadata = {
         "mode": args.mode,
         "ack": args.ack,
+        "configuration": args.configuration,
+        "configurationSettings": settings,
         "profiled": args.profile,
         "diagnostic": args.diagnostic,
         "command": command,
@@ -272,13 +284,26 @@ finally:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-    failed_mounts = []
-    for relative in ["cache/Eden/Eden/profiles", "data/Eden/Eden/engine-data"]:
-        mount = runtime / relative
-        if os.path.ismount(mount):
+    mounts = [runtime / relative for relative in ["cache/Eden/Eden/profiles", "data/Eden/Eden/engine-data"]]
+    unmount_deadline = time.monotonic() + 15
+    while True:
+        active_mounts = [mount for mount in mounts if os.path.ismount(mount)]
+        if not active_mounts:
+            break
+        for mount in active_mounts:
             try:
-                subprocess.run(["fusermount3", "-u", str(mount)], check=True, timeout=10)
+                subprocess.run(
+                    ["fusermount3", "-u", str(mount)],
+                    check=True,
+                    timeout=5,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             except (OSError, subprocess.SubprocessError):
-                failed_mounts.append(str(mount))
-    if failed_mounts:
-        raise RuntimeError("Temporary profile mounts remain active: " + ", ".join(failed_mounts))
+                pass
+        if time.monotonic() >= unmount_deadline:
+            active_mounts = [str(mount) for mount in mounts if os.path.ismount(mount)]
+            if active_mounts:
+                raise RuntimeError("Temporary profile mounts remain active: " + ", ".join(active_mounts))
+            break
+        time.sleep(0.25)

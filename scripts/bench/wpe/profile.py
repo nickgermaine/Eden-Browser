@@ -14,9 +14,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--perf", type=Path, required=True)
+    profiler = parser.add_mutually_exclusive_group(required=True)
+    profiler.add_argument("--perf", type=Path)
+    profiler.add_argument("--sysprof", type=Path)
     parser.add_argument("--probe-script", type=Path)
+    parser.add_argument("--patch-counters", action="store_true")
+    parser.add_argument("--call-graph", choices=("fp", "dwarf", "none"), default="fp")
+    parser.add_argument("--frequency", type=int, default=499)
     args = parser.parse_args()
+    if not 1 <= args.frequency <= 999:
+        parser.error("--frequency must be between 1 and 999 Hz")
     args.output.mkdir(parents=True, exist_ok=False)
     prefix = Path(
         re.search(
@@ -26,8 +33,11 @@ def main():
         )[1]
     )
     manifest = json.loads((prefix / "share/eden-wpe-build.json").read_text())
-    if not manifest.get("framePointers"):
-        raise RuntimeError("This capture requires the separate frame-pointer runtime")
+    if args.perf and args.call_graph == "fp" and not manifest.get("framePointers"):
+        raise RuntimeError(
+            "Frame-pointer capture requires a frame-pointer runtime; "
+            "use --call-graph dwarf or none for the optimized runtime"
+        )
     hashes = {}
     for path in [
         args.build / "eden-wpe-bench",
@@ -57,11 +67,19 @@ def main():
             QT_QPA_PLATFORM="wayland",
             WAYLAND_DISPLAY="eden-profile",
             EDEN_WPE_REQUIRE_GPU="1",
+            EDEN_WPE_PREWARM="0",
             WEBKIT_SKIA_CANVAS_REPLAY_THREADS="2",
-            JSC_useJITDump="true",
-            JSC_jitDumpDirectory=str(args.output.resolve()),
             QT_FORCE_STDERR_LOGGING="1",
         )
+        if args.perf:
+            environment.update(
+                JSC_useJITDump="true",
+                JSC_jitDumpDirectory=str(args.output.resolve()),
+            )
+        else:
+            environment["WEBKIT_ENABLE_SOURCE_DISPATCH_SIGNPOSTS"] = "1"
+        if args.patch_counters:
+            environment["WEBKIT_EDEN_PATCH_COUNTERS"] = "1"
         compositor_environment = environment.copy()
         compositor_environment["LD_LIBRARY_PATH"] = (
             str(tools / "lib") + ":" + str(tools / "lib/weston")
@@ -96,32 +114,58 @@ def main():
                 if compositor.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError("Private compositor failed")
                 time.sleep(0.02)
-            command = [
-                str(args.perf.resolve()),
-                "record",
-                "-e",
-                "cycles:u",
-                "-F",
-                "499",
-                "--clockid",
-                "mono",
-                "--call-graph",
-                "fp",
-                "-o",
-                str(args.output.resolve() / "samples.perf"),
+            if args.perf:
+                command = [
+                    str(args.perf.resolve()),
+                    "record",
+                    "-e",
+                    "cycles:u",
+                    "-F",
+                    str(args.frequency),
+                    "--clockid",
+                    "mono",
+                    "-o",
+                    str(args.output.resolve() / "samples.perf"),
+                ]
+                if args.call_graph != "none":
+                    command += [
+                        "--call-graph",
+                        "fp" if args.call_graph == "fp" else "dwarf,16384",
+                    ]
+                label = args.call_graph + "-diagnostic"
+            else:
+                command = [
+                    str(args.sysprof.resolve()),
+                    "--no-sysprofd",
+                    "--no-perf",
+                    "--no-cpu",
+                    "--no-memory",
+                    "--no-battery",
+                    "--no-disk",
+                    "--no-network",
+                    "--no-decode",
+                    "--no-debuginfod",
+                    str(args.output.resolve() / "events.syscap"),
+                ]
+                label = "sysprof-diagnostic"
+            command += [
                 "--",
                 str(args.build.resolve() / "eden-wpe-bench"),
                 "--output",
                 str(args.output.resolve() / "run.json"),
                 "--label",
-                "frame-pointer-diagnostic",
+                label,
+                "--viewport-width",
+                "1600",
+                "--viewport-height",
+                "1200",
                 "--timings",
                 "--training-directory",
                 str(args.output.resolve()),
             ]
             if args.probe_script:
                 command += ["--probe-script", str(args.probe_script.resolve())]
-            environment["LD_LIBRARY_PATH"] = str(args.perf.resolve().parents[1] / "lib")
+            environment["LD_LIBRARY_PATH"] = str((args.perf or args.sysprof).resolve().parents[1] / "lib")
             (args.output / "command.json").write_text(
                 json.dumps(
                     {

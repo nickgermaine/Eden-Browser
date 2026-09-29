@@ -194,9 +194,6 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setOrganizationName("Eden");
     QCoreApplication::setOrganizationDomain("eden.browser");
     QGuiApplication::setDesktopFileName("eden-browser");
-#if EDEN_ENGINE_QTWEBENGINE
-    eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::QtWebEngine);
-#endif
 #if EDEN_ENGINE_WPE
     eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::Wpe);
 #endif

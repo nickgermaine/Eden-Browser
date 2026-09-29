@@ -1,6 +1,7 @@
 #include "engine/wpe/wpeengineview.h"
 #include "core/settings/shortcutregistry.h"
 #include "core/settings/theme/thememanager.h"
+#include "engine/fontpolicy.h"
 #include "engine/wpe/wpeprofile.h"
 #include "engine/wpe/wperuntime.h"
 #include "engine/wpe/wpesurface.h"
@@ -17,6 +18,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QSet>
 #include <QSslCertificate>
 #include <QTimer>
@@ -24,9 +26,33 @@
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 namespace eden::engine {
+
+    namespace {
+        bool canWarmNavigation(const WpeSurface *surface) {
+            if (!surface || !surface->isVisible()) {
+                return false;
+            }
+            const auto *window = surface->window();
+            return window && window->isVisible() && window->visibility() != QWindow::Minimized;
+        }
+
+        void applyEngineFeature(WebKitSettings *settings, const char *identifier, bool enabled) {
+            WebKitFeatureList *features = webkit_settings_get_all_features();
+            if (!features) {
+                return;
+            }
+            if (WebKitFeature *feature = webkit_feature_list_find(features, identifier)) {
+                webkit_settings_set_feature_enabled(settings, feature, enabled);
+            } else {
+                qWarning("Eden: WebKit feature %s is unavailable", identifier);
+            }
+            webkit_feature_list_unref(features);
+        }
+    }
 
     class WpeNewViewRequest final : public EngineNewViewRequest {
       public:
@@ -69,6 +95,29 @@ namespace eden::engine {
     WpeEngineView::WpeEngineView(WpeProfile *profile, QObject *parent)
         : EngineView(parent),
           m_profile(profile) {
+        m_progressTimer.setSingleShot(true);
+        m_progressTimer.setTimerType(Qt::PreciseTimer);
+        connect(&m_progressTimer, &QTimer::timeout, this, [this] {
+            if (m_progressPending) {
+                applyProgress();
+            }
+        });
+        m_thumbnailTimer.setSingleShot(true);
+        connect(&m_thumbnailTimer, &QTimer::timeout, this, &WpeEngineView::flushDeferredThumbnail);
+        m_preconnectTimer.setSingleShot(true);
+        m_preconnectTimer.setInterval(100);
+        connect(&m_preconnectTimer, &QTimer::timeout, this, [this] {
+            if (m_profile && m_view && canWarmNavigation(m_surface)) {
+                m_profile->preconnectNavigation(m_view, std::exchange(m_preconnectTarget, QUrl{}));
+            }
+        });
+        m_hoverPreconnectTimer.setSingleShot(true);
+        m_hoverPreconnectTimer.setInterval(80);
+        connect(&m_hoverPreconnectTimer, &QTimer::timeout, this, [this] {
+            if (m_profile && m_view && canWarmNavigation(m_surface)) {
+                m_profile->preconnectNavigation(m_view, std::exchange(m_hoverPreconnectTarget, QUrl{}));
+            }
+        });
         createNative();
     }
 
@@ -104,9 +153,40 @@ namespace eden::engine {
         webkit_settings_set_enable_fullscreen(settings, TRUE);
         webkit_settings_set_enable_page_cache(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
+        webkit_settings_set_enable_dns_prefetching(settings, WpeProfile::connectionWarmupEnabled());
         if (qEnvironmentVariable("EDEN_WPE_CANVAS_ACCELERATION") == "0") {
             webkit_settings_set_enable_2d_canvas_acceleration(settings, FALSE);
         }
+        const bool webGLInGPUProcess = qEnvironmentVariable("EDEN_WPE_GPU_PROCESS") != "0";
+        for (const char *identifier : {"UseGPUProcessForWebGL", "AllowWebGLInWorkers"}) {
+            applyEngineFeature(settings, identifier, webGLInGPUProcess);
+        }
+        if (qEnvironmentVariableIntValue("EDEN_WPE_GPU_PROCESS") > 0) {
+            for (const char *identifier : {"UseGPUProcessForDOMRendering", "UseGPUProcessForMedia"}) {
+                applyEngineFeature(settings, identifier, true);
+            }
+        }
+#ifdef EDEN_WPE_LIBWEBRTC
+        for (const char *identifier : {"WebRTCVP9Profile2Codec", "WebRTCEncodedTransform"}) {
+            applyEngineFeature(settings, identifier, true);
+        }
+#endif
+        applyEngineFeature(settings, "MediaStreamTrackProcessing", true);
+        if (qEnvironmentVariableIntValue("EDEN_WPE_CONSOLE_LOG") > 0) {
+            webkit_settings_set_enable_write_console_messages_to_stdout(settings, TRUE);
+        }
+        const QByteArray standardFamily = FontPolicy::standardFamily().toUtf8();
+        const QByteArray sansSerifFamily = FontPolicy::sansSerifFamily().toUtf8();
+        const QByteArray serifFamily = FontPolicy::serifFamily().toUtf8();
+        const QByteArray monospaceFamily = FontPolicy::monospaceFamily().toUtf8();
+        const QByteArray cursiveFamily = FontPolicy::cursiveFamily().toUtf8();
+        const QByteArray fantasyFamily = FontPolicy::fantasyFamily().toUtf8();
+        webkit_settings_set_default_font_family(settings, standardFamily.constData());
+        webkit_settings_set_sans_serif_font_family(settings, sansSerifFamily.constData());
+        webkit_settings_set_serif_font_family(settings, serifFamily.constData());
+        webkit_settings_set_monospace_font_family(settings, monospaceFamily.constData());
+        webkit_settings_set_cursive_font_family(settings, cursiveFamily.constData());
+        webkit_settings_set_fantasy_font_family(settings, fantasyFamily.constData());
         webkit_settings_set_user_agent_with_application_details(
             settings,
             "Eden",
@@ -132,6 +212,8 @@ namespace eden::engine {
                 m_profile->session(),
                 "web-context",
                 m_profile->context(),
+                "is-controlled-by-automation",
+                gboolean(m_profile->controlledByAutomation()),
                 "user-content-manager",
                 m_content,
                 "settings",
@@ -156,6 +238,31 @@ namespace eden::engine {
         }
         m_surface = new WpeSurface(nativeSurface);
         m_surface->setParent(this);
+        connect(m_surface, &QQuickItem::visibleChanged, this, [this] {
+            if (!m_surface || !m_surface->isVisible()) {
+                cancelNavigationPreparation();
+            }
+        });
+        g_signal_connect(
+            m_view,
+            "mouse-target-changed",
+            G_CALLBACK(+[](WebKitWebView *, WebKitHitTestResult *hit, guint, WpeEngineView *self) {
+                const QUrl target =
+                    webkit_hit_test_result_context_is_link(hit)
+                        ? WpeConnectionWarmup::origin(QUrl(QString::fromUtf8(webkit_hit_test_result_get_link_uri(hit))))
+                        : QUrl();
+                if (target == self->m_hoverPreconnectTarget) {
+                    return;
+                }
+                self->m_hoverPreconnectTimer.stop();
+                self->m_hoverPreconnectTarget = target;
+                if (WpeProfile::connectionWarmupEnabled() && target.scheme() == "https" &&
+                    canWarmNavigation(self->m_surface)) {
+                    self->m_hoverPreconnectTimer.start();
+                }
+            }),
+            this
+        );
         if (g_signal_lookup("eden-focus-v1", WEBKIT_TYPE_WEB_VIEW)) {
             g_signal_connect(
                 m_view,
@@ -183,7 +290,13 @@ namespace eden::engine {
         g_signal_connect(
             m_view,
             "notify",
-            G_CALLBACK(+[](GObject *, GParamSpec *, WpeEngineView *self) { self->synchronizeState(); }),
+            G_CALLBACK(+[](GObject *, GParamSpec *property, WpeEngineView *self) {
+                if (!std::strcmp(property->name, "estimated-load-progress")) {
+                    self->synchronizeProgress();
+                } else {
+                    self->synchronizeState();
+                }
+            }),
             this
         );
         g_signal_connect(
@@ -311,7 +424,10 @@ namespace eden::engine {
         g_signal_connect(
             m_view,
             "script-dialog",
-            G_CALLBACK(+[](WebKitWebView *, WebKitScriptDialog *dialog, WpeEngineView *self) -> gboolean {
+            G_CALLBACK(+[](WebKitWebView *view, WebKitScriptDialog *dialog, WpeEngineView *self) -> gboolean {
+                if (webkit_web_view_is_controlled_by_automation(view)) {
+                    return FALSE;
+                }
                 JavaScriptDialogInfo info;
                 info.id = self->m_nextRequest++;
                 const auto *origin =
@@ -406,8 +522,19 @@ namespace eden::engine {
     }
 
     void WpeEngineView::destroyNative() {
+        cancelNavigationPreparation();
         ++m_generation;
         m_committed = false;
+        m_progressTimer.stop();
+        QObject::disconnect(m_progressFrameConnection);
+        m_progressFrameConnection = {};
+        m_progressPending = false;
+        m_thumbnailTimer.stop();
+        if (m_deferredThumbnail) {
+            auto abandoned = std::move(m_deferredThumbnail);
+            m_deferredThumbnail = nullptr;
+            abandoned({});
+        }
         cancelRequests();
         closeDevTools();
         delete m_surface.data();
@@ -436,8 +563,6 @@ namespace eden::engine {
             nextUrl.setScheme("eden");
         }
         const QString nextTitle = QString::fromUtf8(webkit_web_view_get_title(m_view));
-        const int nextProgress =
-            qBound(0, int(std::lround(webkit_web_view_get_estimated_load_progress(m_view) * 100)), 100);
         const bool nextLoading = webkit_web_view_is_loading(m_view);
         const bool nextBack = webkit_web_view_can_go_back(m_view);
         const bool nextForward = webkit_web_view_can_go_forward(m_view);
@@ -453,13 +578,14 @@ namespace eden::engine {
             m_title = nextTitle;
             emit titleChanged();
         }
-        if (m_progress != nextProgress) {
-            m_progress = nextProgress;
-            emit loadProgressChanged();
-        }
         if (m_loading != nextLoading) {
             m_loading = nextLoading;
             emit loadingChanged();
+            if (!m_loading) {
+                m_progressTimer.stop();
+                applyProgress();
+                flushDeferredThumbnail();
+            }
         }
         if (m_back != nextBack) {
             m_back = nextBack;
@@ -488,6 +614,61 @@ namespace eden::engine {
         setCaptureDetails("wpe-native-capture", activities);
     }
 
+    void WpeEngineView::synchronizeProgress() {
+        if (!m_view || m_progressPending) {
+            return;
+        }
+        m_progressPending = true;
+        QObject::disconnect(m_progressFrameConnection);
+        if (m_surface) {
+            auto *window = m_surface->window();
+            if (window && window->isVisible() && window->visibility() != QWindow::Minimized) {
+                m_progressFrameConnection = connect(
+                    window,
+                    &QQuickWindow::frameSwapped,
+                    this,
+                    [this] {
+                        if (m_progressPending) {
+                            m_progressTimer.stop();
+                            applyProgress();
+                        }
+                    },
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection)
+                );
+                window->update();
+            }
+        }
+        m_progressTimer.start(100);
+    }
+
+    void WpeEngineView::applyProgress() {
+        m_progressPending = false;
+        if (!m_view) {
+            return;
+        }
+        const int nextProgress =
+            qBound(0, int(std::lround(webkit_web_view_get_estimated_load_progress(m_view) * 100)), 100);
+        if (m_progress != nextProgress) {
+            m_progress = nextProgress;
+            emit loadProgressChanged();
+        }
+    }
+
+    void WpeEngineView::flushDeferredThumbnail() {
+        m_thumbnailTimer.stop();
+        if (!m_deferredThumbnail) {
+            return;
+        }
+        auto callback = std::move(m_deferredThumbnail);
+        m_deferredThumbnail = nullptr;
+        const QSize size = m_deferredThumbnailSize;
+        if (m_view && !m_loading) {
+            captureThumbnail(size, std::move(callback));
+        } else {
+            callback({});
+        }
+    }
+
     void WpeEngineView::invalidateFormTarget() {
         m_committed = false;
         m_documentId.clear();
@@ -497,6 +678,7 @@ namespace eden::engine {
 
     void WpeEngineView::navigationChanged(WebKitLoadEvent event) {
         if (event == WEBKIT_LOAD_STARTED) {
+            cancelNavigationPreparation();
             ++m_generation;
             m_committed = false;
             m_documentId.clear();
@@ -722,7 +904,38 @@ namespace eden::engine {
             m_inspector->setFocus(false);
         }
     }
+    void WpeEngineView::prepareNavigation(const QList<QUrl> &suggestions, const QUrl &preferred) {
+        if (suggestions.isEmpty()) {
+            cancelNavigationPreparation();
+            return;
+        }
+        m_preconnectTimer.stop();
+        m_preconnectTarget = QUrl{};
+        if (!m_profile || !m_view || !canWarmNavigation(m_surface) || !WpeProfile::connectionWarmupEnabled()) {
+            return;
+        }
+        m_profile->prefetchNavigationHosts(suggestions);
+        if (!suggestions.contains(preferred)) {
+            return;
+        }
+        const QUrl origin = WpeConnectionWarmup::origin(preferred);
+        if (origin.scheme() == "https") {
+            m_preconnectTarget = origin;
+            m_preconnectTimer.start();
+        }
+    }
+
+    void WpeEngineView::cancelNavigationPreparation() {
+        m_preconnectTimer.stop();
+        m_hoverPreconnectTimer.stop();
+        m_preconnectTarget = QUrl{};
+        m_hoverPreconnectTarget = QUrl{};
+    }
+
     void WpeEngineView::attach(QQuickItem *viewport) {
+        if (!viewport) {
+            cancelNavigationPreparation();
+        }
         if (m_surface) {
             m_surface->attach(viewport);
         }
@@ -903,7 +1116,13 @@ namespace eden::engine {
             },
             Qt::QueuedConnection
         );
-        connect(this, &EngineView::devToolsPlacementChanged, this, &WpeEngineView::applyInspectorTheme, Qt::UniqueConnection);
+        connect(
+            this,
+            &EngineView::devToolsPlacementChanged,
+            this,
+            &WpeEngineView::applyInspectorTheme,
+            Qt::UniqueConnection
+        );
         connect(
             m_inspector,
             &WpeSurface::nativeClosed,
@@ -944,16 +1163,15 @@ namespace eden::engine {
             return;
         }
         const bool separate = devToolsPlacement() == DevToolsSeparate;
-        const QString placement =
-            QStringLiteral(
-                ":root{--eden-controls-display:flex !important;--eden-dock-display:%1 !important;"
-                "--eden-dock-rotation:%2 !important;--eden-window-display:%3 !important;"
-                "--eden-windowed-display:%4 !important;}"
-            )
-                .arg(separate ? "none" : "flex")
-                .arg(devToolsPlacement() == DevToolsRight ? "90deg" : "0deg")
-                .arg(separate ? "none" : "block")
-                .arg(separate ? "block" : "none");
+        const QString placement = QStringLiteral(
+                                      ":root{--eden-controls-display:flex !important;--eden-dock-display:%1 !important;"
+                                      "--eden-dock-rotation:%2 !important;--eden-window-display:%3 !important;"
+                                      "--eden-windowed-display:%4 !important;}"
+        )
+                                      .arg(separate ? "none" : "flex")
+                                      .arg(devToolsPlacement() == DevToolsRight ? "90deg" : "0deg")
+                                      .arg(separate ? "none" : "block")
+                                      .arg(separate ? "block" : "none");
         const QByteArray css = (core::ThemeManager::instance()->cssVariables() + placement).toUtf8();
         g_signal_emit_by_name(m_inspector->nativeView(), "eden-inspector-style-v1", css.constData());
     }
@@ -1669,6 +1887,22 @@ document.addEventListener('selectionchange',repairCaret,true);
             callback({});
             return;
         }
+        WpeRuntime::noteThumbnailRequest();
+        if (m_loading) {
+            if (m_deferredThumbnail) {
+                auto superseded = std::move(m_deferredThumbnail);
+                m_deferredThumbnail = nullptr;
+                superseded({});
+            }
+            m_deferredThumbnail = std::move(callback);
+            m_deferredThumbnailSize = size;
+            m_thumbnailTimer.start(3000);
+            return;
+        }
+        captureThumbnail(size, std::move(callback));
+    }
+
+    void WpeEngineView::captureThumbnail(const QSize &size, ThumbnailCallback callback) {
         struct Snapshot {
             QPointer<WpeEngineView> view;
             quint64 generation;

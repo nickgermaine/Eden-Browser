@@ -100,6 +100,7 @@ int main(int argc, char *argv[]) {
     if (!WpeRuntime::initialize("Eden", "benchmark")) {
         return 2;
     }
+    const quint64 thumbnailRequestsBefore = WpeRuntime::counters().value("thumbnailRequests").toULongLong();
     int result = 1;
     {
         EngineProfileParameters parameters;
@@ -132,6 +133,10 @@ int main(int argc, char *argv[]) {
         }
         view.attach(viewportWidth > 0 ? &viewport : window.contentItem());
         window.show();
+        if (isProbe && view.surface()) {
+            window.requestActivate();
+            view.surface()->forceActiveFocus(Qt::OtherFocusReason);
+        }
         view.load(isProbe && !parser.isSet("url") ? QUrl("about:blank") : QUrl(parser.value("url")));
         QElapsedTimer elapsed;
         elapsed.start();
@@ -209,6 +214,10 @@ int main(int argc, char *argv[]) {
                     QVariantMap results = state.value("results").toMap();
                     results.insert("elapsedMilliseconds", elapsed.elapsed());
                     results.insert("displaySyncPulses", qulonglong(WpeRuntime::displayPulseCount()));
+                    results.insert(
+                        "thumbnailRequests",
+                        WpeRuntime::counters().value("thumbnailRequests").toULongLong() - thumbnailRequestsBefore
+                    );
                     results.insert("rendererPageBackingAfterCompletion", rendererPageBacking(view.rendererProcessId()));
                     results.insert("label", parser.value("label"));
                     results.insert("qtVersion", QString::fromLatin1(qVersion()));
@@ -228,6 +237,9 @@ int main(int argc, char *argv[]) {
                     QVariantMap runtimeOptions;
                     for (const char *name :
                          {"JSC_jitPolicyScale",
+                          "JSC_forceUnlinkedDFG",
+                          "JSC_thresholdForFTLOptimizeAfterWarmUp",
+                          "WEBKIT_EDEN_DISABLE_CANVAS_THREAD",
                           "WEBKIT_EDEN_SIMPLE_TEXT",
                           "WEBKIT_EDEN_CANVAS_DAMAGE",
                           "WEBKIT_EDEN_CANVAS_CPU_PIXELS",
@@ -297,7 +309,8 @@ int main(int argc, char *argv[]) {
                     }
                     qInfo().noquote()
                         << QJsonDocument::fromVariant(results.value("score")).toJson(QJsonDocument::Compact);
-                    const bool valid = results.value("accelerated").toBool() &&
+                    const bool valid = !results.value("thumbnailRequests").toULongLong() &&
+                                       results.value("accelerated").toBool() &&
                                        results.value("textureImports").toULongLong() > 0 &&
                                        (isProbe ? !results.value("probe").toString().isEmpty() &&
                                                       !results.value("measurements").toMap().isEmpty()

@@ -27,7 +27,7 @@ namespace eden::engine {
     EngineProfile::~EngineProfile() = default;
 
     bool EngineProfile::isPrivate() const {
-        return m_parameters.privateProfile;
+        return m_parameters.privateProfile || m_parameters.controlledByAutomation;
     }
 
     const QString &EngineProfile::profileId() const {

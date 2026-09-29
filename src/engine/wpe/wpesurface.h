@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QRect>
+#include <QSet>
 #include <atomic>
 #include <memory>
 
@@ -13,6 +14,7 @@ namespace eden::engine {
         WpeFrame(WPEView *view, WPEBuffer *buffer);
         ~WpeFrame();
         void rendered();
+        static int heldPeak();
         WPEView *view;
         WPEBuffer *buffer;
         QSize size;
@@ -20,7 +22,13 @@ namespace eden::engine {
         std::atomic<bool> acknowledged = false;
         std::atomic<int> releaseFence = -1;
         std::atomic<int> renderingFence = -1;
+        GMainContext *mainContext;
     };
+
+    enum class FrameAcknowledgement { Arrival, Import, Swap };
+
+    FrameAcknowledgement frameAcknowledgementPolicy();
+    QString frameAcknowledgementName(FrameAcknowledgement policy);
 
     class WpeRenderingNotice;
 
@@ -32,13 +40,14 @@ namespace eden::engine {
         ~WpeSurface() override;
         void attach(QQuickItem *viewport);
         bool submit(WPEBuffer *buffer);
+        void buffersChanged(WPEBuffer **buffers, guint count);
         void synchronizeVisibility();
         void setPointerCursor(const QString &name);
         void setPointerCursor(const QImage &image, const QPoint &hotspot);
         void setInputContext(WPEInputMethodContext *context);
         void setInputFocus(bool focused);
         void setInputCursor(const QRect &rectangle);
-        void setInputSurrounding(const QString &text, int cursor, int anchor);
+        void setInputSurrounding(const char *text, unsigned length, unsigned cursor, unsigned anchor);
         void setInputPreedit(const QString &text, int cursor);
         QString inputPreedit() const;
         int inputPreeditCursor() const;
@@ -49,6 +58,7 @@ namespace eden::engine {
         bool accelerated() const;
         QString renderingDiagnostic() const;
         quint64 textureImportCount() const;
+        quint64 frameImportCount() const;
 
       signals:
         void renderingFailed(const QString &message);
@@ -90,10 +100,16 @@ namespace eden::engine {
         QList<QMetaObject::Connection> m_viewportConnections;
         QList<QMetaObject::Connection> m_windowConnections;
         std::shared_ptr<WpeFrame> m_frame;
+        QSet<const void *> m_liveBuffers;
+        quint64 m_liveBuffersGeneration = 0;
         WPEInputMethodContext *m_input = nullptr;
         QPointF m_pointer;
         QRect m_cursor;
         QString m_surrounding;
+        QByteArray m_surroundingBytes;
+        unsigned m_surroundingCursorByte = 0;
+        unsigned m_surroundingAnchorByte = 0;
+        bool m_surroundingValid = false;
         QString m_preedit;
         int m_cursorPosition = 0;
         int m_anchorPosition = 0;
@@ -101,8 +117,9 @@ namespace eden::engine {
         bool m_inputFocused = false;
         bool m_composing = false;
         bool m_accelerated = true;
-        const bool m_acknowledgeOnImport;
+        const FrameAcknowledgement m_acknowledgement;
         std::atomic<quint64> m_textureImports = 0;
+        std::atomic<quint64> m_frameImports = 0;
         QString m_renderingDiagnostic;
         WpeRenderingNotice *m_renderingNotice = nullptr;
     };

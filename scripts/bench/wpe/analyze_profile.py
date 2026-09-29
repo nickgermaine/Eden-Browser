@@ -58,6 +58,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     parser.add_argument("--perf", type=Path, required=True)
+    parser.add_argument("--iteration", choices=("all", "first", "subsequent"), default="all")
+    parser.add_argument("--leaf-only", action="store_true")
     args = parser.parse_args()
     run = json.loads((args.directory / "run.json").read_text())
     windows = []
@@ -77,8 +79,17 @@ def main():
             for item in run.get("timings", [])
             if item["name"].endswith(("-sync", "-async", "-mutation", "-layout"))
         )
+        if args.iteration != "all":
+            occurrences = Counter()
+            selected = []
+            for window in windows:
+                first = not occurrences[window[2]]
+                occurrences[window[2]] += 1
+                if first == (args.iteration == "first"):
+                    selected.append(window)
+            windows = selected
     starts = [item[0] for item in windows]
-    heads = re.compile(r"^\s*(.*?)\s+(\d+)/(\d+)\s+(\d+\.\d+):\s*$")
+    heads = re.compile(r"^\s*(.*?)\s+(\d+)/(\d+)\s+(\d+\.\d+):(.*)$")
     frames = re.compile(r"^\s+([a-f0-9]+)\s+(.*)\s+\((.*)\)$")
     mappings = re.compile(
         r"PERF_RECORD_MMAP2? (\d+)/\d+: .* (/.*?/jit-[^/]+\.dump)\s*$"
@@ -112,6 +123,8 @@ def main():
         "-F",
         "comm,pid,tid,time,ip,sym,dso",
     ]
+    if args.leaf_only:
+        command.append("--hide-call-graph")
     with (args.directory / "decode.log").open("w") as errors:
         process = subprocess.Popen(
             command, env=environment, stdout=subprocess.PIPE, stderr=errors, text=True
@@ -125,12 +138,14 @@ def main():
                         loaded_jit[path] = jit_symbols(path)
                     process_jit[mapping[1]] = loaded_jit[path]
                 continue
+            if "PERF_RECORD_" in line:
+                continue
             head = heads.match(line)
             if head:
                 finish()
                 stack = []
                 group = None
-                comm, pid, tid, timestamp = head.groups()
+                comm, pid, tid, timestamp, leaf = head.groups()
                 if comm != "WPEWebProcess" or pid != tid:
                     continue
                 group = "all-main"
@@ -142,6 +157,18 @@ def main():
                 index = bisect_right(starts, stamp) - 1
                 if index >= 0 and stamp <= windows[index][1]:
                     group = windows[index][2]
+                if args.leaf_only:
+                    frame = frames.match(leaf)
+                    if not frame:
+                        raise RuntimeError("Sampled instruction missing from leaf-only perf output")
+                    stack.append(
+                        resolve_jit(
+                            process_jit.get(pid, {}),
+                            int(frame[1], 16),
+                            sample_time,
+                            frame[2],
+                        )
+                    )
             elif group:
                 frame = frames.match(line)
                 if frame:
@@ -161,14 +188,19 @@ def main():
     result = {
         name: {
             "samples": count,
-            "meanDepth": sum(depth * n for depth, n in depths[name].items()) / count,
-            "depths": dict(depths[name]),
+            "meanDepth": None if args.leaf_only else sum(depth * n for depth, n in depths[name].items()) / count,
+            "depths": {} if args.leaf_only else dict(depths[name]),
+            "callchains": not args.leaf_only,
             "self": dict(self_counts[name].most_common()),
-            "inclusive": dict(inclusive[name].most_common()),
+            "inclusive": {} if args.leaf_only else dict(inclusive[name].most_common()),
         }
         for name, count in totals.items()
     }
-    (args.directory / "functions.json").write_text(json.dumps(result, indent=2) + "\n")
+    suffix = "-leaf" if args.leaf_only else ""
+    if args.iteration != "all":
+        suffix += f"-{args.iteration}"
+    filename = f"functions{suffix}.json"
+    (args.directory / filename).write_text(json.dumps(result, indent=2) + "\n")
     print(
         json.dumps(
             {

@@ -1,4 +1,5 @@
 #include "engine/cef/cefengineview.h"
+#include "engine/fontpolicy.h"
 #include "core/settings/shortcutregistry.h"
 #include "core/settings/theme/thememanager.h"
 #if EDEN_ENABLE_AUTOMATION
@@ -106,9 +107,8 @@ namespace eden::engine::cef {
 
     static float osrCaptureScale(qreal windowScale) {
         const CefRefPtr<CefCommandLine> commandLine = CefCommandLine::GetGlobalCommandLine();
-        return commandLine && commandLine->GetSwitchValue("ozone-platform") == "wayland"
-                   ? 1.0F
-                   : static_cast<float>(windowScale);
+        const bool waylandOzone = commandLine && commandLine->GetSwitchValue("ozone-platform") == "wayland";
+        return static_cast<float>(compositedDeviceScale(waylandOzone, windowScale));
     }
 
     static QString cefString(const CefString &value) {
@@ -2486,6 +2486,7 @@ try{return document.execCommand('copy');}finally{window.removeEventListener('cop
                     CefBrowserSettings settings;
                     settings.background_color = CefColorSetARGB(255, 255, 255, 255);
                     settings.windowless_frame_rate = 60;
+                    applyFontPolicy(settings);
                     if (!CefBrowserHost::CreateBrowser(
                             windowInfo,
                             currentClient,
@@ -2610,6 +2611,7 @@ try{return document.execCommand('copy');}finally{window.removeEventListener('cop
                     CefBrowserSettings settings;
                     settings.background_color = CefColorSetARGB(255, 255, 255, 255);
                     settings.windowless_frame_rate = 60;
+                    applyFontPolicy(settings);
                     if (!CefBrowserHost::CreateBrowser(
                             windowInfo,
                             currentClient,
@@ -5686,6 +5688,7 @@ try{return document.execCommand('copy');}finally{window.removeEventListener('cop
         windowInfo.shared_texture_enabled = false;
         configureAlloyRuntime(windowInfo);
         settings.windowless_frame_rate = 60;
+        applyFontPolicy(settings);
         client = transfer->client;
         if (!dispatch([url, disposition, userGesture, transfer](CefEngineView::Private &state) {
                 if (!transfer->canceled.load(std::memory_order_acquire)) {

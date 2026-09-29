@@ -59,10 +59,36 @@ class ProfilePathsTest(unittest.TestCase):
             run([str(training / 'app')])
             profile = stage / 'input.profdata'
             run([tool, 'merge', '--num-threads=1', str(training / 'data.profraw'), '-o', str(profile)])
-            (training / 'CMakeCache.txt').write_text('ENABLE_LLVM_PROFILE_GENERATION:BOOL=ON\nCMAKE_HOME_DIRECTORY:INTERNAL=' + str(training) + '\n')
+            runtime = stage / 'runtime'
+            manifest = {
+                'mode': 'profile-generate',
+                'version': '2.53.92',
+                'sourceSHA256': 'a' * 64,
+                'patches': ['test-patch'],
+                'patchCatalogSHA256': 'b' * 64,
+                'adoptedPatchSources': {},
+                'canvasReplayPatch': False,
+                'canvasReplaySources': {},
+                'hugePageAlignment': False,
+                'verifyPatches': False,
+                'embeddedPatchGeneratorSHA256': 'c' * 64,
+                'preparedManagedSourceSHA256': 'd' * 64,
+                'compiler': 'clang test compiler',
+            }
+            manifest_path = runtime / 'share' / 'eden-wpe-build.json'
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(json.dumps(manifest))
+            (training / 'CMakeCache.txt').write_text(
+                'ENABLE_LLVM_PROFILE_GENERATION:BOOL=ON\n'
+                'CMAKE_HOME_DIRECTORY:INTERNAL=' + str(training) + '\n'
+                'CMAKE_INSTALL_PREFIX:PATH=' + str(runtime) + '\n'
+            )
             pgo.record_training_paths(profile, training)
+            expected_identity = pgo.profile_identity(manifest)
             original_hash = pgo.digest(profile)
-            prepared, metadata = pgo.prepare_profile(profile, optimized, optimized, [], environment)
+            prepared, metadata = pgo.prepare_profile(
+                profile, optimized, optimized, [], environment, expected_identity
+            )
             self.assertEqual(metadata['remappedFunctions'], 1)
             self.assertEqual(metadata['remappedReferences'], 1)
             self.assertEqual(pgo.digest(profile), original_hash)
@@ -77,17 +103,26 @@ class ProfilePathsTest(unittest.TestCase):
             self.assertIn('!"function_entry_count", i64 1000', contents)
             self.assertIn('icmp eq ptr', contents)
             timestamp = prepared.stat().st_mtime_ns
-            self.assertEqual(pgo.prepare_profile(profile, optimized, optimized, [], environment), (prepared, metadata))
+            self.assertEqual(
+                pgo.prepare_profile(profile, optimized, optimized, [], environment, expected_identity),
+                (prepared, metadata),
+            )
             self.assertEqual(prepared.stat().st_mtime_ns, timestamp)
             record = optimized / 'eden-pgo-paths.json'
             stale = json.loads(record.read_text())
             stale['normalizerSHA256'] = 'previous-normalizer'
             record.write_text(json.dumps(stale))
-            self.assertEqual(pgo.prepare_profile(profile, optimized, optimized, [], environment), (prepared, metadata))
+            self.assertEqual(
+                pgo.prepare_profile(profile, optimized, optimized, [], environment, expected_identity),
+                (prepared, metadata),
+            )
             self.assertEqual(prepared.stat().st_mtime_ns, timestamp)
+            manifest_path.write_text(json.dumps(manifest | {'embeddedPatchGeneratorSHA256': 'e' * 64}))
+            with self.assertRaisesRegex(RuntimeError, 'training runtime manifest changed'):
+                pgo.prepare_profile(profile, optimized, optimized, [], environment, expected_identity)
             profile.write_bytes(profile.read_bytes() + b'changed')
             with self.assertRaises(RuntimeError):
-                pgo.prepare_profile(profile, optimized, optimized, [], environment)
+                pgo.prepare_profile(profile, optimized, optimized, [], environment, expected_identity)
 
 
 if __name__ == '__main__':

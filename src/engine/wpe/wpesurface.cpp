@@ -54,12 +54,69 @@ namespace eden::engine {
         return false;
     }
 
+    static const int mainThreadCallType = QEvent::registerEventType();
+
+    class WpeMainThreadCall final : public QEvent {
+      public:
+        explicit WpeMainThreadCall(std::function<void()> call)
+            : QEvent(QEvent::Type(mainThreadCallType)),
+              callback(std::move(call)) {}
+        std::function<void()> callback;
+    };
+
+    class WpeMainThreadCaller final : public QObject {
+      public:
+        using QObject::QObject;
+
+      protected:
+        bool event(QEvent *event) override {
+            if (event->type() == mainThreadCallType) {
+                static_cast<WpeMainThreadCall *>(event)->callback();
+                return true;
+            }
+            return QObject::event(event);
+        }
+    };
+
+    static QPointer<WpeMainThreadCaller> mainThreadCaller;
+    static std::atomic<int> heldFramesPeak{0};
+
+    static void ensureMainThreadCaller() {
+        if (!mainThreadCaller && qApp && QThread::isMainThread()) {
+            mainThreadCaller = new WpeMainThreadCaller(qApp);
+        }
+    }
+
     static void onMain(std::function<void()> callback) {
         if (QThread::isMainThread()) {
             callback();
+        } else if (mainThreadCaller) {
+            QCoreApplication::postEvent(
+                mainThreadCaller,
+                new WpeMainThreadCall(std::move(callback)),
+                Qt::HighEventPriority
+            );
         } else {
             QMetaObject::invokeMethod(qApp, std::move(callback), Qt::QueuedConnection);
         }
+    }
+
+    static void onWpeMain(GMainContext *context, std::function<void()> callback, int priority) {
+        auto *task = new std::function<void()>(std::move(callback));
+        GSource *source = g_idle_source_new();
+        g_source_set_priority(source, priority);
+        g_source_set_callback(
+            source,
+            +[](gpointer data) -> gboolean {
+                (*static_cast<std::function<void()> *>(data))();
+                return G_SOURCE_REMOVE;
+            },
+            task,
+            +[](gpointer data) { delete static_cast<std::function<void()> *>(data); }
+        );
+        g_source_attach(source, context);
+        g_source_unref(source);
+        g_main_context_wakeup(context);
     }
 
     WpeFrame::WpeFrame(WPEView *nativeView, WPEBuffer *nativeBuffer)
@@ -67,7 +124,21 @@ namespace eden::engine {
           buffer(WPE_BUFFER(g_object_ref(nativeBuffer))),
           size(wpe_buffer_get_width(nativeBuffer), wpe_buffer_get_height(nativeBuffer)),
           scale(wpe_view_get_scale(nativeView)),
-          renderingFence(wpe_buffer_take_rendering_fence(nativeBuffer)) {}
+          renderingFence(wpe_buffer_take_rendering_fence(nativeBuffer)),
+          mainContext(g_main_context_ref_thread_default()) {
+        ensureMainThreadCaller();
+        const int held = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(view), "eden-held-frames")) + 1;
+        g_object_set_data(G_OBJECT(view), "eden-held-frames", GINT_TO_POINTER(held));
+        int peak = heldFramesPeak.load();
+        while (held > peak && !heldFramesPeak.compare_exchange_weak(peak, held)) {
+        }
+        if (held == 3) {
+            static std::atomic<bool> reported{false};
+            if (!reported.exchange(true)) {
+                qInfo("Eden WebKit view holds %d buffers at once", held);
+            }
+        }
+    }
 
     WpeFrame::~WpeFrame() {
         const bool needsAcknowledgement = !acknowledged.exchange(true);
@@ -79,7 +150,7 @@ namespace eden::engine {
             }
             fence = unusedRenderingFence;
         }
-        onMain([nativeView = view, nativeBuffer = buffer, fence, needsAcknowledgement] {
+        auto release = [nativeView = view, nativeBuffer = buffer, fence, needsAcknowledgement] {
             if (needsAcknowledgement) {
                 wpe_view_buffer_rendered(nativeView, nativeBuffer);
             }
@@ -87,9 +158,21 @@ namespace eden::engine {
                 wpe_buffer_set_release_fence(nativeBuffer, fence);
             }
             wpe_view_buffer_released(nativeView, nativeBuffer);
+            const int held = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(nativeView), "eden-held-frames"));
+            g_object_set_data(G_OBJECT(nativeView), "eden-held-frames", GINT_TO_POINTER(qMax(0, held - 1)));
             g_object_unref(nativeBuffer);
             g_object_unref(nativeView);
-        });
+        };
+        if (needsAcknowledgement) {
+            onMain(std::move(release));
+        } else {
+            onWpeMain(mainContext, std::move(release), G_PRIORITY_HIGH_IDLE + 1);
+        }
+        g_main_context_unref(mainContext);
+    }
+
+    int WpeFrame::heldPeak() {
+        return heldFramesPeak.load();
     }
 
     void WpeFrame::rendered() {
@@ -98,11 +181,15 @@ namespace eden::engine {
         }
         auto *retainedView = WPE_VIEW(g_object_ref(view));
         auto *retainedBuffer = WPE_BUFFER(g_object_ref(buffer));
-        onMain([retainedView, retainedBuffer] {
-            wpe_view_buffer_rendered(retainedView, retainedBuffer);
-            g_object_unref(retainedBuffer);
-            g_object_unref(retainedView);
-        });
+        onWpeMain(
+            mainContext,
+            [retainedView, retainedBuffer] {
+                wpe_view_buffer_rendered(retainedView, retainedBuffer);
+                g_object_unref(retainedBuffer);
+                g_object_unref(retainedView);
+            },
+            G_PRIORITY_HIGH_IDLE
+        );
     }
 
     class WpeTextureNode final : public QSGSimpleTextureNode {
@@ -219,7 +306,7 @@ namespace eden::engine {
                 ownedTexture = nullptr;
                 textureId = 0;
                 eglImage = EGL_NO_IMAGE_KHR;
-                if (cache.size() > 3) {
+                if (cache.size() > maximumCachedTextures) {
                     destroyCached(cache.front());
                     cache.pop_front();
                 }
@@ -360,8 +447,21 @@ namespace eden::engine {
             return ownedTexture != nullptr;
         }
 
+        void retainLiveBuffers(const QSet<const void *> &live) {
+            for (auto entry = cache.begin(); entry != cache.end();) {
+                if (live.contains(entry->buffer)) {
+                    ++entry;
+                    continue;
+                }
+                destroyCached(*entry);
+                entry = cache.erase(entry);
+            }
+        }
+
+        static constexpr std::size_t maximumCachedTextures = 4;
         std::deque<CachedTexture> cache;
         std::shared_ptr<WpeFrame> frame;
+        quint64 liveBuffersGeneration = 0;
         QSGTexture *ownedTexture = nullptr;
         GLuint textureId = 0;
         EGLDisplay eglDisplay = EGL_NO_DISPLAY;
@@ -410,9 +510,33 @@ namespace eden::engine {
         emit renderingFailed(message);
     }
 
+    FrameAcknowledgement frameAcknowledgementPolicy() {
+        const QString policy = qEnvironmentVariable("EDEN_WPE_FRAME_ACK");
+        if (policy == QLatin1String("swap")) {
+            return FrameAcknowledgement::Swap;
+        }
+        if (policy == QLatin1String("import")) {
+            return FrameAcknowledgement::Import;
+        }
+        return FrameAcknowledgement::Arrival;
+    }
+
+    QString frameAcknowledgementName(FrameAcknowledgement policy) {
+        switch (policy) {
+        case FrameAcknowledgement::Arrival:
+            return QStringLiteral("arrival");
+        case FrameAcknowledgement::Import:
+            return QStringLiteral("import");
+        case FrameAcknowledgement::Swap:
+            return QStringLiteral("swap");
+        }
+        return QStringLiteral("arrival");
+    }
+
     WpeSurface::WpeSurface(WPEView *view)
         : m_view(WPE_VIEW(g_object_ref(view))),
-          m_acknowledgeOnImport(qEnvironmentVariable("EDEN_WPE_FRAME_ACK") != "swap") {
+          m_acknowledgement(frameAcknowledgementPolicy()) {
+        ensureMainThreadCaller();
         setFlag(ItemHasContents);
         setFlag(ItemAcceptsInputMethod);
         setAcceptedMouseButtons(Qt::AllButtons);
@@ -525,6 +649,9 @@ namespace eden::engine {
             frame->rendered();
             return true;
         }
+        if (m_acknowledgement == FrameAcknowledgement::Arrival) {
+            frame->rendered();
+        }
         m_frame = std::move(frame);
         const bool accelerated = WPE_IS_BUFFER_DMA_BUF(buffer);
         if (!accelerated && m_accelerated) {
@@ -536,6 +663,15 @@ namespace eden::engine {
         return true;
     }
 
+    void WpeSurface::buffersChanged(WPEBuffer **buffers, guint count) {
+        m_liveBuffers.clear();
+        for (guint index = 0; index < count; ++index) {
+            m_liveBuffers.insert(buffers[index]);
+        }
+        ++m_liveBuffersGeneration;
+        update();
+    }
+
     QSGNode *WpeSurface::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         auto *node = static_cast<WpeTextureNode *>(oldNode);
         if (!m_frame) {
@@ -544,6 +680,10 @@ namespace eden::engine {
         }
         if (!node) {
             node = new WpeTextureNode;
+        }
+        if (node->liveBuffersGeneration != m_liveBuffersGeneration) {
+            node->retainLiveBuffers(m_liveBuffers);
+            node->liveBuffersGeneration = m_liveBuffersGeneration;
         }
         if (node->frame != m_frame) {
             bool created = false;
@@ -568,7 +708,8 @@ namespace eden::engine {
             if (created) {
                 ++m_textureImports;
             }
-            if (m_acknowledgeOnImport) {
+            ++m_frameImports;
+            if (m_acknowledgement != FrameAcknowledgement::Swap) {
                 m_frame->rendered();
             } else {
                 const auto frame = m_frame;
@@ -958,6 +1099,8 @@ namespace eden::engine {
         if (!focused) {
             resetInput();
             m_surrounding.clear();
+            m_surroundingBytes.clear();
+            m_surroundingValid = false;
         }
         QGuiApplication::inputMethod()->update(Qt::ImQueryAll);
     }
@@ -965,10 +1108,44 @@ namespace eden::engine {
         m_cursor = rectangle;
         QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
     }
-    void WpeSurface::setInputSurrounding(const QString &text, int cursor, int anchor) {
-        m_surrounding = text;
-        m_cursorPosition = cursor;
-        m_anchorPosition = anchor;
+    void WpeSurface::setInputSurrounding(const char *text, unsigned length, unsigned cursor, unsigned anchor) {
+        const QByteArrayView bytes(text, qsizetype(length));
+        cursor = qMin(cursor, length);
+        anchor = qMin(anchor, length);
+        const bool textChanged = !m_surroundingValid || bytes != QByteArrayView(m_surroundingBytes);
+        if (!textChanged && m_surroundingCursorByte == cursor && m_surroundingAnchorByte == anchor) {
+            return;
+        }
+        int cursorUnits = 0;
+        int anchorUnits = 0;
+        int units = 0;
+        for (unsigned index = 0; index < length; ++index) {
+            if (index == cursor) {
+                cursorUnits = units;
+            }
+            if (index == anchor) {
+                anchorUnits = units;
+            }
+            const auto byte = static_cast<unsigned char>(text[index]);
+            if ((byte & 0xc0) != 0x80) {
+                units += byte >= 0xf0 ? 2 : 1;
+            }
+        }
+        if (cursor == length) {
+            cursorUnits = units;
+        }
+        if (anchor == length) {
+            anchorUnits = units;
+        }
+        if (textChanged) {
+            m_surroundingBytes = bytes.toByteArray();
+            m_surrounding = QString::fromUtf8(bytes);
+        }
+        m_surroundingValid = true;
+        m_surroundingCursorByte = cursor;
+        m_surroundingAnchorByte = anchor;
+        m_cursorPosition = qMin(cursorUnits, int(m_surrounding.size()));
+        m_anchorPosition = qMin(anchorUnits, int(m_surrounding.size()));
         QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
     }
     void WpeSurface::setInputPreedit(const QString &text, int cursor) {
@@ -1030,6 +1207,9 @@ namespace eden::engine {
     }
     quint64 WpeSurface::textureImportCount() const {
         return m_textureImports.load();
+    }
+    quint64 WpeSurface::frameImportCount() const {
+        return m_frameImports.load();
     }
 
 }

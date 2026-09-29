@@ -3,6 +3,8 @@
 #include "engine/engineview.h"
 #include "engine/wpe/wpeapi.h"
 #include <QPointer>
+#include <QSize>
+#include <QTimer>
 
 namespace eden::engine {
 
@@ -29,6 +31,7 @@ namespace eden::engine {
         QString backendName() const override;
         Capabilities capabilities() const override;
         qint64 rendererProcessId() const override;
+        void prepareNavigation(const QList<QUrl> &suggestions, const QUrl &preferred) override;
         void load(const QUrl &url) override;
         void back() override;
         void forward() override;
@@ -77,7 +80,12 @@ namespace eden::engine {
       private:
         void createNative(WebKitWebView *related = nullptr);
         void destroyNative();
+        void cancelNavigationPreparation();
         void synchronizeState();
+        void synchronizeProgress();
+        void applyProgress();
+        void captureThumbnail(const QSize &size, ThumbnailCallback callback);
+        void flushDeferredThumbnail();
         void navigationChanged(WebKitLoadEvent event);
         void invalidateFormTarget();
         void cancelRequests();
@@ -116,6 +124,16 @@ namespace eden::engine {
         quint64 m_generation = 0;
         quint64 m_nextRequest = 1;
         int m_progress = 0;
+        bool m_progressPending = false;
+        QTimer m_progressTimer;
+        QMetaObject::Connection m_progressFrameConnection;
+        QTimer m_thumbnailTimer;
+        QTimer m_preconnectTimer;
+        QTimer m_hoverPreconnectTimer;
+        QUrl m_preconnectTarget;
+        QUrl m_hoverPreconnectTarget;
+        ThumbnailCallback m_deferredThumbnail;
+        QSize m_deferredThumbnailSize;
         bool m_loading = false;
         bool m_back = false;
         bool m_forward = false;

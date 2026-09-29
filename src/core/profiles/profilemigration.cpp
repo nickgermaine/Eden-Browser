@@ -20,8 +20,7 @@
 namespace eden::core {
 
     bool ProfileMigration::Inventory::any() const {
-        return !legacyDatabasePath.isEmpty() || !legacySessionPath.isEmpty() || !legacyWebEngineDataPath.isEmpty() ||
-               !legacyWebEngineCachePath.isEmpty() || !legacyCefRootPath.isEmpty();
+        return !legacyDatabasePath.isEmpty() || !legacySessionPath.isEmpty() || !legacyCefRootPath.isEmpty();
     }
 
     static QString presentPath(const QString &path) {
@@ -214,8 +213,6 @@ namespace eden::core {
         };
         planMove(inventory.legacyDatabasePath, destination.databasePath());
         planMove(inventory.legacySessionPath, destination.sessionPath());
-        planMove(inventory.legacyWebEngineDataPath, destination.engineDataDirectory(QStringLiteral("qtwebengine")));
-        planMove(inventory.legacyWebEngineCachePath, destination.engineCacheDirectory(QStringLiteral("qtwebengine")));
         if (!inventory.legacyCefRootPath.isEmpty()) {
             planMove(
                 inventory.legacyCefRootPath + QStringLiteral("/default"),

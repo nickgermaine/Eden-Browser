@@ -2,7 +2,10 @@
 
 #include "engine/engineprofile.h"
 #include "engine/wpe/wpeapi.h"
+#include "engine/wpe/wpeconnectionwarmup.h"
+#include <QElapsedTimer>
 #include <QHash>
+#include <QVariantMap>
 #include <memory>
 
 namespace eden::engine {
@@ -23,7 +26,12 @@ namespace eden::engine {
         void flushStorage(std::function<void()> completion) override;
         WebKitNetworkSession *session() const;
         WebKitWebContext *context() const;
+        bool controlledByAutomation() const;
         bool storageReady() const;
+        static bool connectionWarmupEnabled();
+        void prefetchNavigationHosts(const QList<QUrl> &urls);
+        void preconnectNavigation(WebKitWebView *view, const QUrl &url);
+        QVariantMap connectionWarmupCounters() const;
         void retireOperation(WpeCookieOperation *operation);
 
       private:
@@ -35,14 +43,18 @@ namespace eden::engine {
             std::shared_ptr<const QString> destination;
             bool announced = false;
         };
-        WebKitNetworkSession *m_session;
         WebKitWebContext *m_context;
+        WebKitNetworkSession *m_session;
         GCancellable *m_cancellable;
         QHash<WebKitDownload *, DownloadState> m_downloads;
         QList<std::shared_ptr<WpeCookieOperation>> m_operations;
         quint32 m_nextDownload = 1;
         bool m_storageReady = false;
         bool m_closing = false;
+        QElapsedTimer m_connectionClock;
+        WpeConnectionWarmup m_connectionWarmup;
+        quint64 m_dnsPrefetchRequests = 0;
+        quint64 m_preconnectRequests = 0;
     };
 
 }
