@@ -6,10 +6,7 @@ Rectangle {
 
     required property var controller
 
-    color: Theme.surfaceContainer
-    radius: Theme.contentRadius
-    border.width: Theme.paneBorderWidth
-    border.color: Theme.paneBorder
+    color: "transparent"
 
     Item {
         id: header
@@ -37,6 +34,15 @@ Rectangle {
             EdenButton {
                 iconName: "trash"
                 onClicked: pane.controller.downloads.clearFinished()
+            }
+
+            EdenButton {
+                iconName: "expand"
+                Accessible.name: "Open downloads page"
+                onClicked: {
+                    pane.controller.openLibraryTab("downloads");
+                    pane.controller.openPane = "";
+                }
             }
 
             EdenButton {

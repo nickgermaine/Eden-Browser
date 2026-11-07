@@ -12,6 +12,7 @@
 #include "core/profiles/windowregistry.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/theme/thememanager.h"
+#include "core/window/popupdismissal.h"
 #include "core/window/tabstripnavigator.h"
 #include "core/window/windowcontroller.h"
 #include "core/window/windowframe.h"
@@ -194,17 +195,19 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setOrganizationName("Eden");
     QCoreApplication::setOrganizationDomain("eden.browser");
     QGuiApplication::setDesktopFileName("eden-browser");
-#if EDEN_ENGINE_QTWEBENGINE
-    eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::QtWebEngine);
+#if EDEN_ENGINE_WPE
+    eden::engine::EngineFactory::prepareApplication(eden::engine::Backend::Wpe);
 #endif
     QGuiApplication application(argc, argv);
     logStartupStage("qgui_application_constructed_ms");
     Q_INIT_RESOURCE(eden_ui_raw_res_0);
     QQuickStyle::setStyle("Basic");
+    eden::core::PopupDismissal popupDismissal;
     QFontDatabase::addApplicationFont(":/qt/qml/Eden/Ui/resources/fonts/RobotoFlex.ttf");
 
     std::unique_ptr<eden::platform::WaylandGlibEventDispatcher> waylandGlibDispatcher;
-    if (QGuiApplication::platformName() == "wayland" && qEnvironmentVariableIntValue("QT_NO_GLIB") != 0) {
+    if ((QGuiApplication::platformName() == "wayland" || EDEN_ENGINE_WPE) &&
+        qEnvironmentVariableIntValue("QT_NO_GLIB") != 0) {
         waylandGlibDispatcher = std::make_unique<eden::platform::WaylandGlibEventDispatcher>();
     }
 

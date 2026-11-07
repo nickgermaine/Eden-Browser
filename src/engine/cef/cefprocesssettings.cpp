@@ -48,9 +48,12 @@ namespace eden::engine::cef {
             CefString(&result.settings.root_cache_path) = rootCachePath.string();
         }
         result.settings.windowless_rendering_enabled = true;
+        result.settings.log_severity = LOGSEVERITY_DISABLE;
         for (const std::string_view argument : arguments) {
             if (argument == "--engine-compositing=windowed") {
                 result.settings.windowless_rendering_enabled = false;
+            } else if (argument == "--engine-logging") {
+                result.settings.log_severity = LOGSEVERITY_DEFAULT;
             }
         }
         return result;

@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Automation fixture</title>
+<button id="startButton">Start</button>
+<button id="popupButton">Popup</button>
+<button id="alertButton">Alert</button>
+<input id="text">
+<select id="servers" size="2"><option value="first">first</option><option value="second">second</option></select>
+<script>
+let clickTrusted = null;
+let clickActivated = null;
+let displayTrack = null;
+let displayError = null;
+let doubleClicks = 0;
+let popupOpened = null;
+let alertReturned = false;
+document.getElementById('startButton').addEventListener('click', event => {
+  clickTrusted = event.isTrusted;
+  clickActivated = navigator.userActivation ? navigator.userActivation.isActive : 'unsupported';
+  navigator.mediaDevices.getDisplayMedia({video: true}).then(stream => {
+    displayTrack = stream.getVideoTracks()[0];
+  }, error => {
+    displayError = `${error.name}: ${error.message}`;
+  });
+});
+document.getElementById('popupButton').addEventListener('click', () => {
+  popupOpened = !!window.open('popup.html', 'automation-popup');
+});
+document.getElementById('alertButton').addEventListener('click', () => {
+  alert('automation alert');
+  alertReturned = true;
+});
+document.getElementById('servers').addEventListener('dblclick', () => {
+  doubleClicks += 1;
+});
+</script>

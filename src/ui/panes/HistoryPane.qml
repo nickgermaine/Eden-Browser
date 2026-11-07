@@ -6,10 +6,7 @@ Rectangle {
 
     required property var controller
 
-    color: Theme.surfaceContainer
-    radius: Theme.contentRadius
-    border.width: Theme.paneBorderWidth
-    border.color: Theme.paneBorder
+    color: "transparent"
 
     Item {
         id: header
@@ -36,7 +33,17 @@ Rectangle {
 
             EdenButton {
                 iconName: "trash"
-                onClicked: pane.controller.history.clear()
+                Accessible.name: "Clear history"
+                onClicked: pane.controller.clearHistory()
+            }
+
+            EdenButton {
+                iconName: "expand"
+                Accessible.name: "Open history page"
+                onClicked: {
+                    pane.controller.openLibraryTab("history");
+                    pane.controller.openPane = "";
+                }
             }
 
             EdenButton {
@@ -46,41 +53,14 @@ Rectangle {
         }
     }
 
-    ListView {
-        id: historyView
-
+    LibraryView {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: parent.bottom
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
         anchors.bottomMargin: 8
-        spacing: 4
-        clip: true
-        model: pane.controller.history
-
-        delegate: EdenButton {
-            required property string title
-            required property url url
-
-            width: ListView.view.width
-            height: 44
-            text: title.length > 0 ? title : url.toString()
-            iconName: "history"
-            onClicked: {
-                pane.controller.navigate(url);
-                pane.controller.openPane = "";
-            }
-        }
-    }
-
-    Text {
-        textFormat: Text.PlainText
-        anchors.centerIn: parent
-        visible: historyView.count === 0
-        text: "No history yet"
-        color: Theme.surfaceVariantText
-        font: Theme.bodyFont
+        controller: pane.controller
+        kind: "history"
+        closePaneOnOpen: true
     }
 }

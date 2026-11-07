@@ -117,6 +117,9 @@ namespace eden::core {
         if (role == StateRole) {
             return download.state;
         }
+        if (role == StartedAtRole) {
+            return QDateTime::fromMSecsSinceEpoch(download.startedAt);
+        }
         return {};
     }
 
@@ -127,7 +130,8 @@ namespace eden::core {
             {TargetPathRole, "targetPath"},
             {ReceivedBytesRole, "receivedBytes"},
             {TotalBytesRole, "totalBytes"},
-            {StateRole, "downloadState"}
+            {StateRole, "downloadState"},
+            {StartedAtRole, "startedAt"}
         };
     }
 

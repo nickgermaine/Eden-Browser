@@ -24,25 +24,21 @@ Window {
     }
     onActiveChanged: {
         if (!active) {
-            if (mainMenuLoader.item) {
+            if (mainMenuLoader.item)
                 mainMenuLoader.item.close();
-            }
 
-            if (securityPopoverLoader.item) {
+            if (securityPopoverLoader.item)
                 securityPopoverLoader.item.close();
-            }
 
-            if (backHistoryMenuLoader.item) {
+            if (backHistoryMenuLoader.item)
                 backHistoryMenuLoader.item.close();
-            }
 
-            if (forwardHistoryMenuLoader.item) {
+            if (forwardHistoryMenuLoader.item)
                 forwardHistoryMenuLoader.item.close();
-            }
 
-            if (profileMenuLoader.item) {
+            if (profileMenuLoader.item)
                 profileMenuLoader.item.close();
-            }
+
         }
     }
     onClosing: controller.prepareToClose()
@@ -166,36 +162,42 @@ Window {
                         x: 0
                         y: tabBarSurface.height
                     }
+
                 }
+
             }
 
             Item {
-                id: moveArea
+                id: tabStripDragSpacer
 
-                anchors.fill: parent
-                anchors.topMargin: root.tabLayout === "horizontal" ? tabStrip.height : 0
-                z: 0
+                anchors.right: windowButtons.left
+                anchors.top: parent.top
+                width: root.tabLayout === "horizontal" ? 84 : 0
+                height: 48
+                visible: root.tabLayout === "horizontal"
+                z: 1
 
                 DragHandler {
                     target: null
                     dragThreshold: 4
                     onActiveChanged: {
-                        if (active) {
+                        if (active)
                             frame.startSystemMove();
-                        }
+
                     }
                 }
 
                 TapHandler {
                     onDoubleTapped: frame.toggleMaximized()
                 }
+
             }
 
             TabStrip {
                 id: tabStrip
 
                 anchors.left: parent.left
-                anchors.right: windowButtons.left
+                anchors.right: tabStripDragSpacer.left
                 anchors.top: parent.top
                 height: 48
                 controller: root.windowController
@@ -210,7 +212,9 @@ Window {
                         duration: Theme.mediumDuration
                         easing.type: Easing.OutCubic
                     }
+
                 }
+
             }
 
             Item {
@@ -246,6 +250,7 @@ Window {
                                 backHistoryMenuLoader.item.open();
                             }
                         }
+
                     }
 
                     EdenButton {
@@ -264,6 +269,7 @@ Window {
                                 forwardHistoryMenuLoader.item.open();
                             }
                         }
+
                     }
 
                     EdenButton {
@@ -271,6 +277,7 @@ Window {
                         iconName: controller.currentEngine && controller.currentEngine.loading ? "close" : "refresh"
                         onClicked: controller.currentEngine && controller.currentEngine.loading ? controller.stop() : controller.reload()
                     }
+
                 }
 
                 Omnibox {
@@ -326,6 +333,7 @@ Window {
                             profileMenuLoader.item.open();
                         }
                     }
+
                 }
 
                 EdenButton {
@@ -341,6 +349,7 @@ Window {
                         mainMenuLoader.item.toggle();
                     }
                 }
+
             }
 
             Row {
@@ -375,7 +384,9 @@ Window {
                     iconName: "close"
                     onClicked: frame.close()
                 }
+
             }
+
         }
 
         Rectangle {
@@ -412,6 +423,7 @@ Window {
                 iconName: "close"
                 onClicked: controller.exitContentFullscreen()
             }
+
         }
 
         Item {
@@ -449,7 +461,9 @@ Window {
                             duration: Theme.mediumDuration
                             easing.type: Easing.OutCubic
                         }
+
                     }
+
                 }
 
                 Behavior on opacity {
@@ -457,7 +471,9 @@ Window {
                         duration: Theme.mediumDuration
                         easing.type: Easing.OutCubic
                     }
+
                 }
+
             }
 
             Item {
@@ -470,8 +486,16 @@ Window {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
 
-                Rectangle {
+                Item {
+                    id: pageFrame
+
                     anchors.fill: parent
+                    anchors.rightMargin: devToolsDock.active && devToolsDockFrame.dockedRight ? devToolsDockFrame.width + Theme.workspaceGap : 0
+                    anchors.bottomMargin: devToolsDock.active && !devToolsDockFrame.dockedRight ? devToolsDockFrame.height + Theme.workspaceGap : 0
+                }
+
+                Rectangle {
+                    anchors.fill: pageFrame
                     radius: Theme.contentRadius
                     color: Theme.surface
                     border.width: Theme.contentBorderWidth
@@ -481,15 +505,7 @@ Window {
                 Item {
                     id: viewport
 
-                    readonly property bool devToolsDockedRight: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 0
-                    readonly property bool devToolsDockedBottom: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 1
-
-                    anchors.left: parent.left
-                    anchors.right: devToolsDockedRight ? devToolsDockFrame.left : parent.right
-                    anchors.rightMargin: devToolsDockedRight ? Theme.workspaceGap : 0
-                    anchors.top: parent.top
-                    anchors.bottom: devToolsDockedBottom ? devToolsDockFrame.top : parent.bottom
-                    anchors.bottomMargin: devToolsDockedBottom ? Theme.workspaceGap : 0
+                    anchors.fill: parent
                     clip: true
 
                     Repeater {
@@ -502,19 +518,23 @@ Window {
                             required property var engineView
                             required property string internalPage
                             required property url url
+                            readonly property bool devToolsDockedRight: engineView && engineView.devToolsOpen && engineView.devToolsPlacement === 0
+                            readonly property bool devToolsDockedBottom: engineView && engineView.devToolsOpen && engineView.devToolsPlacement === 1
 
                             objectName: "tabViewport"
                             anchors.fill: parent
+                            anchors.rightMargin: devToolsDockedRight ? Math.max(280, Math.min(Math.round(parent.width * 0.8), controller.devToolsPaneWidth)) + Theme.workspaceGap : 0
+                            anchors.bottomMargin: devToolsDockedBottom ? Math.max(180, Math.min(Math.round(parent.height * 0.8), controller.devToolsPaneHeight)) + Theme.workspaceGap : 0
                             visible: controller.activeIndex === index
                             Component.onCompleted: {
-                                if (engineView) {
+                                if (engineView)
                                     engineView.attach(engineHost);
-                                }
+
                             }
                             onEngineViewChanged: {
-                                if (engineView) {
+                                if (engineView)
                                     engineView.attach(engineHost);
-                                }
+
                             }
 
                             Item {
@@ -541,6 +561,7 @@ Window {
                                     value: tabViewportDelegate.url
                                     when: settingsPageLoader.item !== null
                                 }
+
                             }
 
                             Loader {
@@ -552,11 +573,31 @@ Window {
                             }
 
                             Loader {
+                                id: libraryPageLoader
+
+                                anchors.fill: parent
+                                active: internalPage === "history" || internalPage === "bookmarks" || internalPage === "downloads"
+                                Component.onCompleted: setSource(Qt.resolvedUrl("../pages/LibraryPage.qml"), {
+                                    "controller": root.windowController,
+                                    "kind": active ? internalPage : "history"
+                                })
+
+                                Binding {
+                                    target: libraryPageLoader.item
+                                    property: "kind"
+                                    value: tabViewportDelegate.internalPage
+                                    when: libraryPageLoader.item !== null && libraryPageLoader.active
+                                }
+                            }
+
+                            Loader {
                                 anchors.fill: parent
                                 active: internalPage === "newtab"
                                 source: Qt.resolvedUrl("../pages/NewTabPage.qml")
                             }
+
                         }
+
                     }
 
                     Rectangle {
@@ -571,7 +612,9 @@ Window {
                             color: Theme.surfaceVariantText
                             font: Theme.titleFont
                         }
+
                     }
+
                 }
 
                 Item {
@@ -579,6 +622,7 @@ Window {
 
                     readonly property bool dockedRight: controller.currentEngine && controller.currentEngine.devToolsPlacement === 0 ? true : false
 
+                    objectName: "devToolsDockFrame"
                     visible: devToolsDock.active
                     x: dockedRight ? parent.width - width : 0
                     y: dockedRight ? 0 : parent.height - height
@@ -601,10 +645,41 @@ Window {
                             value: controller.currentEngine
                             when: devToolsDock.item !== null
                         }
+
+                        Binding {
+                            target: devToolsDock.item
+                            property: "surfaceX"
+                            value: workspace.x + viewportFrame.x + devToolsDockFrame.x
+                            when: devToolsDock.item !== null
+                        }
+
+                        Binding {
+                            target: devToolsDock.item
+                            property: "surfaceY"
+                            value: workspace.y + viewportFrame.y + devToolsDockFrame.y
+                            when: devToolsDock.item !== null
+                        }
+
+                        Binding {
+                            target: devToolsDock.item
+                            property: "surfaceWidth"
+                            value: shell.width
+                            when: devToolsDock.item !== null
+                        }
+
+                        Binding {
+                            target: devToolsDock.item
+                            property: "surfaceHeight"
+                            value: shell.height
+                            when: devToolsDock.item !== null
+                        }
+
                     }
+
                 }
 
                 Item {
+                    objectName: "devToolsRightDivider"
                     visible: devToolsDock.active && devToolsDockFrame.dockedRight
                     anchors.right: devToolsDockFrame.left
                     anchors.top: parent.top
@@ -619,21 +694,22 @@ Window {
                     DragHandler {
                         target: null
                         onActiveChanged: {
-                            if (active) {
-                                controller.beginDevToolsPaneResize();
-                            } else {
+                            if (active)
+                                controller.beginDevToolsPaneResize(devToolsDockFrame.width, devToolsDockFrame.height);
+                            else
                                 controller.commitDevToolsPaneSize();
-                            }
                         }
                         onTranslationChanged: {
-                            if (active) {
-                                controller.resizeDevToolsPane(translation.x, true);
-                            }
+                            if (active)
+                                controller.resizeDevToolsPane(activeTranslation.x, true);
+
                         }
                     }
+
                 }
 
                 Item {
+                    objectName: "devToolsBottomDivider"
                     visible: devToolsDock.active && !devToolsDockFrame.dockedRight
                     anchors.bottom: devToolsDockFrame.top
                     anchors.left: parent.left
@@ -648,72 +724,73 @@ Window {
                     DragHandler {
                         target: null
                         onActiveChanged: {
-                            if (active) {
-                                controller.beginDevToolsPaneResize();
-                            } else {
+                            if (active)
+                                controller.beginDevToolsPaneResize(devToolsDockFrame.width, devToolsDockFrame.height);
+                            else
                                 controller.commitDevToolsPaneSize();
-                            }
                         }
                         onTranslationChanged: {
-                            if (active) {
-                                controller.resizeDevToolsPane(translation.y, false);
-                            }
+                            if (active)
+                                controller.resizeDevToolsPane(activeTranslation.y, false);
+
                         }
                     }
+
                 }
 
                 ChromeCornerMask {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
+                    anchors.left: pageFrame.left
+                    anchors.top: pageFrame.top
                     corner: "top-left"
                     surfaceHeight: shell.height
                     surfaceWidth: shell.width
-                    surfaceX: workspace.x + viewportFrame.x
-                    surfaceY: workspace.y + viewportFrame.y
+                    surfaceX: workspace.x + viewportFrame.x + pageFrame.x
+                    surfaceY: workspace.y + viewportFrame.y + pageFrame.y
                     z: 3
                 }
 
                 ChromeCornerMask {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
+                    anchors.right: pageFrame.right
+                    anchors.top: pageFrame.top
                     corner: "top-right"
                     surfaceHeight: shell.height
                     surfaceWidth: shell.width
-                    surfaceX: workspace.x + viewportFrame.x + viewportFrame.width - width
-                    surfaceY: workspace.y + viewportFrame.y
+                    surfaceX: workspace.x + viewportFrame.x + pageFrame.x + pageFrame.width - width
+                    surfaceY: workspace.y + viewportFrame.y + pageFrame.y
                     z: 3
                 }
 
                 ChromeCornerMask {
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
+                    anchors.right: pageFrame.right
+                    anchors.bottom: pageFrame.bottom
                     corner: "bottom-right"
                     surfaceHeight: shell.height
                     surfaceWidth: shell.width
-                    surfaceX: workspace.x + viewportFrame.x + viewportFrame.width - width
-                    surfaceY: workspace.y + viewportFrame.y + viewportFrame.height - height
+                    surfaceX: workspace.x + viewportFrame.x + pageFrame.x + pageFrame.width - width
+                    surfaceY: workspace.y + viewportFrame.y + pageFrame.y + pageFrame.height - height
                     z: 3
                 }
 
                 ChromeCornerMask {
-                    anchors.left: parent.left
-                    anchors.bottom: parent.bottom
+                    anchors.left: pageFrame.left
+                    anchors.bottom: pageFrame.bottom
                     corner: "bottom-left"
                     surfaceHeight: shell.height
                     surfaceWidth: shell.width
-                    surfaceX: workspace.x + viewportFrame.x
-                    surfaceY: workspace.y + viewportFrame.y + viewportFrame.height - height
+                    surfaceX: workspace.x + viewportFrame.x + pageFrame.x
+                    surfaceY: workspace.y + viewportFrame.y + pageFrame.y + pageFrame.height - height
                     z: 3
                 }
 
                 Rectangle {
-                    anchors.fill: parent
+                    anchors.fill: pageFrame
                     radius: Theme.contentRadius
                     color: "transparent"
                     border.width: Theme.contentBorderWidth
                     border.color: Theme.contentBorder
                     z: 4
                 }
+
             }
 
             Loader {
@@ -755,16 +832,17 @@ Window {
                     xAxis.enabled: true
                     yAxis.enabled: false
                     onActiveChanged: {
-                        if (active) {
+                        if (active)
                             controller.beginPaneResize();
-                        }
+
                     }
                     onTranslationChanged: {
-                        if (active) {
+                        if (active)
                             controller.resizePane(translation.x);
-                        }
+
                     }
                 }
+
             }
 
             Loader {
@@ -777,6 +855,7 @@ Window {
                     "controller": root.windowController
                 })
             }
+
         }
 
         Loader {
@@ -860,11 +939,13 @@ Window {
                     preferredWidth: 360
                     maximumHeight: shell.height - y - 16
                     z: 12
-                    onTriggered: historyOffset => {
+                    onTriggered: (historyOffset) => {
                         return controller.navigateHistory(historyOffset);
                     }
                 }
+
             }
+
         }
 
         Loader {
@@ -881,11 +962,13 @@ Window {
                     preferredWidth: 360
                     maximumHeight: shell.height - y - 16
                     z: 12
-                    onTriggered: historyOffset => {
+                    onTriggered: (historyOffset) => {
                         return controller.navigateHistory(historyOffset);
                     }
                 }
+
             }
+
         }
 
         Loader {
@@ -898,8 +981,9 @@ Window {
                 EdenMenu {
                     readonly property bool devToolsSurface: controller.pageContextMenuSurface === "devtools"
                     readonly property real surfaceX: devToolsSurface ? workspace.x + viewportFrame.x + devToolsDockFrame.x + Theme.contentBorderWidth : workspace.x + viewportFrame.x
-                    readonly property real surfaceY: devToolsSurface ? workspace.y + viewportFrame.y + devToolsDockFrame.y + 52 + Theme.contentBorderWidth : workspace.y + viewportFrame.y
+                    readonly property real surfaceY: devToolsSurface ? workspace.y + viewportFrame.y + devToolsDockFrame.y + (controller.currentEngine && controller.currentEngine.devToolsSelfFramed ? 0 : 52) + Theme.contentBorderWidth : workspace.y + viewportFrame.y
 
+                    objectName: "pageContextMenu"
                     parent: shell
                     x: Math.max(8, Math.min(shell.width - width - 8, surfaceX + controller.pageContextMenuPosition.x))
                     y: Math.max(8, Math.min(shell.height - height - 8, surfaceY + controller.pageContextMenuPosition.y))
@@ -908,11 +992,13 @@ Window {
                     z: 14
                     actions: controller.pageContextMenuActions
                     onClosed: controller.dismissPageContextMenu()
-                    onTriggered: command => {
+                    onTriggered: (command) => {
                         return controller.executePageContextMenuCommand(command);
                     }
                 }
+
             }
+
         }
 
         Loader {
@@ -923,6 +1009,7 @@ Window {
 
             sourceComponent: Component {
                 EdenMenu {
+                    objectName: "autofillMenu"
                     parent: shell
                     x: Math.max(8, Math.min(shell.width - width - 8, workspace.x + viewportFrame.x + controller.autofillPopupPosition.x))
                     y: Math.max(8, Math.min(shell.height - height - 8, workspace.y + viewportFrame.y + controller.autofillPopupPosition.y + 4))
@@ -930,11 +1017,13 @@ Window {
                     maximumHeight: shell.height - 16
                     z: 14
                     actions: controller.autofillSuggestions
-                    onTriggered: command => {
+                    onTriggered: (command) => {
                         return controller.fillAutofillSuggestion(command);
                     }
                 }
+
             }
+
         }
 
         Instantiator {
@@ -947,6 +1036,7 @@ Window {
                 z: 20
                 Component.onCompleted: open()
             }
+
         }
 
         Connections {
@@ -955,33 +1045,32 @@ Window {
             }
 
             function onPageContextMenuRequested() {
-                if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2) {
-                    return;
-                }
+                if (controller.pageContextMenuSurface === "devtools" && controller.currentEngine && controller.currentEngine.devToolsPlacement === 2)
+                    return ;
 
                 pageContextMenuLoader.active = true;
-                if (!pageContextMenuLoader.item.tryOpen()) {
+                if (!pageContextMenuLoader.item.tryOpen())
                     controller.dismissPageContextMenu();
-                }
+
             }
 
             function onAutofillRequested() {
                 autofillMenuLoader.active = true;
-                if (autofillMenuLoader.item) {
+                if (autofillMenuLoader.item)
                     autofillMenuLoader.item.tryOpen();
-                }
+
             }
 
             function onCredentialStateChanged() {
-                if (controller.autofillSuggestions.length === 0 && autofillMenuLoader.item) {
+                if ((!controller.autofillFieldFocused || controller.autofillSuggestions.length === 0) && autofillMenuLoader.item)
                     autofillMenuLoader.item.close();
-                }
+
             }
 
             function onJavaScriptDialogChanged() {
-                if (controller.javaScriptDialog.id === undefined && javaScriptDialogLoader.item) {
+                if (controller.javaScriptDialog.id === undefined && javaScriptDialogLoader.item)
                     javaScriptDialogLoader.item.close();
-                }
+
             }
 
             function onJavaScriptDialogRequested() {
@@ -990,9 +1079,9 @@ Window {
             }
 
             function onFileDialogChanged() {
-                if (controller.fileDialog.id === undefined && fileDialogLoader.item) {
+                if (controller.fileDialog.id === undefined && fileDialogLoader.item)
                     fileDialogLoader.item.close();
-                }
+
             }
 
             function onFileDialogRequested() {
@@ -1001,9 +1090,9 @@ Window {
             }
 
             function onPermissionRequestChanged() {
-                if (controller.permissionRequest.id === undefined && permissionPromptLoader.item) {
+                if (controller.permissionRequest.id === undefined && permissionPromptLoader.item)
                     permissionPromptLoader.item.close();
-                }
+
             }
 
             function onPermissionRequestRequested() {
@@ -1012,9 +1101,9 @@ Window {
             }
 
             function onDisplayCaptureRequestChanged() {
-                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item) {
+                if (controller.displayCaptureRequest.id === undefined && displayCapturePromptLoader.item)
                     displayCapturePromptLoader.item.close();
-                }
+
             }
 
             function onDisplayCaptureRequestRequested() {
@@ -1039,7 +1128,9 @@ Window {
                     y: topChrome.height
                     z: 12
                 }
+
             }
+
         }
 
         Rectangle {
@@ -1090,7 +1181,9 @@ Window {
                     duration: Theme.mediumDuration
                     easing.type: Easing.OutCubic
                 }
+
             }
+
         }
 
         Loader {
@@ -1155,10 +1248,15 @@ Window {
                                     signOutConfirm.close();
                                 }
                             }
+
                         }
+
                     }
+
                 }
+
             }
+
         }
 
         Connections {
@@ -1171,9 +1269,8 @@ Window {
 
         Connections {
             function onSignOutConfirmationRequired(profileId, downloadCount) {
-                if (profileId !== controller.profileId) {
-                    return;
-                }
+                if (profileId !== controller.profileId)
+                    return ;
 
                 if (root.active || Profiles.browserWindowCount === 1) {
                     signOutConfirmLoader.active = true;
@@ -1196,79 +1293,92 @@ Window {
                     x: shell.width - width - 12
                     y: topChrome.height
                     z: 12
-                    actions: [
-                        {
-                            "id": "new_tab",
-                            "title": "New tab",
-                            "icon": "add"
-                        },
-                        {
-                            "id": "new_window",
-                            "title": "New window",
-                            "icon": "square-top-down"
-                        },
-                        {
-                            "id": "private_window",
-                            "title": "New private window",
-                            "icon": "incognito"
-                        },
-                        {
-                            "id": "bookmarks",
-                            "title": "Bookmarks",
-                            "icon": "bookmark-circle"
-                        },
-                        {
-                            "id": "history",
-                            "title": "History",
-                            "icon": "history"
-                        },
-                        {
-                            "id": "downloads",
-                            "title": "Downloads",
-                            "icon": "round-transfer-vertical"
-                        },
-                        {
-                            "id": "devtools",
-                            "title": "Developer tools",
-                            "icon": "programming"
-                        },
-                        {
-                            "id": "about_eden",
-                            "title": "About Eden",
-                            "icon": "info-circle"
-                        },
-                        {
-                            "id": "settings",
-                            "title": "Settings",
-                            "icon": "settings"
-                        },
-                        {
-                            "id": "quit",
-                            "title": "Quit",
-                            "icon": "power"
-                        }
-                    ]
-                    onTriggered: actionId => {
-                        if (actionId === "new_tab") {
+                    function buildActions() {
+                        return [
+                            {
+                                "id": "new_tab",
+                                "title": "New tab",
+                                "icon": "add"
+                            },
+                            {
+                                "id": "new_window",
+                                "title": "New window",
+                                "icon": "square-top-down"
+                            },
+                            {
+                                "id": "private_window",
+                                "title": "New private window",
+                                "icon": "incognito"
+                            },
+                            {
+                                "id": "bookmarks",
+                                "title": "Bookmarks",
+                                "icon": "bookmark-circle",
+                                "activatable": true,
+                                "children": controller.bookmarkMenuItems()
+                            },
+                            {
+                                "id": "history",
+                                "title": "History",
+                                "icon": "history",
+                                "activatable": true,
+                                "children": controller.historyMenuItems()
+                            },
+                            {
+                                "id": "downloads",
+                                "title": "Downloads",
+                                "icon": "round-transfer-vertical"
+                            },
+                            {
+                                "id": "devtools",
+                                "title": "Developer tools",
+                                "icon": "programming"
+                            },
+                            {
+                                "id": "about_eden",
+                                "title": "About Eden",
+                                "icon": "info-circle"
+                            },
+                            {
+                                "id": "settings",
+                                "title": "Settings",
+                                "icon": "settings"
+                            },
+                            {
+                                "id": "quit",
+                                "title": "Quit",
+                                "icon": "power"
+                            }
+                        ];
+                    }
+
+                    actions: buildActions()
+                    onAboutToShow: actions = buildActions()
+                    onTriggered: (actionId) => {
+                        if (controller.executeLibraryMenuCommand(actionId))
+                            return;
+
+                        if (actionId === "new_tab")
                             controller.newTabAndFocusOmnibox();
-                        } else if (actionId === "new_window") {
+                        else if (actionId === "new_window")
                             controller.openNewWindow(false);
-                        } else if (actionId === "private_window") {
+                        else if (actionId === "private_window")
                             controller.openNewWindow(true);
-                        } else if (actionId === "bookmarks") {
+                        else if (actionId === "bookmarks")
                             controller.openPane = "bookmarks";
-                        } else if (actionId === "history") {
+                        else if (actionId === "history")
                             controller.openPane = "history";
-                        } else if (actionId === "downloads") {
+                        else if (actionId === "downloads")
                             controller.openPane = "downloads";
-                        } else if (actionId === "about_eden") {
+                        else if (actionId === "about_eden")
                             controller.openAboutTab();
-                        } else {
+                        else
                             controller.shortcuts.execute(actionId);
-                        }
                     }
                 }
+
             }
+
         }
 
         ResizeHandle {
@@ -1358,6 +1468,16 @@ Window {
             visible: !root.edgeToEdge
             z: 101
         }
+
+    }
+
+    Loader {
+        active: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 2
+        asynchronous: false
+        Component.onCompleted: setSource(Qt.resolvedUrl("DevToolsWindow.qml"), {
+            "controller": root.windowController,
+            "hostWindow": root
+        })
     }
 
     component ResizeHandle: Item {
@@ -1372,19 +1492,12 @@ Window {
             target: null
             acceptedButtons: Qt.LeftButton
             onActiveChanged: {
-                if (active) {
+                if (active)
                     frame.startSystemResize(parent.edges);
-                }
+
             }
         }
+
     }
 
-    Loader {
-        active: controller.currentEngine && controller.currentEngine.devToolsOpen && controller.currentEngine.devToolsPlacement === 2
-        asynchronous: false
-        Component.onCompleted: setSource(Qt.resolvedUrl("DevToolsWindow.qml"), {
-            "controller": root.windowController,
-            "hostWindow": root
-        })
-    }
 }

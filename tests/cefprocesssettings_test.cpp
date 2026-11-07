@@ -22,6 +22,8 @@ class CefProcessSettingsTest final : public QObject {
     void configuresThreadingAndRootCache();
     void defaultsToWindowlessRendering();
     void explicitWindowedModeDisablesWindowlessRendering();
+    void disablesEngineLoggingByDefault();
+    void explicitFlagEnablesEngineLogging();
     void rejectsRelativeRootCache();
     void rejectsMissingHelper();
 
@@ -106,6 +108,20 @@ void CefProcessSettingsTest::explicitWindowedModeDisablesWindowlessRendering() {
     const eden::engine::cef::CefProcessSettingsResult result = createSettings(arguments);
     QVERIFY(result.valid);
     QCOMPARE(result.settings.windowless_rendering_enabled, 0);
+}
+
+void CefProcessSettingsTest::disablesEngineLoggingByDefault() {
+    const std::array<std::string_view, 1> arguments{"--engine=cef"};
+    const eden::engine::cef::CefProcessSettingsResult result = createSettings(arguments);
+    QVERIFY(result.valid);
+    QCOMPARE(result.settings.log_severity, LOGSEVERITY_DISABLE);
+}
+
+void CefProcessSettingsTest::explicitFlagEnablesEngineLogging() {
+    const std::array<std::string_view, 2> arguments{"--engine=cef", "--engine-logging"};
+    const eden::engine::cef::CefProcessSettingsResult result = createSettings(arguments);
+    QVERIFY(result.valid);
+    QCOMPARE(result.settings.log_severity, LOGSEVERITY_DEFAULT);
 }
 
 void CefProcessSettingsTest::rejectsRelativeRootCache() {

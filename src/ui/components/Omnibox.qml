@@ -9,7 +9,7 @@ Rectangle {
     property var engine: controller.currentEngine
     readonly property var editor: controller.omnibox ? controller.omnibox.editor : null
 
-    signal securityRequested
+    signal securityRequested()
 
     implicitHeight: 40
     radius: Math.min(Theme.controlRadius, height / 2)
@@ -46,25 +46,27 @@ Rectangle {
         selectByMouse: true
         Component.onCompleted: text = omnibox.controller.displayUrl
         onPressed: {
-            if (omnibox.engine) {
+            if (omnibox.engine)
                 omnibox.engine.releaseFocus();
-            }
+
+            field.forceActiveFocus(Qt.MouseFocusReason);
         }
         Accessible.name: "Search or enter address"
         inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
         maximumLength: 65536
         onActiveFocusChanged: {
-            if (!omnibox.editor) {
-                return;
-            }
-            if (activeFocus) {
+            if (!omnibox.editor)
+                return ;
+
+            if (activeFocus)
                 omnibox.editor.begin(omnibox.controller.currentUrl.toString());
-            } else {
+            else
                 omnibox.editor.finish(omnibox.controller.displayUrl);
-            }
         }
 
-        background: Item {}
+        background: Item {
+        }
+
     }
 
     Binding {
@@ -129,9 +131,8 @@ Rectangle {
         }
 
         function onFocusOmniboxRequested() {
-            if (omnibox.engine) {
+            if (omnibox.engine)
                 omnibox.engine.releaseFocus();
-            }
 
             field.forceActiveFocus();
             field.selectAll();
@@ -223,6 +224,7 @@ Rectangle {
                         Accessible.name: credentialPopup.passwordRevealed ? "Hide password" : "Show password"
                         onClicked: credentialPopup.passwordRevealed = !credentialPopup.passwordRevealed
                     }
+
                 }
 
                 Row {
@@ -244,7 +246,9 @@ Rectangle {
                             credentialPopup.close();
                         }
                     }
+
                 }
+
             }
 
             Text {
@@ -290,6 +294,7 @@ Rectangle {
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
+
                     }
 
                     HoverHandler {
@@ -304,9 +309,13 @@ Rectangle {
                             credentialPopup.close();
                         }
                     }
+
                 }
+
             }
+
         }
+
     }
 
     Popup {
@@ -322,9 +331,9 @@ Rectangle {
         focus: false
         closePolicy: Popup.CloseOnPressOutside
         onClosed: {
-            if (omnibox.editor) {
+            if (omnibox.editor)
                 omnibox.editor.dismiss();
-            }
+
         }
         padding: 6
 
@@ -336,7 +345,6 @@ Rectangle {
             id: suggestions
 
             objectName: "omniboxSuggestionList"
-
             model: omnibox.controller.omnibox
             currentIndex: omnibox.editor ? omnibox.editor.selectedIndex : -1
             clip: true
@@ -354,7 +362,6 @@ Rectangle {
                 Accessible.name: suggestion.title + ", " + suggestion.url.toString()
                 Accessible.selected: suggestions.currentIndex === index
                 Accessible.onPressAction: omnibox.editor.activate(suggestion.index)
-
                 width: suggestions.width
                 height: 48
                 radius: Theme.suggestionRadius
@@ -394,7 +401,9 @@ Rectangle {
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
+
                     }
+
                 }
 
                 HoverHandler {
@@ -406,13 +415,18 @@ Rectangle {
                 TapHandler {
                     onTapped: omnibox.editor.activate(suggestion.index)
                 }
+
             }
+
         }
+
     }
 
     Behavior on color {
         ColorAnimation {
             duration: Theme.shortDuration
         }
+
     }
+
 }

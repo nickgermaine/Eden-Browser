@@ -565,10 +565,7 @@ namespace eden::core {
             if (error.isEmpty()) {
                 error = mountTree(cache + "/profiles", "eden-site-cache-v1", key);
             }
-            QList<QPair<QString, QString>> legacy{
-                {data + "/webengine", "eden-legacy-qt-data-v1"},
-                {cache + "/webengine", "eden-legacy-qt-cache-v1"}
-            };
+            QList<QPair<QString, QString>> legacy;
             const auto standard = ProfilePaths::standardRoots();
             if (data == QDir::cleanPath(standard.dataRoot)) {
                 legacy.append(

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Author rule memo behavior</title>
+<style id="author-rule-memo-rules">
+@namespace xlink url("http://www.w3.org/1999/xlink");
+li.memo-row { --memo-tag-class: matched; }
+.shared-row[data-kind="task"] { --memo-class-attribute: matched; }
+#memo-row[xlink|href="memo"] { --memo-id-namespaced-attribute: matched; }
+* { --memo-universal: matched; }
+.ancestor-on .memo-row { --memo-ancestor: matched; }
+li.memo-row:nth-child(2) { --memo-position: second; }
+#has-row:has(.marker) { --memo-has: matched; }
+#focus-row:focus { --memo-focus: matched; }
+#checked-row:checked { --memo-checked: matched; }
+.inline-row[style*="color: red"] { --memo-style-attribute: red; }
+#cssom-row[xlink|href="memo"] { --memo-cssom-empty: original; }
+#shadow-host { --memo-shadow-host: matched; }
+.inherited-parent { --memo-inherited: parent; }
+#id-only { --memo-id-only: matched; }
+aside { --memo-tag-only: matched; }
+li.inline-row { --memo-inline-tag: matched; }
+.inline-row { --memo-inline-class: matched; }
+</style>
+<style id="author-rule-memo-media-rules">
+@media (min-width: 500px) { .media-row { --memo-media: wide; } }
+</style>
+<script src="../../resources/eden-author-rule-memo.js" defer></script>
+</head>
+<body>
+<div id="rows" class="ancestor-on">
+<li id="memo-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"></li>
+<li id="memo-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"></li>
+<li id="memo-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"></li>
+</div>
+<li id="has-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"><span class="marker"></span></li>
+<button id="focus-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"></button>
+<input id="checked-row" type="checkbox" class="memo-row shared-row" data-kind="task" xlink:href="memo" checked>
+<li id="cssom-row" class="memo-row shared-row" data-kind="task" xlink:href="memo"></li>
+<li class="inline-row" style="color: red"></li>
+<li class="inline-row" style="color: red"></li>
+<div class="inherited-parent"><span id="inherited-child"></span></div>
+<div id="id-only"></div>
+<aside id="tag-and-id-only"></aside>
+<em id="attribute-free"></em>
+<div id="media-row" class="media-row"></div>
+</body>
+</html>

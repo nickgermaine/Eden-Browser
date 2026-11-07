@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QMetaProperty>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -134,6 +135,49 @@ namespace eden::core {
 
     void ThemeManager::setEditorAuthor(const QString &author) {
         setEditorIdentity("author", author);
+    }
+
+    QString ThemeManager::cssVariables() const {
+        static const QStringList lengths = {"Radius", "Width", "Size", "Extent", "Inset", "Gap", "Blur", "Spread", "Offset"};
+        const QMetaObject *meta = metaObject();
+        QString css = QStringLiteral(":root{");
+        for (int index = meta->indexOfProperty("primary"); index >= 0 && index < meta->propertyCount(); ++index) {
+            const QMetaProperty property = meta->property(index);
+            const QString name = QString::fromLatin1(property.name());
+            const QVariant value = property.read(this);
+            QString text;
+            if (value.metaType() == QMetaType::fromType<QColor>()) {
+                const QColor color = value.value<QColor>();
+                text = QStringLiteral("rgba(%1,%2,%3,%4)")
+                           .arg(color.red())
+                           .arg(color.green())
+                           .arg(color.blue())
+                           .arg(QString::number(color.alphaF(), 'f', 3));
+            } else if (value.metaType() == QMetaType::fromType<QString>()) {
+                text = QLatin1Char('"') + value.toString().remove(QLatin1Char('"')).remove(QLatin1Char('\\')) +
+                       QLatin1Char('"');
+            } else if (value.canConvert<double>()) {
+                text = QString::number(value.toDouble());
+                if (name.endsWith("Duration")) {
+                    text += QStringLiteral("ms");
+                } else if (std::any_of(lengths.cbegin(), lengths.cend(), [&name](const QString &suffix) {
+                               return name.endsWith(suffix);
+                           })) {
+                    text += QStringLiteral("px");
+                }
+            } else {
+                continue;
+            }
+            QString variable;
+            for (const QChar character : name) {
+                if (character.isUpper()) {
+                    variable += QLatin1Char('-');
+                }
+                variable += character.toLower();
+            }
+            css += QStringLiteral("--eden-") + variable + QLatin1Char(':') + text + QStringLiteral(" !important;");
+        }
+        return css + QLatin1Char('}');
     }
 
     QColor ThemeManager::primary() const {

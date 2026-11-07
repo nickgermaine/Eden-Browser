@@ -2,6 +2,7 @@
 
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QMimeData>
 #include <QPointer>
 #include <QScopedValueRollback>
 
@@ -41,6 +42,10 @@ namespace eden::engine::cef {
         m_pendingToken.clear();
         m_mirroredText = text;
         if (QClipboard *clipboard = QGuiApplication::clipboard()) {
+            const QMimeData *mime = clipboard->mimeData();
+            if (mime && mime->hasText() && mime->text() == text) {
+                return;
+            }
             const QScopedValueRollback writing(m_writing, true);
             clipboard->setText(text);
         }

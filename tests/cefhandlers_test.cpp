@@ -29,6 +29,7 @@
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_task.h"
+#include "passwords/credentialvault.h"
 #include "profiletesthelpers.h"
 
 #include <QBuffer>
@@ -46,6 +47,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLibrary>
+#include <QMimeData>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -132,7 +134,78 @@ class LocalPageServer final : public QTcpServer {
                     }
                     QByteArray contentType = "text/html; charset=utf-8";
                     QByteArray responseBody;
-                    if (path.startsWith("/gc-frame")) {
+                    if (path == "/synthetic-login") {
+                        responseBody = R"HTML(<!doctype html><title>Login ready</title>
+<style>body{margin:0}input,button{position:absolute;left:20px;width:220px;height:40px}</style>
+<form method="post" action="/synthetic-session">
+<input type="hidden" name="authenticity_token" value="synthetic-csrf">
+<input name="login" id="login" autocomplete="username" style="top:20px">
+<input type="password" name="password" id="password" autocomplete="current-password" style="top:100px">
+<button type="submit" style="top:220px">Sign in</button></form>
+<script>addEventListener('input',()=>document.title='login:'+document.getElementById('login').value+'|'+document.getElementById('password').value)</script>)HTML";
+                    } else if (path == "/synthetic-session") {
+                        if (body.contains("authenticity_token=synthetic-csrf") &&
+                            body.contains("login=synthetic-user") &&
+                            body.contains("password=synthetic-pasted-password")) {
+                            responseBody = R"HTML(<!doctype html><title>Two factor ready</title>
+<style>body{margin:0}input,button{position:absolute;left:20px;width:220px;height:40px}</style>
+<form method="post" action="/synthetic-verify">
+<input type="hidden" name="authenticity_token" value="synthetic-second-csrf">
+<input name="otp" autocomplete="one-time-code" style="top:100px" onfocus="document.title='OTP focused'" oninput="document.title='OTP length '+value.length">
+<button type="submit" style="top:220px">Verify</button></form>)HTML";
+                        } else {
+                            responseBody = "<title>Login token or password changed</title>";
+                        }
+                    } else if (path == "/synthetic-verify") {
+                        responseBody =
+                            body.contains("authenticity_token=synthetic-second-csrf") && body.contains("otp=654321")
+                                ? "<title>Signed in</title>"
+                                : "<title>Two factor token changed</title>";
+                    } else if (path.startsWith("/tab-links")) {
+                        responseBody = R"HTML(<!doctype html><title>Tab links</title><body style="margin:0">
+<a href="/viewport" style="display:block;width:180px;height:60px">Open link</a>
+<img width="120" height="80" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'%3E%3Crect width='120' height='80' fill='red'/%3E%3C/svg%3E">
+)HTML";
+                    } else if (path.startsWith("/viewport")) {
+                        responseBody = R"HTML(<!doctype html><style>body{margin:0;background:#e03020}
+#marker{position:fixed;right:0;bottom:0;width:50vw;height:50vh;background:#20d040}</style>
+<div id="marker"></div><script>
+function report(){document.title='viewport:'+innerWidth+'x'+innerHeight}
+addEventListener('resize',report);report();
+</script>)HTML";
+                    } else if (path.startsWith("/paste-frame")) {
+                        responseBody = QByteArray(
+                                           "<!doctype html><title>Paste frame</title><iframe "
+                                           "style='position:absolute;inset:0;width:100%;height:100%;border:0' "
+                                           "src='http://127.0.0.2:"
+                                       ) +
+                                       QByteArray::number(serverPort()) + "/paste-editor'></iframe>";
+                    } else if (path.startsWith("/paste-editor")) {
+                        m_inputPage = QString::fromUtf8(path);
+                        m_inputState = {};
+                        responseBody =
+                            R"HTML(<!doctype html><title>Paste editor</title><body style="margin:0;background:#eef6ff">
+<button style="position:absolute;left:10px;top:10px;width:100px;height:40px" onclick="place(12)">End</button>
+<button style="position:absolute;left:150px;top:10px;width:100px;height:40px" onclick="place(7)">Middle</button>
+<div id="editor" contenteditable style="position:absolute;left:10px;top:80px;width:700px;height:200px"></div>
+<script>
+let reports = Promise.resolve();
+let paste=null;
+function report(){
+const body=JSON.stringify({page:location.pathname,value:editor.textContent,cursor:getSelection().anchorOffset,paste});
+reports=reports.then(()=>fetch('/ime-state',{method:'POST',body}));
+}
+function place(offset){
+editor.innerHTML='<p><span>Before after</span></p>';editor.focus();
+getSelection().setPosition(editor.querySelector('span').firstChild,offset);report();
+}
+document.addEventListener('input',report);
+document.addEventListener('paste',e=>{paste={trusted:e.isTrusted,types:Array.from(e.clipboardData.types),text:e.clipboardData.getData('text/plain'),html:e.clipboardData.getData('text/html')};report();});
+document.addEventListener('keyup',report);
+document.addEventListener('selectionchange',report);
+report();
+</script>)HTML";
+                    } else if (path.startsWith("/gc-frame")) {
                         responseBody = R"HTML(<!doctype html><title>GC ready</title><iframe
 style="position:absolute;left:0;top:0;width:480px;height:300px;border:0" src="/gc-page?busy"></iframe>)HTML";
                     } else if (path.startsWith("/gc-page")) {
@@ -555,6 +628,11 @@ document.getElementById('display').onclick=()=>{
         return m_inputState;
     }
 
+    void resetInputState() {
+        m_inputPage.clear();
+        m_inputState = {};
+    }
+
   private:
     QString m_inputPage;
     QJsonObject m_inputState;
@@ -575,6 +653,8 @@ class CefHandlersTest final : public QObject {
   private slots:
     void initTestCase();
     void handlerSuite();
+    void richTextPasteOrdering_data();
+    void richTextPasteOrdering();
     void hoverEntry_data();
     void hoverEntry();
     void navigationEvents();
@@ -596,6 +676,12 @@ class CefHandlersTest final : public QObject {
     void preservesFinalPaint();
     void devToolsSuite();
     void shellDevToolsSuite();
+    void shellTabViewportSizes_data();
+    void shellTabViewportSizes();
+    void shellLoginInput_data();
+    void shellLoginInput();
+    void shellTabStripLayout_data();
+    void shellTabStripLayout();
     void shellFullscreen();
     void shellCallIndicators();
     void shellSignInPopups_data();
@@ -681,6 +767,105 @@ class CefNavigateFocusedFrame final : public CefTask {
 
     IMPLEMENT_REFCOUNTING(CefNavigateFocusedFrame);
 };
+
+void CefHandlersTest::richTextPasteOrdering_data() {
+    QTest::addColumn<bool>("devTools");
+    QTest::addColumn<bool>("embedded");
+    QTest::addColumn<bool>("rich");
+    QTest::newRow("page") << false << false << false;
+    QTest::newRow("iframe") << false << true << false;
+    QTest::newRow("devtools") << true << false << false;
+    QTest::newRow("devtools-iframe") << true << true << false;
+    QTest::newRow("page-rich") << false << false << true;
+    QTest::newRow("iframe-rich") << false << true << true;
+    QTest::newRow("devtools-rich") << true << false << true;
+    QTest::newRow("devtools-iframe-rich") << true << true << true;
+}
+
+void CefHandlersTest::richTextPasteOrdering() {
+    QFETCH(bool, devTools);
+    QFETCH(bool, embedded);
+    QFETCH(bool, rich);
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::CefRuntime::instance().browserClientCount(), std::size_t(0), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->sessionCount(), 0, 10000);
+    eden::engine::EngineProfileParameters parameters;
+    parameters.backend = eden::engine::Backend::Cef;
+    parameters.privateProfile = true;
+    eden::engine::cef::CefProfile profile(parameters);
+    QQuickWindow window;
+    window.resize(800, 600);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    window.requestActivate();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isActive(), 5000);
+    QQuickItem viewport(window.contentItem());
+    viewport.setSize(QSizeF(800, 600));
+    eden::engine::cef::CefEngineView view(&profile);
+    QQuickItem inspectedPage(window.contentItem());
+    inspectedPage.setSize(QSizeF(20, 20));
+    const QUrl fixture(
+        QString("http://127.0.0.1:%1/%2").arg(m_server.serverPort()).arg(embedded ? "paste-frame" : "paste-editor")
+    );
+    m_server.resetInputState();
+    if (devTools) {
+        view.attach(&inspectedPage);
+        view.load(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("E35 Main"), 15000);
+        view.openDevTools();
+        view.attachDevTools(&viewport);
+        QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
+        auto requested = std::make_shared<std::atomic_bool>(false);
+        QVERIFY(CefPostTask(TID_UI, new CefNavigateDevTools(fixture, requested)));
+        QTRY_VERIFY_WITH_TIMEOUT(requested->load(), 5000);
+    } else {
+        view.attach(&viewport);
+        view.load(fixture);
+        QTRY_COMPARE_WITH_TIMEOUT(view.title(), embedded ? QString("Paste frame") : QString("Paste editor"), 15000);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("page").toString(), QString("/paste-editor"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        window.grabWindow().pixelColor(
+            QPoint(qRound(400 * window.devicePixelRatio()), qRound(400 * window.devicePixelRatio()))
+        ),
+        QColor("#eef6ff"),
+        10000
+    );
+    QTRY_VERIFY_WITH_TIMEOUT(!viewport.childItems().isEmpty(), 5000);
+    QQuickItem *item = viewport.childItems().constFirst();
+    const QString link = "https://example.test/task";
+    auto *mime = new QMimeData;
+    mime->setText(link);
+    if (rich) {
+        mime->setHtml(QString("<b>%1</b>").arg(link));
+    }
+    QGuiApplication::clipboard()->setMimeData(mime);
+    const auto key = [&](QEvent::Type type, int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QKeyEvent event(type, code, modifiers);
+        QCoreApplication::sendEvent(item, &event);
+    };
+    for (int offset : {12, 7}) {
+        QTest::mouseClick(&window, Qt::LeftButton, {}, QPoint(offset == 12 ? 60 : 200, 30));
+        QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("cursor").toInt(), offset, 5000);
+        QTest::qWait(100);
+        key(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+        key(QEvent::KeyRelease, Qt::Key_V, Qt::ControlModifier);
+        key(QEvent::KeyPress, Qt::Key_Home);
+        key(QEvent::KeyRelease, Qt::Key_Home);
+        QString expected = "Before after";
+        expected.insert(offset, link);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            m_server.inputState().value("value").toString().replace(QChar(0xa0), QChar(' ')),
+            expected,
+            5000
+        );
+        QVERIFY(m_server.inputState().value("paste").toObject().value("trusted").toBool());
+        QCOMPARE(m_server.inputState().value("paste").toObject().value("text").toString(), link);
+        if (rich) {
+            QVERIFY(m_server.inputState().value("paste").toObject().value("html").toString().contains(link));
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(m_server.inputState().value("cursor").toInt(), 0, 5000);
+    }
+}
 
 void CefHandlersTest::hoverEntry_data() {
     QTest::addColumn<bool>("devTools");
@@ -2830,6 +3015,374 @@ void CefHandlersTest::devToolsSuite() {
     QVERIFY(!eden::engine::cef::sharedDevToolsSocketServer()->isListening());
 }
 
+void CefHandlersTest::shellTabViewportSizes_data() {
+    QTest::addColumn<QString>("backend");
+    QTest::newRow("cef") << QString("cef");
+    for (const auto &descriptor : eden::engine::EngineRegistry::instance()->descriptors()) {
+        if (descriptor.id == "wpe") {
+            QTest::newRow("wpe") << QString("wpe");
+        }
+    }
+}
+
+void CefHandlersTest::shellTabViewportSizes() {
+    QFETCH(QString, backend);
+    QQmlApplicationEngine qmlEngine;
+    auto *manager = m_applicationContext->profiles();
+    manager->setQmlEngine(&qmlEngine);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    auto *registry = eden::core::WindowRegistry::instance();
+    const auto cleanup = qScopeGuard([&] {
+        for (auto *controller : registry->profileControllers(harness.context->idString(), true, true)) {
+            delete registry->windowFor(controller);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(
+            eden::engine::cef::CefRuntime::instance().browserClientCount(),
+            std::size_t(0),
+            10000
+        );
+        manager->setQmlEngine(nullptr);
+    });
+    auto *controller = manager->createBrowserWindow(harness.context, true, backend, false, false, false);
+    QVERIFY(controller);
+    auto *window = registry->windowFor(controller);
+    QVERIFY(window);
+    window->resize(1100, 800);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    const QUrl fixture(QString("http://127.0.0.1:%1/viewport").arg(m_server.serverPort()));
+    controller->newTab(fixture, false, backend);
+    auto *first = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(first);
+    QTRY_COMPARE_WITH_TIMEOUT(first->loadProgress(), 100, 15000);
+    controller->newTab(fixture, false, backend);
+    auto *second = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(second);
+    QTRY_COMPARE_WITH_TIMEOUT(second->loadProgress(), 100, 15000);
+    const auto viewportFor = [&](eden::engine::EngineView *engine) {
+        QQuickItem *result = nullptr;
+        std::function<void(QQuickItem *)> visit = [&](QQuickItem *item) {
+            if (item->objectName() == "tabViewport" && item->property("engineView").value<QObject *>() == engine) {
+                result = item;
+            }
+            for (auto *child : item->childItems()) {
+                visit(child);
+            }
+        };
+        visit(window->contentItem());
+        return result;
+    };
+    auto *firstViewport = viewportFor(first);
+    auto *secondViewport = viewportFor(second);
+    QVERIFY(firstViewport && secondViewport);
+    const QSizeF fullSize = secondViewport->size();
+    controller->setActiveIndex(0);
+    first->setDevToolsPlacement(eden::engine::EngineView::DevToolsRight);
+    first->openDevTools();
+    QTRY_VERIFY_WITH_TIMEOUT(first->devToolsOpen(), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(firstViewport->width() < fullSize.width() - 250, 5000);
+    QCOMPARE(secondViewport->size(), fullSize);
+    const auto matchesPageSize = [&] {
+        return first->title() ==
+               QString("viewport:%1x%2").arg(int(firstViewport->width())).arg(int(firstViewport->height()));
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(matchesPageSize(), 2000);
+    auto *dock = window->findChild<QQuickItem *>("devToolsDockFrame");
+    QVERIFY(dock);
+    for (auto placement :
+         {eden::engine::EngineView::DevToolsPlacement::DevToolsRight,
+          eden::engine::EngineView::DevToolsPlacement::DevToolsBottom}) {
+        first->setDevToolsPlacement(placement);
+        QTRY_VERIFY_WITH_TIMEOUT(matchesPageSize(), 2000);
+        const bool horizontal = placement == eden::engine::EngineView::DevToolsRight;
+        auto *divider = window->findChild<QQuickItem *>(horizontal ? "devToolsRightDivider" : "devToolsBottomDivider");
+        QVERIFY(divider && divider->isVisible());
+        for (int repeat = 0; repeat < 4; ++repeat) {
+            if (repeat == 3) {
+                controller->beginDevToolsPaneResize(dock->width(), dock->height());
+                controller->resizeDevToolsPane(-2000, horizontal);
+                QTest::qWait(20);
+            }
+            const qreal before = horizontal ? dock->width() : dock->height();
+            const QPoint start = divider->mapToScene(QPointF(divider->width() / 2, divider->height() / 2)).toPoint();
+            const int direction = repeat % 2 ? 1 : -1;
+            QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+            for (int distance : {20, 40, 60, 80}) {
+                QTest::mouseMove(
+                    window,
+                    start + (horizontal ? QPoint(direction * distance, 0) : QPoint(0, direction * distance)),
+                    20
+                );
+            }
+            QTest::mouseRelease(
+                window,
+                Qt::LeftButton,
+                Qt::NoModifier,
+                start + (horizontal ? QPoint(direction * 80, 0) : QPoint(0, direction * 80))
+            );
+            const qreal actual = horizontal ? dock->width() : dock->height();
+            QVERIFY2(
+                std::abs(actual - (before - direction * 80)) < 12,
+                qPrintable(QString("before=%1 actual=%2 direction=%3 horizontal=%4")
+                               .arg(before)
+                               .arg(actual)
+                               .arg(direction)
+                               .arg(horizontal))
+            );
+            QTRY_VERIFY_WITH_TIMEOUT(matchesPageSize(), 2000);
+        }
+        QSignalSpy widthChanges(secondViewport, &QQuickItem::widthChanged);
+        QSignalSpy heightChanges(secondViewport, &QQuickItem::heightChanged);
+        for (int repeat = 0; repeat < 4; ++repeat) {
+            controller->setActiveIndex(1);
+            QCOMPARE(secondViewport->size(), fullSize);
+            QTest::qWait(20);
+            controller->setActiveIndex(0);
+        }
+        QCOMPARE(widthChanges.size(), 0);
+        QCOMPARE(heightChanges.size(), 0);
+    }
+}
+
+void CefHandlersTest::shellLoginInput_data() {
+    QTest::addColumn<QString>("backend");
+    QTest::newRow("wpe") << QString("wpe");
+}
+
+void CefHandlersTest::shellLoginInput() {
+    QFETCH(QString, backend);
+    if (!eden::engine::EngineRegistry::instance()->contains(backend)) {
+        QSKIP("WebKit is not included in this build");
+    }
+    QQmlApplicationEngine qmlEngine;
+    auto *manager = m_applicationContext->profiles();
+    manager->setQmlEngine(&qmlEngine);
+    eden::test::ProfileHarness harness;
+    eden::core::ProfileRecord record;
+    record.id = eden::core::ProfileId::generate();
+    record.displayName = "Synthetic login";
+    record.lifecycle = eden::core::ProfileLifecycle::Ready;
+    harness.context = eden::core::ProfileContext::create(
+        record,
+        eden::core::ProfilePaths(eden::core::ProfilePaths::standardRoots(), record.id),
+        &qmlEngine,
+        nullptr
+    );
+    QVERIFY(harness.context);
+    auto *registry = eden::core::WindowRegistry::instance();
+    const auto cleanup = qScopeGuard([&] {
+        for (auto *controller : registry->profileControllers(harness.context->idString(), true, true)) {
+            delete registry->windowFor(controller);
+        }
+        manager->setQmlEngine(nullptr);
+    });
+    auto *controller = manager->createBrowserWindow(harness.context, false, backend, false, false, false);
+    QVERIFY(controller);
+    auto *window = registry->windowFor(controller);
+    QVERIFY(window);
+    window->resize(1100, 800);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto *vault = qobject_cast<eden::passwords::CredentialVault *>(controller->credentialVault());
+    QVERIFY(vault && vault->available());
+    const QUrl origin(QString("http://127.0.0.1:%1").arg(m_server.serverPort()));
+    QVERIFY(vault->saveCredential(0, origin.toString(), "synthetic-user", "synthetic-password") > 0);
+    controller->newTab(origin.resolved(QUrl("/synthetic-login")), false, backend);
+    auto *view = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(view);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("login:synthetic-user|synthetic-password"), 15000);
+    QQuickItem *viewport = nullptr;
+    std::function<void(QQuickItem *)> visit = [&](QQuickItem *item) {
+        if (item->objectName() == "tabViewport" && item->property("engineView").value<QObject *>() == view) {
+            viewport = item;
+        }
+        for (auto *child : item->childItems()) {
+            visit(child);
+        }
+    };
+    visit(window->contentItem());
+    QVERIFY(viewport);
+    const auto click = [&](int y) {
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, viewport->mapToScene(QPointF(80, y)).toPoint());
+    };
+    click(120);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->autofillFieldFocused(), 5000);
+    auto *menu = window->findChild<QObject *>("autofillMenu");
+    QVERIFY(menu);
+    QTRY_VERIFY_WITH_TIMEOUT(menu->property("opened").toBool(), 2000);
+    QGuiApplication::clipboard()->setText("synthetic-pasted-password");
+    QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(window, Qt::Key_V, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("login:synthetic-user|synthetic-pasted-password"), 5000);
+    click(240);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("Two factor ready"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!menu->property("visible").toBool(), 2000);
+    QTest::qWait(300);
+    click(120);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("OTP focused"), 2000);
+    for (const auto key : {Qt::Key_6, Qt::Key_5, Qt::Key_4, Qt::Key_3, Qt::Key_2, Qt::Key_1}) {
+        QTest::keyClick(window, key);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("OTP length 6"), 2000);
+    click(240);
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("Signed in"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!menu->property("visible").toBool(), 2000);
+}
+
+void CefHandlersTest::shellTabStripLayout_data() {
+    shellTabViewportSizes_data();
+}
+
+void CefHandlersTest::shellTabStripLayout() {
+    QFETCH(QString, backend);
+    QQmlApplicationEngine qmlEngine;
+    auto *manager = m_applicationContext->profiles();
+    manager->setQmlEngine(&qmlEngine);
+    eden::test::ProfileHarness harness;
+    QVERIFY(harness.create(&qmlEngine));
+    auto *registry = eden::core::WindowRegistry::instance();
+    const auto cleanup = qScopeGuard([&] {
+        for (auto *controller : registry->profileControllers(harness.context->idString(), true, true)) {
+            delete registry->windowFor(controller);
+        }
+        manager->setQmlEngine(nullptr);
+    });
+    auto *controller = manager->createBrowserWindow(harness.context, true, backend, false, false, false);
+    QVERIFY(controller);
+    auto *window = registry->windowFor(controller);
+    QVERIFY(window);
+    window->resize(1300, 800);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto *list = window->findChild<QQuickItem *>("tabDropView");
+    QVERIFY(list);
+    QString gapFailure;
+    const auto contiguous = [&] {
+        auto *content = list->property("contentItem").value<QQuickItem *>();
+        if (!content) {
+            return false;
+        }
+        QList<QQuickItem *> tabs;
+        for (auto *item : content->childItems()) {
+            if (item->property("tabId").isValid() && item->property("index").toInt() >= 0) {
+                tabs.append(item);
+            }
+        }
+        std::sort(tabs.begin(), tabs.end(), [](auto *left, auto *right) {
+            return left->property("index").toInt() < right->property("index").toInt();
+        });
+        for (qsizetype index = 1; index < tabs.size(); ++index) {
+            if (tabs.at(index)->property("index").toInt() != tabs.at(index - 1)->property("index").toInt() + 1) {
+                continue;
+            }
+            const qreal left = tabs.at(index)->mapToItem(list, QPointF()).x();
+            const qreal previous = tabs.at(index - 1)->mapToItem(list, QPointF()).x();
+            const qreal previousWidth = tabs.at(index - 1)->width();
+            const qreal gap = left - previous - previousWidth;
+            if (std::abs(gap - list->property("spacing").toReal()) > 0.5) {
+                gapFailure = QString("count=%1 index=%2 left=%3 previous=%4 previousWidth=%5 gap=%6")
+                                 .arg(controller->tabs()->rowCount())
+                                 .arg(tabs.at(index)->property("index").toInt())
+                                 .arg(left)
+                                 .arg(previous)
+                                 .arg(previousWidth)
+                                 .arg(gap);
+                return false;
+            }
+        }
+        return tabs.size() >= 2;
+    };
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        for (int count = 0; count < 16; ++count) {
+            controller->newTab(QUrl("eden://newtab"), count % 2, backend);
+            QTest::qWait(100);
+            if (controller->tabs()->rowCount() > 1) {
+                QTRY_VERIFY2_WITH_TIMEOUT(contiguous(), qPrintable(gapFailure), 1500);
+            }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(contiguous(), 5000);
+        const auto activeVisible = [&] {
+            auto *active = list->property("currentItem").value<QQuickItem *>();
+            if (!active) {
+                return false;
+            }
+            const qreal left = active->mapToItem(list, QPointF()).x();
+            return left >= -0.5 && left + active->width() <= list->width() + 0.5;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(activeVisible(), 5000);
+        while (controller->tabs()->rowCount() > 3) {
+            controller->closeTab(controller->tabs()->rowCount() / 2);
+            QTest::qWait(10);
+        }
+        window->resize(cycle % 2 ? 1300 : 900, 800);
+        QTRY_VERIFY_WITH_TIMEOUT(contiguous(), 5000);
+    }
+    window->resize(1300, 800);
+    const int sourceIndex =
+        controller->newTab(QUrl(QString("http://127.0.0.1:%1/tab-links").arg(m_server.serverPort())), false, backend);
+    auto *source = qobject_cast<eden::engine::EngineView *>(controller->currentEngine());
+    QVERIFY(source);
+    QTRY_COMPARE_WITH_TIMEOUT(source->title(), QString("Tab links"), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!source->isLoading(), 15000);
+    QQuickItem *viewport = nullptr;
+    std::function<void(QQuickItem *)> visit = [&](QQuickItem *item) {
+        if (item->objectName() == "tabViewport" && item->property("engineView").value<QObject *>() == source) {
+            viewport = item;
+        }
+        for (auto *child : item->childItems()) {
+            visit(child);
+        }
+    };
+    visit(window->contentItem());
+    QVERIFY(viewport);
+    for (int count = 0; count < 8; ++count) {
+        controller->setActiveIndex(sourceIndex);
+        QTest::qWait(300);
+        const QPoint position = viewport->mapToScene(QPointF(50, count % 2 ? 100 : 30)).toPoint();
+        QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, position);
+        QTRY_VERIFY2_WITH_TIMEOUT(
+            !controller->pageContextMenuActions().isEmpty(),
+            qPrintable(QString("insertion=%1").arg(count)),
+            5000
+        );
+        QString command;
+        for (const auto &entry : controller->pageContextMenuActions()) {
+            const auto action = entry.toMap();
+            const auto title = action.value("title").toString().toLower();
+            if (title.startsWith("open ") && title.contains("new ") &&
+                (title.contains("link") || title.contains("image"))) {
+                command = action.value("id").toString();
+                break;
+            }
+        }
+        QVERIFY(!command.isEmpty());
+        const int previousCount = controller->tabs()->rowCount();
+        auto *menu = window->findChild<QObject *>("pageContextMenu");
+        QVERIFY(menu);
+        QTRY_VERIFY_WITH_TIMEOUT(menu->property("opened").toBool(), 2000);
+        auto *menuList = menu->property("contentItem").value<QQuickItem *>();
+        QVERIFY(menuList);
+        auto *menuContent = menuList->property("contentItem").value<QQuickItem *>();
+        QVERIFY(menuContent);
+        QQuickItem *actionItem = nullptr;
+        for (auto *item : menuContent->childItems()) {
+            if (item->property("modelData").toMap().value("id").toString() == command) {
+                actionItem = item;
+                break;
+            }
+        }
+        QVERIFY(actionItem);
+        QTest::mouseClick(
+            window,
+            Qt::LeftButton,
+            Qt::NoModifier,
+            actionItem->mapToScene(QPointF(actionItem->width() / 2, actionItem->height() / 2)).toPoint()
+        );
+        QTRY_VERIFY_WITH_TIMEOUT(!menu->property("visible").toBool(), 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller->tabs()->rowCount(), previousCount + 1, 5000);
+        QTest::qWait(100);
+        QTRY_VERIFY2_WITH_TIMEOUT(contiguous(), qPrintable(gapFailure), 1500);
+    }
+}
+
 void CefHandlersTest::shellSignInPopups_data() {
     QTest::addColumn<QString>("mode");
     for (const char *mode : {"direct", "blank-redirect", "blank-document", "post", "noopener", "new-window"}) {
@@ -2893,6 +3446,9 @@ void CefHandlersTest::shellSignInPopups() {
         QTest::mouseClick(target, Qt::LeftButton, {}, viewport->mapToScene(position).toPoint());
         return true;
     };
+    for (int sibling = 0; sibling < 3; ++sibling) {
+        controller->newTab(QUrl("eden://newtab"), true, "cef");
+    }
     const bool separateWindow = mode == "new-window";
     if (separateWindow) {
         class NewWindowRequest final : public eden::engine::EngineNewViewRequest {
@@ -2924,12 +3480,12 @@ void CefHandlersTest::shellSignInPopups() {
             }
         }
         QVERIFY(destination != controller);
-        QCOMPARE(controller->tabs()->rowCount(), 1);
+        QCOMPARE(controller->tabs()->rowCount(), 4);
         QCOMPARE(destination->tabs()->rowCount(), 1);
     } else {
-        QTRY_COMPARE_WITH_TIMEOUT(controller->tabs()->rowCount(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller->tabs()->rowCount(), 5, 10000);
         QCOMPARE(registry->profileControllers(harness.context->idString(), true, true).size(), 1);
-        QCOMPARE(controller->activeIndex(), 1);
+        QCOMPARE(controller->activeIndex(), 4);
     }
     QCOMPARE(destination->profileId(), controller->profileId());
     QCOMPARE(destination->mode(), controller->mode());
@@ -2963,7 +3519,7 @@ void CefHandlersTest::shellSignInPopups() {
         QTRY_COMPARE_WITH_TIMEOUT(source->title(), QString("Sign-in complete"), 10000);
     }
     QTRY_VERIFY_WITH_TIMEOUT(popup.isNull(), 10000);
-    QCOMPARE(controller->tabs()->rowCount(), 1);
+    QCOMPARE(controller->tabs()->rowCount(), 4);
     QCOMPARE(controller->currentEngine(), source.data());
     QTRY_COMPARE_WITH_TIMEOUT(registry->profileControllers(harness.context->idString(), true, true).size(), 1, 10000);
 }
@@ -3122,6 +3678,7 @@ void CefHandlersTest::shellDevToolsSuite() {
     eden::test::ProfileHarness harness;
     QVERIFY(harness.create(&qmlEngine));
     controller->initialize(harness.context, true, "cef", true);
+    controller->navigate(QUrl(QString("http://127.0.0.1:%1/").arg(m_server.serverPort())));
     eden::engine::EngineView *view = nullptr;
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&] {
@@ -3142,20 +3699,85 @@ void CefHandlersTest::shellDevToolsSuite() {
         if (shortcutId == "devtools") {
             QCOMPARE(
                 controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
-                QString("F12")
+                QString("Ctrl+Shift+I")
             );
             devToolsShortcutFound = true;
         } else if (shortcutId == "command_palette") {
             QCOMPARE(
                 controller->shortcuts()->data(shortcutIndex, eden::core::ShortcutRegistry::ShortcutRole).toString(),
-                QString("Ctrl+K")
+                QString("Ctrl+Shift+P")
             );
             commandPaletteShortcutFound = true;
         }
     }
     QVERIFY(devToolsShortcutFound);
     QVERIFY(commandPaletteShortcutFound);
-    controller->shortcuts()->execute("devtools");
+    auto *tabList = window->findChild<QQuickItem *>("tabDropView");
+    QVERIFY(tabList);
+    auto *tabItem = tabList->property("currentItem").value<QQuickItem *>();
+    QVERIFY(tabItem);
+    QTest::mouseClick(
+        window,
+        Qt::RightButton,
+        {},
+        tabItem->mapToScene(QPointF(tabItem->width() / 2, tabItem->height() / 2)).toPoint()
+    );
+    const auto visibleText = [window](const QString &text) {
+        QQuickItem *found = nullptr;
+        std::function<void(QQuickItem *)> visit = [&](QQuickItem *item) {
+            if (item->isVisible() && item->property("text").toString() == text) {
+                found = item;
+            }
+            for (auto *child : item->childItems()) {
+                visit(child);
+            }
+        };
+        visit(window->contentItem());
+        return found;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText("Ctrl+T"), 5000);
+    QVERIFY(visibleText("Ctrl+R"));
+    QVERIFY(visibleText("Ctrl+W"));
+    QVERIFY(visibleText("New tab"));
+    QVERIFY(visibleText("Ctrl+T")->mapToScene(QPointF()).x() > visibleText("New tab")->mapToScene(QPointF()).x());
+    const QString menuScreenshot = qEnvironmentVariable("EDEN_MENU_SCREENSHOT");
+    if (!menuScreenshot.isEmpty()) {
+        QVERIFY(window->grabWindow().save(menuScreenshot));
+    }
+    QTest::keyClick(window, Qt::Key_Escape);
+    window->requestActivate();
+    QTRY_VERIFY(window->isActive());
+    for (const auto modifiers :
+         {Qt::KeyboardModifiers(Qt::ControlModifier), Qt::KeyboardModifiers(Qt::ControlModifier | Qt::ShiftModifier)}) {
+        QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+        QSignalSpy reloaded(view, &eden::engine::EngineView::loadingChanged);
+        QTest::keyClick(window, Qt::Key_R, modifiers);
+        QTRY_VERIFY_WITH_TIMEOUT(!reloaded.isEmpty(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!view->isLoading(), 10000);
+    }
+    const auto beforeNewWindow = QGuiApplication::topLevelWindows();
+    QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+    QTest::keyClick(window, Qt::Key_N, Qt::ControlModifier);
+    QPointer<QQuickWindow> createdWindow;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&] {
+            for (auto *candidate : QGuiApplication::topLevelWindows()) {
+                auto *quick = qobject_cast<QQuickWindow *>(candidate);
+                if (quick && !beforeNewWindow.contains(candidate) &&
+                    quick->findChild<eden::core::WindowController *>("windowController")) {
+                    createdWindow = quick;
+                    return true;
+                }
+            }
+            return false;
+        })(),
+        10000
+    );
+    createdWindow->close();
+    window->requestActivate();
+    QTRY_VERIFY(window->isActive());
+    QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(450, 350));
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
     QTRY_VERIFY_WITH_TIMEOUT(view->devToolsOpen(), 10000);
     QTRY_COMPARE_WITH_TIMEOUT(eden::engine::cef::sharedDevToolsSocketServer()->connectedSessionCount(), 1, 15000);
     QImage dockedRight;

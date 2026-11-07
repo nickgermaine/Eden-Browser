@@ -31,6 +31,7 @@ namespace eden::core {
         }
         m_database = SqlCipherDatabase::open(m_databasePath, key, false);
         if (m_database) {
+            SqlCipherDatabase::execute(m_database, "ALTER TABLE bookmarks ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
             reload();
         }
     }
@@ -94,7 +95,8 @@ namespace eden::core {
         sqlite3_stmt *statement = nullptr;
         if (sqlite3_prepare_v2(
                 m_database,
-                "INSERT INTO bookmarks(url, title, folder, created_at) VALUES(?, ?, ?, ?) ON CONFLICT(url) DO UPDATE "
+                "INSERT INTO bookmarks(url, title, folder, created_at, position) VALUES(?, ?, ?, ?, "
+                "(SELECT COALESCE(MIN(position), 0) - 1 FROM bookmarks)) ON CONFLICT(url) DO UPDATE "
                 "SET "
                 "title = "
                 "excluded.title, folder = excluded.folder",
@@ -137,6 +139,38 @@ namespace eden::core {
             return;
         }
         sqlite3_finalize(statement);
+    }
+
+    bool BookmarkStore::move(int from, int to) {
+        if (!m_database || from < 0 || from >= m_entries.size() || to < 0 || to >= m_entries.size() || from == to) {
+            return false;
+        }
+        QList<Entry> entries = m_entries;
+        entries.move(from, to);
+        if (!SqlCipherDatabase::execute(m_database, "BEGIN IMMEDIATE")) {
+            return false;
+        }
+        sqlite3_stmt *statement = nullptr;
+        bool saved =
+            sqlite3_prepare_v2(m_database, "UPDATE bookmarks SET position=? WHERE url=?", -1, &statement, nullptr) ==
+            SQLITE_OK;
+        for (int row = 0; saved && row < entries.size(); ++row) {
+            const QByteArray encodedUrl = entries.at(row).url.toString().toUtf8();
+            sqlite3_reset(statement);
+            sqlite3_bind_int(statement, 1, row);
+            sqlite3_bind_text(statement, 2, encodedUrl.constData(), encodedUrl.size(), SQLITE_TRANSIENT);
+            saved = sqlite3_step(statement) == SQLITE_DONE;
+        }
+        sqlite3_finalize(statement);
+        if (!saved || !SqlCipherDatabase::execute(m_database, "COMMIT")) {
+            SqlCipherDatabase::execute(m_database, "ROLLBACK");
+            return false;
+        }
+        SqlCipherDatabase::restrictFiles(m_databasePath);
+        beginMoveRows({}, from, from, {}, to > from ? to + 1 : to);
+        m_entries.move(from, to);
+        endMoveRows();
+        return true;
     }
 
     void BookmarkStore::toggle(const QUrl &url, const QString &title) {
@@ -186,7 +220,7 @@ namespace eden::core {
         sqlite3_stmt *statement = nullptr;
         if (sqlite3_prepare_v2(
                 m_database,
-                "SELECT title,url,folder,created_at FROM bookmarks ORDER BY created_at DESC",
+                "SELECT title,url,folder,created_at FROM bookmarks ORDER BY position ASC,created_at DESC",
                 -1,
                 &statement,
                 nullptr

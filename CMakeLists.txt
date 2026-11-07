@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(EDEN_ENGINE_CEF "Acquire and build the CEF engine dependency" ON)
-option(EDEN_ENGINE_QTWEBENGINE "Build the QtWebEngine backend module" ON)
+option(EDEN_ENGINE_WPE "Build the WPE WebKit backend module" ON)
 option(EDEN_ENGINE_SERVO "Acquire and build the Servo engine dependency" OFF)
 option(EDEN_ENABLE_AUTOMATION "Build the local benchmark automation hook" OFF)
 option(EDEN_SOLAR_ICONS "Acquire the Solar icon source set for design work" ON)
@@ -39,11 +39,9 @@ pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
 pkg_check_modules(SQLCIPHER REQUIRED IMPORTED_TARGET sqlcipher)
 pkg_check_modules(GLIB2 REQUIRED IMPORTED_TARGET glib-2.0)
+pkg_check_modules(GIO2 REQUIRED IMPORTED_TARGET gio-2.0)
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 pkg_check_modules(PSL REQUIRED IMPORTED_TARGET libpsl)
-
-if(EDEN_ENGINE_QTWEBENGINE)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS WebEngineCore WebEngineQuick WebChannel)
-endif()
 
 qt_standard_project_setup(REQUIRES 6.8)
 include(cmake/EdenEncryptedStorage.cmake)
@@ -53,8 +51,14 @@ set(EDEN_CORE_SOURCES
     src/core/bookmarks/bookmarkstore.h
     src/core/downloads/downloadmanager.cpp
     src/core/downloads/downloadmanager.h
+    src/core/favicons/faviconstore.cpp
+    src/core/favicons/faviconstore.h
     src/core/history/historystore.cpp
     src/core/history/historystore.h
+    src/core/history/recentlyclosedstore.cpp
+    src/core/history/recentlyclosedstore.h
+    src/core/library/librarylistmodel.cpp
+    src/core/library/librarylistmodel.h
     src/core/omni/omniboxcontroller.cpp
     src/core/omni/omniboxcontroller.h
     src/core/omni/omniboxinput.cpp
@@ -126,6 +130,8 @@ set(EDEN_CORE_SOURCES
     src/core/window/tabstripnavigator.h
     src/core/window/windowcontroller.cpp
     src/core/window/windowcontroller.h
+    src/core/window/popupdismissal.cpp
+    src/core/window/popupdismissal.h
     src/core/window/windowframe.cpp
     src/core/window/windowframe.h
     src/passwords/credentialvault.cpp
@@ -133,6 +139,8 @@ set(EDEN_CORE_SOURCES
     src/engine/enginefactory.cpp
     src/engine/enginefactory.h
     src/engine/enginebackend.h
+    src/engine/fontpolicy.cpp
+    src/engine/fontpolicy.h
     src/engine/engineplugin.h
     src/engine/enginenewviewrequest.cpp
     src/engine/enginenewviewrequest.h
@@ -162,7 +170,7 @@ qt_add_library(eden-core SHARED ${EDEN_CORE_SOURCES})
 target_compile_definitions(eden-core PUBLIC
     EDEN_ENABLE_AUTOMATION=$<BOOL:${EDEN_ENABLE_AUTOMATION}>
     EDEN_ENGINE_CEF=$<BOOL:${EDEN_ENGINE_CEF}>
-    EDEN_ENGINE_QTWEBENGINE=$<BOOL:${EDEN_ENGINE_QTWEBENGINE}>
+    EDEN_ENGINE_WPE=$<BOOL:${EDEN_ENGINE_WPE}>
 )
 target_include_directories(eden-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(eden-core PUBLIC
@@ -176,19 +184,12 @@ target_link_libraries(eden-core PUBLIC
     PkgConfig::SODIUM
     PkgConfig::SQLCIPHER
     PkgConfig::PSL
+    PkgConfig::GIO2
+    PkgConfig::FONTCONFIG
 )
 
-if(EDEN_ENGINE_QTWEBENGINE)
-    add_library(eden-engine-qtwebengine SHARED
-        src/engine/qtwebengine/qtwebengineplugin.cpp
-        src/engine/qtwebengine/qtwebengineprofile.cpp
-        src/engine/qtwebengine/qtwebengineprofile.h
-        src/engine/qtwebengine/qtwebengineview.cpp
-        src/engine/qtwebengine/qtwebengineview.h
-    )
-    set_target_properties(eden-engine-qtwebengine PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-qtwebengine")
-    target_include_directories(eden-engine-qtwebengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(eden-engine-qtwebengine PRIVATE eden-core Qt6::WebEngineCore Qt6::WebEngineQuick Qt6::WebChannel)
+if(EDEN_ENGINE_WPE)
+    include(cmake/EdenWpe.cmake)
 endif()
 
 if(EDEN_ENGINE_CEF)
@@ -224,6 +225,8 @@ if(EDEN_ENGINE_CEF)
         src/engine/cef/cefuibridge.h
         src/engine/cef/devtoolssocketserver.cpp
         src/engine/cef/devtoolssocketserver.h
+        src/engine/cef/devtoolstheme.cpp
+        src/engine/cef/devtoolstheme.h
     )
     set_target_properties(eden-engine-cef PROPERTIES PREFIX "" OUTPUT_NAME "eden-engine-cef" BUILD_RPATH "$ORIGIN")
     target_include_directories(eden-engine-cef PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CEF_INCLUDE_PATH})
@@ -252,6 +255,8 @@ qt_add_qml_module(eden-ui
         src/ui/components/EdenTextField.qml
         src/ui/components/FindBar.qml
         src/ui/components/Icon.qml
+        src/ui/components/LibraryView.qml
+        src/ui/components/SiteIcon.qml
         src/ui/components/Omnibox.qml
         src/ui/components/OverlaySurface.qml
         src/ui/components/ProfileAvatar.qml
@@ -269,6 +274,7 @@ qt_add_qml_module(eden-ui
         src/ui/panes/HistoryPane.qml
         src/ui/pages/SettingsPage.qml
         src/ui/pages/NewTabPage.qml
+        src/ui/pages/LibraryPage.qml
         src/ui/pages/ThemeEditorPage.qml
         src/ui/pages/settings/AboutSettings.qml
         src/ui/pages/settings/AppearanceSettings.qml
@@ -297,6 +303,7 @@ qt_add_qml_module(eden-ui
         resources/licenses/solar-cc-by-4.0.txt
         resources/licenses/chromium-bsd-3-clause.txt
         resources/licenses/cef-bsd-3-clause.txt
+        resources/licenses/webkit-notices.txt
         resources/icons/material/close.svg
         resources/icons/material/maximize.svg
         resources/icons/material/minimize.svg
@@ -319,12 +326,30 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/arrow-right-line-duotone.svg
         resources/icons/solar/arrow-right-linear.svg
         resources/icons/solar/arrow-right-outline.svg
+        resources/icons/solar/bookmark-circle-bold-duotone.svg
+        resources/icons/solar/bookmark-circle-bold.svg
+        resources/icons/solar/bookmark-circle-broken.svg
+        resources/icons/solar/bookmark-circle-line-duotone.svg
+        resources/icons/solar/bookmark-circle-linear.svg
+        resources/icons/solar/bookmark-circle-outline.svg
+        resources/icons/solar/camera-bold-duotone.svg
+        resources/icons/solar/camera-bold.svg
+        resources/icons/solar/camera-broken.svg
+        resources/icons/solar/camera-line-duotone.svg
+        resources/icons/solar/camera-linear.svg
+        resources/icons/solar/camera-outline.svg
         resources/icons/solar/check-bold-duotone.svg
         resources/icons/solar/check-bold.svg
         resources/icons/solar/check-broken.svg
         resources/icons/solar/check-line-duotone.svg
         resources/icons/solar/check-linear.svg
         resources/icons/solar/check-outline.svg
+        resources/icons/solar/checklist-bold-duotone.svg
+        resources/icons/solar/checklist-bold.svg
+        resources/icons/solar/checklist-broken.svg
+        resources/icons/solar/checklist-line-duotone.svg
+        resources/icons/solar/checklist-linear.svg
+        resources/icons/solar/checklist-outline.svg
         resources/icons/solar/chevron-down-bold-duotone.svg
         resources/icons/solar/chevron-down-bold.svg
         resources/icons/solar/chevron-down-broken.svg
@@ -337,6 +362,18 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/chevron-up-line-duotone.svg
         resources/icons/solar/chevron-up-linear.svg
         resources/icons/solar/chevron-up-outline.svg
+        resources/icons/solar/clipboard-bold-duotone.svg
+        resources/icons/solar/clipboard-bold.svg
+        resources/icons/solar/clipboard-broken.svg
+        resources/icons/solar/clipboard-line-duotone.svg
+        resources/icons/solar/clipboard-linear.svg
+        resources/icons/solar/clipboard-outline.svg
+        resources/icons/solar/clipboard-text-bold-duotone.svg
+        resources/icons/solar/clipboard-text-bold.svg
+        resources/icons/solar/clipboard-text-broken.svg
+        resources/icons/solar/clipboard-text-line-duotone.svg
+        resources/icons/solar/clipboard-text-linear.svg
+        resources/icons/solar/clipboard-text-outline.svg
         resources/icons/solar/close-bold-duotone.svg
         resources/icons/solar/close-bold.svg
         resources/icons/solar/close-broken.svg
@@ -349,24 +386,72 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/code-line-duotone.svg
         resources/icons/solar/code-linear.svg
         resources/icons/solar/code-outline.svg
+        resources/icons/solar/collapse-bold-duotone.svg
+        resources/icons/solar/collapse-bold.svg
+        resources/icons/solar/collapse-broken.svg
+        resources/icons/solar/collapse-line-duotone.svg
+        resources/icons/solar/collapse-linear.svg
+        resources/icons/solar/collapse-outline.svg
         resources/icons/solar/copy-bold-duotone.svg
         resources/icons/solar/copy-bold.svg
         resources/icons/solar/copy-broken.svg
         resources/icons/solar/copy-line-duotone.svg
         resources/icons/solar/copy-linear.svg
         resources/icons/solar/copy-outline.svg
+        resources/icons/solar/cpu-bolt-bold-duotone.svg
+        resources/icons/solar/cpu-bolt-bold.svg
+        resources/icons/solar/cpu-bolt-broken.svg
+        resources/icons/solar/cpu-bolt-line-duotone.svg
+        resources/icons/solar/cpu-bolt-linear.svg
+        resources/icons/solar/cpu-bolt-outline.svg
+        resources/icons/solar/cut-bold-duotone.svg
+        resources/icons/solar/cut-bold.svg
+        resources/icons/solar/cut-broken.svg
+        resources/icons/solar/cut-line-duotone.svg
+        resources/icons/solar/cut-linear.svg
+        resources/icons/solar/cut-outline.svg
         resources/icons/solar/danger-bold-duotone.svg
         resources/icons/solar/danger-bold.svg
         resources/icons/solar/danger-broken.svg
         resources/icons/solar/danger-line-duotone.svg
         resources/icons/solar/danger-linear.svg
         resources/icons/solar/danger-outline.svg
+        resources/icons/solar/database-bold-duotone.svg
+        resources/icons/solar/database-bold.svg
+        resources/icons/solar/database-broken.svg
+        resources/icons/solar/database-line-duotone.svg
+        resources/icons/solar/database-linear.svg
+        resources/icons/solar/database-outline.svg
+        resources/icons/solar/document-text-bold-duotone.svg
+        resources/icons/solar/document-text-bold.svg
+        resources/icons/solar/document-text-broken.svg
+        resources/icons/solar/document-text-line-duotone.svg
+        resources/icons/solar/document-text-linear.svg
+        resources/icons/solar/document-text-outline.svg
         resources/icons/solar/download-bold-duotone.svg
         resources/icons/solar/download-bold.svg
         resources/icons/solar/download-broken.svg
         resources/icons/solar/download-line-duotone.svg
         resources/icons/solar/download-linear.svg
         resources/icons/solar/download-outline.svg
+        resources/icons/solar/expand-bold-duotone.svg
+        resources/icons/solar/expand-bold.svg
+        resources/icons/solar/expand-broken.svg
+        resources/icons/solar/expand-line-duotone.svg
+        resources/icons/solar/expand-linear.svg
+        resources/icons/solar/expand-outline.svg
+        resources/icons/solar/eye-bold-duotone.svg
+        resources/icons/solar/eye-bold.svg
+        resources/icons/solar/eye-broken.svg
+        resources/icons/solar/eye-line-duotone.svg
+        resources/icons/solar/eye-linear.svg
+        resources/icons/solar/eye-outline.svg
+        resources/icons/solar/filter-bold-duotone.svg
+        resources/icons/solar/filter-bold.svg
+        resources/icons/solar/filter-broken.svg
+        resources/icons/solar/filter-line-duotone.svg
+        resources/icons/solar/filter-linear.svg
+        resources/icons/solar/filter-outline.svg
         resources/icons/solar/folder-open-bold-duotone.svg
         resources/icons/solar/folder-open-bold.svg
         resources/icons/solar/folder-open-broken.svg
@@ -397,6 +482,30 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/incognito-line-duotone.svg
         resources/icons/solar/incognito-linear.svg
         resources/icons/solar/incognito-outline.svg
+        resources/icons/solar/info-circle-bold-duotone.svg
+        resources/icons/solar/info-circle-bold.svg
+        resources/icons/solar/info-circle-broken.svg
+        resources/icons/solar/info-circle-line-duotone.svg
+        resources/icons/solar/info-circle-linear.svg
+        resources/icons/solar/info-circle-outline.svg
+        resources/icons/solar/layers-bold-duotone.svg
+        resources/icons/solar/layers-bold.svg
+        resources/icons/solar/layers-broken.svg
+        resources/icons/solar/layers-line-duotone.svg
+        resources/icons/solar/layers-linear.svg
+        resources/icons/solar/layers-outline.svg
+        resources/icons/solar/link-bold-duotone.svg
+        resources/icons/solar/link-bold.svg
+        resources/icons/solar/link-broken.svg
+        resources/icons/solar/link-line-duotone.svg
+        resources/icons/solar/link-linear.svg
+        resources/icons/solar/link-outline.svg
+        resources/icons/solar/list-bold-duotone.svg
+        resources/icons/solar/list-bold.svg
+        resources/icons/solar/list-broken.svg
+        resources/icons/solar/list-line-duotone.svg
+        resources/icons/solar/list-linear.svg
+        resources/icons/solar/list-outline.svg
         resources/icons/solar/lock-bold-duotone.svg
         resources/icons/solar/lock-bold.svg
         resources/icons/solar/lock-broken.svg
@@ -421,6 +530,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/menu-dots-line-duotone.svg
         resources/icons/solar/menu-dots-linear.svg
         resources/icons/solar/menu-dots-outline.svg
+        resources/icons/solar/microphone-bold-duotone.svg
+        resources/icons/solar/microphone-bold.svg
+        resources/icons/solar/microphone-broken.svg
+        resources/icons/solar/microphone-line-duotone.svg
+        resources/icons/solar/microphone-linear.svg
+        resources/icons/solar/microphone-outline.svg
         resources/icons/solar/minimize-bold-duotone.svg
         resources/icons/solar/minimize-bold.svg
         resources/icons/solar/minimize-broken.svg
@@ -431,12 +546,6 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/monitor-bold.svg
         resources/icons/solar/monitor-broken.svg
         resources/icons/solar/monitor-line-duotone.svg
-        resources/icons/solar/microphone-linear.svg
-        resources/icons/solar/microphone-bold.svg
-        resources/icons/solar/microphone-bold-duotone.svg
-        resources/icons/solar/microphone-broken.svg
-        resources/icons/solar/microphone-line-duotone.svg
-        resources/icons/solar/microphone-outline.svg
         resources/icons/solar/monitor-linear.svg
         resources/icons/solar/monitor-outline.svg
         resources/icons/solar/muted-bold-duotone.svg
@@ -451,12 +560,42 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/new-window-line-duotone.svg
         resources/icons/solar/new-window-linear.svg
         resources/icons/solar/new-window-outline.svg
+        resources/icons/solar/object-scan-bold-duotone.svg
+        resources/icons/solar/object-scan-bold.svg
+        resources/icons/solar/object-scan-broken.svg
+        resources/icons/solar/object-scan-line-duotone.svg
+        resources/icons/solar/object-scan-linear.svg
+        resources/icons/solar/object-scan-outline.svg
+        resources/icons/solar/password-bold-duotone.svg
+        resources/icons/solar/password-bold.svg
+        resources/icons/solar/password-broken.svg
+        resources/icons/solar/password-line-duotone.svg
+        resources/icons/solar/password-linear.svg
+        resources/icons/solar/password-outline.svg
         resources/icons/solar/pin-bold-duotone.svg
         resources/icons/solar/pin-bold.svg
         resources/icons/solar/pin-broken.svg
         resources/icons/solar/pin-line-duotone.svg
         resources/icons/solar/pin-linear.svg
         resources/icons/solar/pin-outline.svg
+        resources/icons/solar/power-bold-duotone.svg
+        resources/icons/solar/power-bold.svg
+        resources/icons/solar/power-broken.svg
+        resources/icons/solar/power-line-duotone.svg
+        resources/icons/solar/power-linear.svg
+        resources/icons/solar/power-outline.svg
+        resources/icons/solar/programming-bold-duotone.svg
+        resources/icons/solar/programming-bold.svg
+        resources/icons/solar/programming-broken.svg
+        resources/icons/solar/programming-line-duotone.svg
+        resources/icons/solar/programming-linear.svg
+        resources/icons/solar/programming-outline.svg
+        resources/icons/solar/redo-bold-duotone.svg
+        resources/icons/solar/redo-bold.svg
+        resources/icons/solar/redo-broken.svg
+        resources/icons/solar/redo-line-duotone.svg
+        resources/icons/solar/redo-linear.svg
+        resources/icons/solar/redo-outline.svg
         resources/icons/solar/refresh-bold-duotone.svg
         resources/icons/solar/refresh-bold.svg
         resources/icons/solar/refresh-broken.svg
@@ -469,6 +608,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/restore-line-duotone.svg
         resources/icons/solar/restore-linear.svg
         resources/icons/solar/restore-outline.svg
+        resources/icons/solar/round-transfer-vertical-bold-duotone.svg
+        resources/icons/solar/round-transfer-vertical-bold.svg
+        resources/icons/solar/round-transfer-vertical-broken.svg
+        resources/icons/solar/round-transfer-vertical-line-duotone.svg
+        resources/icons/solar/round-transfer-vertical-linear.svg
+        resources/icons/solar/round-transfer-vertical-outline.svg
         resources/icons/solar/search-bold-duotone.svg
         resources/icons/solar/search-bold.svg
         resources/icons/solar/search-broken.svg
@@ -486,13 +631,55 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/sidebar-broken.svg
         resources/icons/solar/sidebar-line-duotone.svg
         resources/icons/solar/sidebar-linear.svg
+        resources/icons/solar/sidebar-minimalistic-bold-duotone.svg
+        resources/icons/solar/sidebar-minimalistic-bold.svg
+        resources/icons/solar/sidebar-minimalistic-broken.svg
+        resources/icons/solar/sidebar-minimalistic-line-duotone.svg
+        resources/icons/solar/sidebar-minimalistic-linear.svg
+        resources/icons/solar/sidebar-minimalistic-outline.svg
         resources/icons/solar/sidebar-outline.svg
+        resources/icons/solar/sort-bold-duotone.svg
+        resources/icons/solar/sort-bold.svg
+        resources/icons/solar/sort-broken.svg
+        resources/icons/solar/sort-line-duotone.svg
+        resources/icons/solar/sort-linear.svg
+        resources/icons/solar/sort-outline.svg
+        resources/icons/solar/soundwave-bold-duotone.svg
+        resources/icons/solar/soundwave-bold.svg
+        resources/icons/solar/soundwave-broken.svg
+        resources/icons/solar/soundwave-line-duotone.svg
+        resources/icons/solar/soundwave-linear.svg
+        resources/icons/solar/soundwave-outline.svg
+        resources/icons/solar/square-top-down-bold-duotone.svg
+        resources/icons/solar/square-top-down-bold.svg
+        resources/icons/solar/square-top-down-broken.svg
+        resources/icons/solar/square-top-down-line-duotone.svg
+        resources/icons/solar/square-top-down-linear.svg
+        resources/icons/solar/square-top-down-outline.svg
         resources/icons/solar/star-bold-duotone.svg
         resources/icons/solar/star-bold.svg
         resources/icons/solar/star-broken.svg
         resources/icons/solar/star-line-duotone.svg
         resources/icons/solar/star-linear.svg
         resources/icons/solar/star-outline.svg
+        resources/icons/solar/stopwatch-bold-duotone.svg
+        resources/icons/solar/stopwatch-bold.svg
+        resources/icons/solar/stopwatch-broken.svg
+        resources/icons/solar/stopwatch-line-duotone.svg
+        resources/icons/solar/stopwatch-linear.svg
+        resources/icons/solar/stopwatch-outline.svg
+        resources/icons/solar/text-focus-bold-duotone.svg
+        resources/icons/solar/text-focus-bold.svg
+        resources/icons/solar/text-focus-broken.svg
+        resources/icons/solar/text-focus-line-duotone.svg
+        resources/icons/solar/text-focus-linear.svg
+        resources/icons/solar/text-focus-outline.svg
+        resources/icons/solar/text-selection-bold-duotone.svg
+        resources/icons/solar/text-selection-bold.svg
+        resources/icons/solar/text-selection-broken.svg
+        resources/icons/solar/text-selection-line-duotone.svg
+        resources/icons/solar/text-selection-linear.svg
+        resources/icons/solar/text-selection-outline.svg
         resources/icons/solar/trash-bold-duotone.svg
         resources/icons/solar/trash-bold.svg
         resources/icons/solar/trash-broken.svg
@@ -505,6 +692,12 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/tuning-line-duotone.svg
         resources/icons/solar/tuning-linear.svg
         resources/icons/solar/tuning-outline.svg
+        resources/icons/solar/undo-bold-duotone.svg
+        resources/icons/solar/undo-bold.svg
+        resources/icons/solar/undo-broken.svg
+        resources/icons/solar/undo-line-duotone.svg
+        resources/icons/solar/undo-linear.svg
+        resources/icons/solar/undo-outline.svg
         resources/icons/solar/user-circle-bold-duotone.svg
         resources/icons/solar/user-circle-bold.svg
         resources/icons/solar/user-circle-broken.svg
@@ -523,162 +716,6 @@ qt_add_qml_module(eden-ui
         resources/icons/solar/window-line-duotone.svg
         resources/icons/solar/window-linear.svg
         resources/icons/solar/window-outline.svg
-        resources/icons/solar/bookmark-circle-bold-duotone.svg
-        resources/icons/solar/bookmark-circle-bold.svg
-        resources/icons/solar/bookmark-circle-broken.svg
-        resources/icons/solar/bookmark-circle-line-duotone.svg
-        resources/icons/solar/bookmark-circle-linear.svg
-        resources/icons/solar/bookmark-circle-outline.svg
-        resources/icons/solar/cpu-bolt-bold-duotone.svg
-        resources/icons/solar/cpu-bolt-bold.svg
-        resources/icons/solar/cpu-bolt-broken.svg
-        resources/icons/solar/cpu-bolt-line-duotone.svg
-        resources/icons/solar/cpu-bolt-linear.svg
-        resources/icons/solar/cpu-bolt-outline.svg
-        resources/icons/solar/info-circle-bold-duotone.svg
-        resources/icons/solar/info-circle-bold.svg
-        resources/icons/solar/info-circle-broken.svg
-        resources/icons/solar/info-circle-line-duotone.svg
-        resources/icons/solar/info-circle-linear.svg
-        resources/icons/solar/info-circle-outline.svg
-        resources/icons/solar/password-bold-duotone.svg
-        resources/icons/solar/password-bold.svg
-        resources/icons/solar/password-broken.svg
-        resources/icons/solar/password-line-duotone.svg
-        resources/icons/solar/password-linear.svg
-        resources/icons/solar/password-outline.svg
-        resources/icons/solar/eye-bold-duotone.svg
-        resources/icons/solar/eye-bold.svg
-        resources/icons/solar/eye-broken.svg
-        resources/icons/solar/eye-line-duotone.svg
-        resources/icons/solar/eye-linear.svg
-        resources/icons/solar/eye-outline.svg
-        resources/icons/solar/power-bold-duotone.svg
-        resources/icons/solar/power-bold.svg
-        resources/icons/solar/power-broken.svg
-        resources/icons/solar/power-line-duotone.svg
-        resources/icons/solar/power-linear.svg
-        resources/icons/solar/power-outline.svg
-        resources/icons/solar/programming-bold-duotone.svg
-        resources/icons/solar/programming-bold.svg
-        resources/icons/solar/programming-broken.svg
-        resources/icons/solar/programming-line-duotone.svg
-        resources/icons/solar/programming-linear.svg
-        resources/icons/solar/programming-outline.svg
-        resources/icons/solar/round-transfer-vertical-bold-duotone.svg
-        resources/icons/solar/round-transfer-vertical-bold.svg
-        resources/icons/solar/round-transfer-vertical-broken.svg
-        resources/icons/solar/round-transfer-vertical-line-duotone.svg
-        resources/icons/solar/round-transfer-vertical-linear.svg
-        resources/icons/solar/round-transfer-vertical-outline.svg
-        resources/icons/solar/soundwave-bold-duotone.svg
-        resources/icons/solar/soundwave-bold.svg
-        resources/icons/solar/soundwave-broken.svg
-        resources/icons/solar/soundwave-line-duotone.svg
-        resources/icons/solar/soundwave-linear.svg
-        resources/icons/solar/soundwave-outline.svg
-        resources/icons/solar/undo-bold-duotone.svg
-        resources/icons/solar/undo-bold.svg
-        resources/icons/solar/undo-broken.svg
-        resources/icons/solar/undo-line-duotone.svg
-        resources/icons/solar/undo-linear.svg
-        resources/icons/solar/undo-outline.svg
-        resources/icons/solar/redo-bold-duotone.svg
-        resources/icons/solar/redo-bold.svg
-        resources/icons/solar/redo-broken.svg
-        resources/icons/solar/redo-line-duotone.svg
-        resources/icons/solar/redo-linear.svg
-        resources/icons/solar/redo-outline.svg
-        resources/icons/solar/cut-bold-duotone.svg
-        resources/icons/solar/cut-bold.svg
-        resources/icons/solar/cut-broken.svg
-        resources/icons/solar/cut-line-duotone.svg
-        resources/icons/solar/cut-linear.svg
-        resources/icons/solar/cut-outline.svg
-        resources/icons/solar/clipboard-bold-duotone.svg
-        resources/icons/solar/clipboard-bold.svg
-        resources/icons/solar/clipboard-broken.svg
-        resources/icons/solar/clipboard-line-duotone.svg
-        resources/icons/solar/clipboard-linear.svg
-        resources/icons/solar/clipboard-outline.svg
-        resources/icons/solar/clipboard-text-bold-duotone.svg
-        resources/icons/solar/clipboard-text-bold.svg
-        resources/icons/solar/clipboard-text-broken.svg
-        resources/icons/solar/clipboard-text-line-duotone.svg
-        resources/icons/solar/clipboard-text-linear.svg
-        resources/icons/solar/clipboard-text-outline.svg
-        resources/icons/solar/text-selection-bold-duotone.svg
-        resources/icons/solar/text-selection-bold.svg
-        resources/icons/solar/text-selection-broken.svg
-        resources/icons/solar/text-selection-line-duotone.svg
-        resources/icons/solar/text-selection-linear.svg
-        resources/icons/solar/text-selection-outline.svg
-        resources/icons/solar/camera-bold-duotone.svg
-        resources/icons/solar/camera-bold.svg
-        resources/icons/solar/camera-broken.svg
-        resources/icons/solar/camera-line-duotone.svg
-        resources/icons/solar/camera-linear.svg
-        resources/icons/solar/camera-outline.svg
-        resources/icons/solar/text-focus-bold-duotone.svg
-        resources/icons/solar/text-focus-bold.svg
-        resources/icons/solar/text-focus-broken.svg
-        resources/icons/solar/text-focus-line-duotone.svg
-        resources/icons/solar/text-focus-linear.svg
-        resources/icons/solar/text-focus-outline.svg
-        resources/icons/solar/sort-bold-duotone.svg
-        resources/icons/solar/sort-bold.svg
-        resources/icons/solar/sort-broken.svg
-        resources/icons/solar/sort-line-duotone.svg
-        resources/icons/solar/sort-linear.svg
-        resources/icons/solar/sort-outline.svg
-        resources/icons/solar/object-scan-bold-duotone.svg
-        resources/icons/solar/object-scan-bold.svg
-        resources/icons/solar/object-scan-broken.svg
-        resources/icons/solar/object-scan-line-duotone.svg
-        resources/icons/solar/object-scan-linear.svg
-        resources/icons/solar/object-scan-outline.svg
-        resources/icons/solar/expand-bold-duotone.svg
-        resources/icons/solar/expand-bold.svg
-        resources/icons/solar/expand-broken.svg
-        resources/icons/solar/expand-line-duotone.svg
-        resources/icons/solar/expand-linear.svg
-        resources/icons/solar/expand-outline.svg
-        resources/icons/solar/collapse-bold-duotone.svg
-        resources/icons/solar/collapse-bold.svg
-        resources/icons/solar/collapse-broken.svg
-        resources/icons/solar/collapse-line-duotone.svg
-        resources/icons/solar/collapse-linear.svg
-        resources/icons/solar/collapse-outline.svg
-        resources/icons/solar/document-text-bold-duotone.svg
-        resources/icons/solar/document-text-bold.svg
-        resources/icons/solar/document-text-broken.svg
-        resources/icons/solar/document-text-line-duotone.svg
-        resources/icons/solar/document-text-linear.svg
-        resources/icons/solar/document-text-outline.svg
-        resources/icons/solar/filter-bold-duotone.svg
-        resources/icons/solar/filter-bold.svg
-        resources/icons/solar/filter-broken.svg
-        resources/icons/solar/filter-line-duotone.svg
-        resources/icons/solar/filter-linear.svg
-        resources/icons/solar/filter-outline.svg
-        resources/icons/solar/link-bold-duotone.svg
-        resources/icons/solar/link-bold.svg
-        resources/icons/solar/link-broken.svg
-        resources/icons/solar/link-line-duotone.svg
-        resources/icons/solar/link-linear.svg
-        resources/icons/solar/link-outline.svg
-        resources/icons/solar/list-bold-duotone.svg
-        resources/icons/solar/list-bold.svg
-        resources/icons/solar/list-broken.svg
-        resources/icons/solar/list-line-duotone.svg
-        resources/icons/solar/list-linear.svg
-        resources/icons/solar/list-outline.svg
-        resources/icons/solar/square-top-down-bold-duotone.svg
-        resources/icons/solar/square-top-down-bold.svg
-        resources/icons/solar/square-top-down-broken.svg
-        resources/icons/solar/square-top-down-line-duotone.svg
-        resources/icons/solar/square-top-down-linear.svg
-        resources/icons/solar/square-top-down-outline.svg
         resources/themes/eden-default.json
 )
 target_link_libraries(eden-ui PUBLIC eden-core Qt6::Quick Qt6::QuickControls2 Qt6::QuickEffects Qt6::QuickShapes)
@@ -711,8 +748,9 @@ if(EDEN_ENGINE_CEF)
     set_target_properties(eden-browser PROPERTIES BUILD_RPATH "$ORIGIN")
     eden_stage_cef_runtime(eden-browser)
 endif()
-if(EDEN_ENGINE_QTWEBENGINE)
-    add_dependencies(eden-browser eden-engine-qtwebengine)
+
+if(EDEN_ENGINE_WPE)
+    add_dependencies(eden-browser eden-engine-wpe)
 endif()
 
 enable_testing()
@@ -730,20 +768,36 @@ set_tests_properties(eden-window-launch-tests PROPERTIES TIMEOUT 30)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME eden-bench-tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/bench/bench_test.py)
 
+if(EDEN_ENGINE_WPE)
+    foreach(EDEN_WPE_PYTHON_TEST
+        wpe_performance_patches_test
+        wpe_source_composition_test
+        wpe_embedded_patches_test
+        wpe_jsc_json_keys_test
+        wpe_text_cache_keys_test
+        wpe_intrinsic_width_probe_test
+        wpe_intrinsic_width_validation_test
+        wpe_opportunistic_yield_test
+        wpe_list_renumbering_test
+        wpe_author_rule_memo_test
+        wpe_author_rule_memo_validation_test
+        wpe_build_pipeline_test
+        wpe_pgo_test
+        wpt_sweep_test
+    )
+        add_test(
+            NAME eden-${EDEN_WPE_PYTHON_TEST}
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.${EDEN_WPE_PYTHON_TEST}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        set_tests_properties(eden-${EDEN_WPE_PYTHON_TEST} PROPERTIES TIMEOUT 120 LABELS "webkit")
+    endforeach()
+endif()
+
 qt_add_executable(eden-tests tests/tabmodel_test.cpp)
 target_link_libraries(eden-tests PRIVATE eden-core Qt6::Test)
-if(EDEN_ENGINE_QTWEBENGINE)
-    target_link_libraries(eden-tests PRIVATE eden-engine-qtwebengine Qt6::WebEngineCore Qt6::WebEngineQuick)
-endif()
 add_test(NAME eden-tests COMMAND eden-tests)
-set_tests_properties(eden-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
-
-if(EDEN_ENGINE_QTWEBENGINE)
-    qt_add_executable(eden-qtwebengine-user-agent-tests tests/qtwebengineuseragent_test.cpp)
-    target_link_libraries(eden-qtwebengine-user-agent-tests PRIVATE eden-core eden-engine-qtwebengine Qt6::Test Qt6::WebEngineQuick)
-    add_test(NAME eden-qtwebengine-user-agent-tests COMMAND eden-qtwebengine-user-agent-tests)
-    set_tests_properties(eden-qtwebengine-user-agent-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
-endif()
+set_tests_properties(eden-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 qt_add_executable(eden-profile-core-tests tests/profilecore_test.cpp)
 target_link_libraries(eden-profile-core-tests PRIVATE eden-core Qt6::Test)
@@ -779,6 +833,12 @@ target_link_options(eden-profile-context-tests PRIVATE -Wl,--export-dynamic)
 add_test(NAME eden-profile-context-tests COMMAND eden-profile-context-tests)
 set_tests_properties(eden-profile-context-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+qt_add_executable(eden-library-tests tests/library_test.cpp)
+target_link_libraries(eden-library-tests PRIVATE eden-core Qt6::Test)
+target_link_options(eden-library-tests PRIVATE -Wl,--export-dynamic)
+add_test(NAME eden-library-tests COMMAND eden-library-tests)
+set_tests_properties(eden-library-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 qt_add_executable(eden-history-store-tests tests/historystore_test.cpp)
 target_link_libraries(eden-history-store-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-history-store-tests COMMAND eden-history-store-tests)
@@ -809,6 +869,11 @@ target_link_libraries(eden-cookie-handoff-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-cookie-handoff-tests COMMAND eden-cookie-handoff-tests)
 set_tests_properties(eden-cookie-handoff-tests PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+qt_add_executable(eden-font-policy-tests tests/fontpolicy_test.cpp)
+target_link_libraries(eden-font-policy-tests PRIVATE eden-core Qt6::Test)
+add_test(NAME eden-font-policy-tests COMMAND eden-font-policy-tests)
+set_tests_properties(eden-font-policy-tests PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 qt_add_executable(eden-thumbnail-cache-tests tests/thumbnailcache_test.cpp)
 target_link_libraries(eden-thumbnail-cache-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-thumbnail-cache-tests COMMAND eden-thumbnail-cache-tests)
@@ -816,7 +881,7 @@ add_test(NAME eden-thumbnail-cache-tests COMMAND eden-thumbnail-cache-tests)
 qt_add_executable(eden-theme-tests tests/thememanager_test.cpp)
 target_link_libraries(eden-theme-tests PRIVATE eden-core eden-ui Qt6::Test)
 add_test(NAME eden-theme-tests COMMAND eden-theme-tests)
-set_tests_properties(eden-theme-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config")
+set_tests_properties(eden-theme-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config")
 
 qt_add_executable(eden-window-controller-tests tests/windowcontroller_test.cpp)
 target_link_libraries(eden-window-controller-tests PRIVATE eden-core Qt6::Test)
@@ -828,6 +893,11 @@ qt_add_executable(eden-window-frame-tests tests/windowframe_test.cpp)
 target_link_libraries(eden-window-frame-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-window-frame-tests COMMAND eden-window-frame-tests)
 set_tests_properties(eden-window-frame-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(eden-popup-dismissal-tests tests/popupdismissal_test.cpp)
+target_link_libraries(eden-popup-dismissal-tests PRIVATE eden-core Qt6::QuickControls2 Qt6::Test)
+add_test(NAME eden-popup-dismissal-tests COMMAND eden-popup-dismissal-tests)
+set_tests_properties(eden-popup-dismissal-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 qt_add_executable(eden-window-input-tests tests/windowinputregion_test.cpp)
 target_link_libraries(eden-window-input-tests PRIVATE eden-ui Qt6::Test)
@@ -853,16 +923,18 @@ add_test(NAME eden-wayland-glib-event-dispatcher-tests COMMAND eden-wayland-glib
 qt_add_executable(eden-omnibox-tests tests/omniboxcontroller_test.cpp)
 target_link_libraries(eden-omnibox-tests PRIVATE eden-core eden-ui Qt6::Test)
 add_test(NAME eden-omnibox-tests COMMAND eden-omnibox-tests)
-set_tests_properties(eden-omnibox-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/omnibox-test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/omnibox-test-config")
+set_tests_properties(eden-omnibox-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/omnibox-test-data;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/omnibox-test-config")
+
+qt_add_executable(eden-shortcut-tests tests/shortcutregistry_test.cpp)
+target_link_libraries(eden-shortcut-tests PRIVATE eden-core Qt6::Quick Qt6::Test)
+add_test(NAME eden-shortcut-tests COMMAND eden-shortcut-tests)
+set_tests_properties(eden-shortcut-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(EDEN_ENABLE_AUTOMATION)
     qt_add_executable(eden-automation-tests tests/automationserver_test.cpp)
     target_link_libraries(eden-automation-tests PRIVATE eden-core Qt6::Test)
-    if(EDEN_ENGINE_QTWEBENGINE)
-        add_dependencies(eden-automation-tests eden-engine-qtwebengine)
-    endif()
     add_test(NAME eden-automation-tests COMMAND eden-automation-tests)
-    set_tests_properties(eden-automation-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox")
+    set_tests_properties(eden-automation-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 if(EDEN_ENGINE_CEF)
@@ -912,18 +984,21 @@ if(EDEN_ENGINE_CEF)
     target_compile_options(eden-cef-handlers-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
     set_target_properties(eden-cef-handlers-tests PROPERTIES BUILD_RPATH "$ORIGIN")
     add_dependencies(eden-cef-handlers-tests eden-helper)
-    eden_stage_cef_runtime(eden-cef-handlers-tests)
-    if(EDEN_ENGINE_QTWEBENGINE)
-        qt_add_executable(eden-engine-storage-native-tests tests/enginestoragenative_test.cpp)
-        target_include_directories(eden-engine-storage-native-tests PRIVATE ${CEF_INCLUDE_PATH})
-        target_link_libraries(eden-engine-storage-native-tests PRIVATE eden-core eden-engine-cef eden-cef-process Qt6::Test)
-        target_link_options(eden-engine-storage-native-tests PRIVATE -Wl,--export-dynamic)
-        SET_EXECUTABLE_TARGET_PROPERTIES(eden-engine-storage-native-tests)
-        target_compile_options(eden-engine-storage-native-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
-        set_target_properties(eden-engine-storage-native-tests PROPERTIES BUILD_RPATH "$ORIGIN")
-        add_dependencies(eden-engine-storage-native-tests eden-helper eden-engine-qtwebengine)
-        eden_stage_cef_runtime(eden-engine-storage-native-tests)
+    if(EDEN_ENGINE_WPE)
+        add_dependencies(eden-cef-handlers-tests eden-engine-wpe)
     endif()
+    eden_stage_cef_runtime(eden-cef-handlers-tests)
+
+    qt_add_executable(eden-engine-storage-native-tests tests/enginestoragenative_test.cpp)
+    target_include_directories(eden-engine-storage-native-tests PRIVATE ${CEF_INCLUDE_PATH})
+    target_link_libraries(eden-engine-storage-native-tests PRIVATE eden-core eden-engine-cef eden-cef-process Qt6::Test)
+    target_link_options(eden-engine-storage-native-tests PRIVATE -Wl,--export-dynamic)
+    target_compile_options(eden-engine-storage-native-tests PRIVATE -fexceptions -frtti -fthreadsafe-statics)
+    SET_EXECUTABLE_TARGET_PROPERTIES(eden-engine-storage-native-tests)
+    set_target_properties(eden-engine-storage-native-tests PROPERTIES BUILD_RPATH "$ORIGIN")
+    add_dependencies(eden-engine-storage-native-tests eden-helper)
+    eden_stage_cef_runtime(eden-engine-storage-native-tests)
+
     find_program(EDEN_XVFB_RUN xvfb-run REQUIRED)
     add_test(NAME eden-osr-texture-tests COMMAND ${EDEN_XVFB_RUN} -a -s "-screen 0 1600x1000x24" $<TARGET_FILE:eden-osr-texture-tests>)
     set_tests_properties(eden-osr-texture-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb")

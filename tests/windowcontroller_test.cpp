@@ -1,19 +1,23 @@
 #include <libsecret/secret.h>
 
 #include "core/automation/performancemetrics.h"
+#include "core/omni/omniboxcontroller.h"
 #include "core/permissions/permissionstore.h"
 #include "core/profiles/profilecontext.h"
 #include "core/profiles/profilepaths.h"
 #include "core/profiles/windowregistry.h"
+#include "core/settings/shortcutregistry.h"
 #include "core/window/tabmodel.h"
 #include "core/window/windowcontroller.h"
 #include "engine/engineregistry.h"
 #include "engine/engineview.h"
 #include "passwords/credentialvault.h"
 
+#include <QProcess>
 #include <QQuickWindow>
 #include <QScopeGuard>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QtTest>
 
 extern "C" gchar *secret_password_lookup_sync(const SecretSchema *, GCancellable *, GError **, ...) {
@@ -72,7 +76,7 @@ class PermissionEngine final : public eden::engine::EngineView {
     }
     qint64 rendererProcessId() const override {
         ++processQueries;
-        return QCoreApplication::applicationPid();
+        return rendererPid;
     }
     void requestThumbnail(const QSize &, ThumbnailCallback callback) override {
         ++captures;
@@ -94,6 +98,7 @@ class PermissionEngine final : public eden::engine::EngineView {
         setCaptureDetails("fixture", flags);
     }
 
+    qint64 rendererPid = QCoreApplication::applicationPid();
     bool thumbnails = false;
     mutable int processQueries = 0;
     int captures = 0;
@@ -103,18 +108,34 @@ class PermissionEngine final : public eden::engine::EngineView {
         m_url = url;
         emit urlChanged();
     }
+    void prepareNavigation(const QList<QUrl> &candidates, const QUrl &preferred) override {
+        navigationCandidates = candidates;
+        navigationPreferred = preferred;
+        ++navigationRequests;
+    }
+    QList<QUrl> navigationCandidates;
+    QUrl navigationPreferred;
+    unsigned navigationRequests = 0;
     void back() override {}
     void forward() override {}
     QVariantList navigationHistory(int, int) const override {
         return {};
     }
     void goToHistoryOffset(int) override {}
-    void reload() override {}
+    void reload() override {
+        ++reloads;
+    }
+    void reloadBypassingCache() override {
+        ++cacheReloads;
+    }
     void stop() override {}
     void openDevTools() override {}
     void findInPage(const QString &, FindFlags) override {}
     void attach(QQuickItem *) override {}
     void setMuted(bool) override {}
+    bool containsPageScenePoint(const QPointF &) const override {
+        return pageContainsPoint;
+    }
 
     void exitFullscreen() override {
         ++fullscreenExits;
@@ -127,6 +148,9 @@ class PermissionEngine final : public eden::engine::EngineView {
         filledFields = fields;
     }
     int fullscreenExits = 0;
+    int reloads = 0;
+    int cacheReloads = 0;
+    bool pageContainsPoint = false;
     AutofillTargetCallback autofill;
     eden::engine::AutofillTarget filledTarget;
     QVariantMap filledFields;
@@ -192,8 +216,8 @@ class PermissionHarness {
         return true;
     }
 
-    PermissionEngine *addTab() {
-        const int row = source->addTab(QUrl(QStringLiteral("https://permissions.example/page")));
+    PermissionEngine *addTab(const QString &backendId = {}) {
+        const int row = source->addTab(QUrl(QStringLiteral("https://permissions.example/page")), false, backendId);
         auto *view = static_cast<PermissionEngine *>(source->engineViewAt(row));
         if (!view || !source->transferTabTo(row, controller->tabs(), controller->tabs()->rowCount())) {
             return nullptr;
@@ -220,7 +244,13 @@ class WindowControllerTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void popupCloseReturnsToOpener();
     void fullscreenTracksItsOwner();
+    void nativeMenusKeepAutofillAndEngineActions();
+    void autofillPopupRequiresFocusedField();
+    void unmappedRendererDoesNotBorrowAnotherProcess();
+    void rendererMemoryExcludesSharedFilePages();
+    void sharedProcessRowIgnoresTheOtherEngine();
     void personalDataRejectsReplacedTargets();
     void displayChoicesRemainTemporary();
     void automaticDismissal_data();
@@ -233,7 +263,283 @@ class WindowControllerTest final : public QObject {
     void previewCapturePreservesPendingTabs();
     void previewCaptureRejectsStaleImages();
     void tabSwitchMetricIncludesPreviewWork();
+    void browserCommandsReachTheActiveEngine();
+    void navigationPreparationFollowsActiveTab();
 };
+
+void WindowControllerTest::navigationPreparationFollowsActiveTab() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *first = harness.addTab();
+    const int firstIndex = harness.controller->tabs()->rowCount() - 1;
+    PermissionEngine *second = harness.addTab();
+    const int secondIndex = harness.controller->tabs()->rowCount() - 1;
+    QVERIFY(first);
+    QVERIFY(second);
+    auto *controller = harness.controller.get();
+    controller->setActiveIndex(firstIndex);
+    controller->omnibox()->setQuery("permiss");
+    QVERIFY(!first->navigationCandidates.isEmpty());
+    QCOMPARE(first->navigationPreferred, QUrl("https://permissions.example/"));
+    QVERIFY(second->navigationCandidates.isEmpty());
+    controller->setActiveIndex(secondIndex);
+    QVERIFY(first->navigationCandidates.isEmpty());
+    controller->omnibox()->setQuery("permissio");
+    QVERIFY(!second->navigationCandidates.isEmpty());
+    controller->omnibox()->setQuery({});
+    QVERIFY(second->navigationCandidates.isEmpty());
+    QVERIFY(second->navigationPreferred.isEmpty());
+}
+
+void WindowControllerTest::browserCommandsReachTheActiveEngine() {
+    QQuickWindow window;
+    PermissionHarness harness;
+    QVERIFY(harness.create(false, &window));
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    auto *shortcuts = harness.controller->shortcuts();
+    shortcuts->attach(&window);
+
+    QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier);
+    QTest::keyClick(&window, Qt::Key_R, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(view->reloads, 1);
+    QCOMPARE(view->cacheReloads, 1);
+    const auto menu = harness.controller->tabContextMenuActions(harness.controller->activeIndex());
+    for (const auto &item : menu) {
+        const auto action = item.toMap();
+        const auto id = action.value("id").toString();
+        if (id == "new" || id == "reload" || id == "close") {
+            QVERIFY(!action.value("shortcut").toString().isEmpty());
+        }
+    }
+
+    shortcuts->execute("zoom_in");
+    QCOMPARE(view->zoomFactor(), 1.1);
+    shortcuts->execute("zoom_out");
+    QCOMPARE(view->zoomFactor(), 1.0);
+    view->setZoomFactor(1.75);
+    shortcuts->execute("zoom_reset");
+    QCOMPARE(view->zoomFactor(), 1.0);
+
+    view->pageContainsPoint = true;
+    QWheelEvent wheel(
+        QPointF(20, 20),
+        QPointF(20, 20),
+        QPoint(),
+        QPoint(0, 120),
+        Qt::NoButton,
+        Qt::ControlModifier,
+        Qt::NoScrollPhase,
+        false
+    );
+    QCoreApplication::sendEvent(&window, &wheel);
+    QVERIFY(wheel.isAccepted());
+    QCOMPARE(view->zoomFactor(), 1.1);
+}
+
+void WindowControllerTest::autofillPopupRequiresFocusedField() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    auto *view = harness.addTab();
+    QVERIFY(view);
+    auto *controller = harness.controller.get();
+    auto *vault = qobject_cast<eden::passwords::CredentialVault *>(controller->credentialVault());
+    QVERIFY(vault && vault->available());
+    QVERIFY(vault->saveCredential(0, "https://permissions.example", "synthetic-user", "synthetic-password") > 0);
+    QSignalSpy opened(controller, &eden::core::WindowController::autofillRequested);
+    QSignalSpy changed(controller, &eden::core::WindowController::credentialStateChanged);
+    emit view->formFieldFocused({{"type", "password"}, {"name", "password"}, {"height", 30}});
+    QVERIFY(controller->autofillFieldFocused());
+    QVERIFY(!controller->autofillSuggestions().isEmpty());
+    QCOMPARE(opened.size(), 1);
+    emit view->formFieldFocused({});
+    QVERIFY(!controller->autofillFieldFocused());
+    QCOMPARE(opened.size(), 1);
+    QVERIFY(controller->credentialKeyVisible());
+    emit view->formFieldFocused({{"type", "password"}, {"name", "password"}, {"height", 30}});
+    QCOMPARE(opened.size(), 2);
+    changed.clear();
+    view->load(QUrl("https://permissions.example/session"));
+    QVERIFY(!controller->autofillFieldFocused());
+    QVERIFY(!changed.isEmpty());
+    QCOMPARE(opened.size(), 2);
+}
+
+void WindowControllerTest::nativeMenusKeepAutofillAndEngineActions() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    auto *vault = qobject_cast<eden::passwords::CredentialVault *>(harness.controller->credentialVault());
+    QVERIFY(vault && vault->available());
+    QVERIFY(
+        vault->saveFormProfile(0, {{"label", "Work"}, {"name", "Test Person"}, {"email", "person@example.test"}}) > 0
+    );
+    emit view->formFieldFocused({{"type", "email"}, {"name", "email"}, {"autocomplete", "email"}});
+    eden::engine::ContextMenuInfo info;
+    info.editable = true;
+    info.linkUrl = QUrl("https://destination.example/");
+    info.actions = {QVariantMap{{"id", "native-paste"}, {"title", "Paste"}, {"icon", "clipboard"}}};
+    emit view->contextMenuRequested(info);
+    QSet<QString> commands;
+    for (const auto &action : harness.controller->pageContextMenuActions()) {
+        commands.insert(action.toMap().value("id").toString());
+    }
+    QVERIFY(commands.contains("native-paste"));
+    QVERIFY(commands.contains("autofill"));
+    QVERIFY(commands.contains("open_with"));
+    QVERIFY(!commands.contains("paste"));
+    info.surface = "devtools";
+    emit view->contextMenuRequested(info);
+    QCOMPARE(harness.controller->pageContextMenuActions(), info.actions);
+}
+
+void WindowControllerTest::unmappedRendererDoesNotBorrowAnotherProcess() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    view->rendererPid = 0;
+    QProcess unrelated;
+    unrelated.start("/usr/bin/python3", {"-c", "import time; time.sleep(30)", "--type=renderer"});
+    QVERIFY(unrelated.waitForStarted());
+    const auto cleanup = qScopeGuard([&] {
+        unrelated.terminate();
+        unrelated.waitForFinished();
+    });
+    const QVariantMap preview = harness.controller->tabPreview(0);
+    QCOMPARE(preview.value("rendererPid").toLongLong(), 0);
+    QCOMPARE(preview.value("rendererMemory").toString(), QString("Unavailable"));
+    QCOMPARE(preview.value("rendererAttribution").toString(), QString("Renderer mapping unavailable"));
+}
+
+void WindowControllerTest::rendererMemoryExcludesSharedFilePages() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    PermissionEngine *view = harness.addTab();
+    QVERIFY(view);
+    QTemporaryFile payload;
+    QVERIFY(payload.open());
+    const QByteArray chunk(1024 * 1024, 'e');
+    for (int written = 0; written < 96; ++written) {
+        QCOMPARE(payload.write(chunk), chunk.size());
+    }
+    QVERIFY(payload.flush());
+    QProcess helper;
+    helper.start(
+        "/usr/bin/python3",
+        {"-c",
+         "import mmap, sys, time\n"
+         "handle = open(sys.argv[1], 'rb')\n"
+         "region = mmap.mmap(handle.fileno(), 0, prot=mmap.PROT_READ)\n"
+         "total = 0\n"
+         "for offset in range(0, len(region), 4096):\n"
+         "    total += region[offset]\n"
+         "sys.stdout.write('ready %d\\n' % total)\n"
+         "sys.stdout.flush()\n"
+         "time.sleep(120)\n",
+         payload.fileName()}
+    );
+    QVERIFY(helper.waitForStarted());
+    const auto cleanup = qScopeGuard([&] {
+        helper.kill();
+        helper.waitForFinished();
+    });
+    QVERIFY(helper.waitForReadyRead(60000));
+    QVERIFY(helper.readAllStandardOutput().startsWith("ready"));
+    const qint64 helperPid = helper.processId();
+    view->rendererPid = helperPid;
+
+    const auto statusValue = [helperPid](const QByteArray &key) -> qint64 {
+        QFile status(QString("/proc/%1/status").arg(helperPid));
+        if (!status.open(QIODevice::ReadOnly)) {
+            return -1;
+        }
+        const QList<QByteArray> lines = status.readAll().split('\n');
+        for (const QByteArray &line : lines) {
+            if (line.startsWith(key)) {
+                return line.simplified().split(' ').value(1).toLongLong();
+            }
+        }
+        return -1;
+    };
+    const qint64 residentKiB = statusValue("VmRSS:");
+    const qint64 anonymousKiB = statusValue("RssAnon:");
+    const qint64 swapKiB = statusValue("VmSwap:");
+    QVERIFY(residentKiB > 0);
+    QVERIFY(anonymousKiB >= 0);
+    QVERIFY(swapKiB >= 0);
+    QVERIFY(residentKiB - anonymousKiB > 64 * 1024);
+
+    const QVariantMap preview = harness.controller->tabPreview(0);
+    QCOMPARE(preview.value("rendererPid").toLongLong(), helperPid);
+    bool parsed = false;
+    const double reportedMb = preview.value("rendererMemory").toString().remove(" MB").toDouble(&parsed);
+    QVERIFY(parsed);
+    QVERIFY(qAbs(reportedMb - static_cast<double>(anonymousKiB + swapKiB) / 1024.0) < 4.0);
+    QVERIFY(reportedMb < static_cast<double>(residentKiB) / 1024.0 - 64.0);
+}
+
+void WindowControllerTest::sharedProcessRowIgnoresTheOtherEngine() {
+    auto *registry = eden::engine::EngineRegistry::instance();
+    const auto webkitBackend = registry->backendForId(QStringLiteral("wpe"));
+    const auto blinkBackend = registry->backendForId(QStringLiteral("cef"));
+    if (!webkitBackend || !blinkBackend) {
+        QSKIP("Both engines are required to check shared process attribution");
+    }
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    QProcess gpu;
+    gpu.start("/usr/bin/python3", {"-c", "import time; time.sleep(120)", "--type=gpu-process"});
+    QVERIFY(gpu.waitForStarted());
+    const auto cleanup = qScopeGuard([&] {
+        gpu.kill();
+        gpu.waitForFinished();
+    });
+    PermissionEngine *blink = harness.addTab(QStringLiteral("cef"));
+    QVERIFY(blink);
+    PermissionEngine *webkit = harness.addTab(QStringLiteral("wpe"));
+    QVERIFY(webkit);
+    auto *tabs = harness.controller->tabs();
+    QCOMPARE(tabs->data(tabs->index(0), eden::core::TabModel::EngineNameRole).toString(), QStringLiteral("Blink"));
+    QCOMPARE(tabs->data(tabs->index(1), eden::core::TabModel::EngineNameRole).toString(), QStringLiteral("WebKit"));
+
+    const QVariantMap blinkPreview = harness.controller->tabPreview(0);
+    QCOMPARE(blinkPreview.value("sharedGpuMemory").toString().endsWith(" MB"), true);
+
+    const QVariantMap webkitPreview = harness.controller->tabPreview(1);
+    QCOMPARE(webkitPreview.value("sharedGpuMemory").toString(), QStringLiteral("In renderer"));
+}
+
+void WindowControllerTest::popupCloseReturnsToOpener() {
+    PermissionHarness harness;
+    QVERIFY(harness.create());
+    for (int index = 0; index < 6; ++index) {
+        QVERIFY(harness.addTab());
+    }
+    auto *tabs = harness.controller->tabs();
+    auto *opener = tabs->engineViewAt(1);
+    const quint64 openerId = tabs->tabIdAt(1);
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->setActiveIndex(5);
+    tabs->moveTab(1, 3);
+    harness.controller->closeTab(5);
+    QCOMPARE(harness.controller->currentEngine(), opener);
+    QCOMPARE(harness.controller->activeIndex(), 3);
+    QVERIFY(harness.addTab());
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->setActiveIndex(0);
+    auto *foreground = harness.controller->currentEngine();
+    harness.controller->closeTab(5);
+    QCOMPARE(harness.controller->currentEngine(), foreground);
+    QVERIFY(harness.addTab());
+    tabs->setOpenerTabId(5, openerId);
+    harness.controller->closeTab(tabs->indexForTabId(openerId));
+    harness.controller->setActiveIndex(4);
+    harness.controller->closeTab(4);
+    QCOMPARE(harness.controller->activeIndex(), 3);
+    QVERIFY(harness.controller->currentEngine());
+}
 
 void WindowControllerTest::fullscreenTracksItsOwner() {
     QQuickWindow window;

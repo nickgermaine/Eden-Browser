@@ -82,7 +82,7 @@ void AutomationServerTest::commandsAndTeardown() {
     eden::test::ProfileHarness harness;
     QVERIFY(harness.create(&qml));
     eden::core::WindowController controller(&window);
-    controller.initialize(harness.context, false, "qtwebengine", false);
+    controller.initialize(harness.context, false, "cef", false);
     bool quitCalled = false;
     {
         eden::core::AutomationServer server(socketPath, nullptr, [&quitCalled] { quitCalled = true; });

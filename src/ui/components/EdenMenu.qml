@@ -8,8 +8,9 @@ Popup {
     property var actions: []
     property Component headerComponent
     property real maximumHeight: 480
-    property real preferredWidth: 240
+    property real preferredWidth: 300
     property double dismissedAt: 0
+    readonly property var shortcutRegistry: menu.contentItem.Window.window && menu.contentItem.Window.window.windowController ? menu.contentItem.Window.window.windowController.shortcuts : null
 
     signal triggered(var actionId)
 
@@ -66,6 +67,7 @@ Popup {
             readonly property bool hasChildren: modelData.children !== undefined && modelData.children.length > 0
             readonly property bool separator: modelData.separator === true
             readonly property bool checked: modelData.checked === true
+            readonly property string shortcut: modelData.shortcut !== undefined ? String(modelData.shortcut) : menu.shortcutRegistry ? menu.shortcutRegistry.shortcutText(modelData.commandId || modelData.id || "") : ""
 
             width: menuList.width
             height: separator ? 9 : subtitle.length > 0 ? 54 : 40
@@ -114,7 +116,7 @@ Popup {
 
                 Column {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(0, parent.width - (menuIcon.visible ? menuIcon.width + parent.spacing : 0) - (menuItem.hasChildren ? 24 : 0))
+                    width: Math.max(0, parent.width - (menuIcon.visible ? menuIcon.width + parent.spacing : 0) - (menuItem.hasChildren ? 24 : 0) - (shortcutHint.visible ? shortcutHint.width + parent.spacing : 0))
                     spacing: 2
 
                     Text {
@@ -138,6 +140,17 @@ Popup {
                     }
                 }
 
+                Text {
+                    id: shortcutHint
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: text.length > 0
+                    text: menuItem.shortcut
+                    textFormat: Text.PlainText
+                    color: menuItem.actionEnabled ? Theme.surfaceVariantText : Theme.disabledText
+                    font.family: Theme.bodyFont.family
+                    font.pixelSize: 11
+                }
+
                 Icon {
                     visible: menuItem.hasChildren
                     anchors.verticalCenter: parent.verticalCenter
@@ -157,7 +170,7 @@ Popup {
 
                 enabled: menuItem.actionEnabled && !menuItem.separator
                 onTapped: {
-                    if (menuItem.hasChildren) {
+                    if (menuItem.hasChildren && menuItem.modelData.activatable !== true) {
                         childMenu.open();
                         return;
                     }
@@ -192,15 +205,19 @@ Popup {
                         required property var modelData
                         readonly property string actionTitle: modelData.title === undefined || modelData.title === null ? "" : String(modelData.title)
                         readonly property string avatarUrl: modelData.avatarUrl === undefined || modelData.avatarUrl === null ? "" : String(modelData.avatarUrl)
+                        readonly property string faviconUrl: modelData.faviconUrl === undefined || modelData.faviconUrl === null ? "" : String(modelData.faviconUrl)
+                        readonly property bool heading: modelData.heading === true
+                        readonly property bool plain: modelData.plain === true
                         readonly property bool separator: modelData.separator === true
                         readonly property bool checked: modelData.checked === true
-                        readonly property string iconName: modelData.icon === undefined || modelData.icon === null || String(modelData.icon).length === 0 ? (checked ? "check" : "menu-dots") : String(modelData.icon)
+                        readonly property string iconName: heading || plain ? "" : modelData.icon === undefined || modelData.icon === null || String(modelData.icon).length === 0 ? (checked ? "check" : "menu-dots") : String(modelData.icon)
                         readonly property string trailingIconName: modelData.trailingIcon === undefined || modelData.trailingIcon === null ? "" : String(modelData.trailingIcon)
+                        readonly property string shortcut: modelData.shortcut !== undefined ? String(modelData.shortcut) : menu.shortcutRegistry ? menu.shortcutRegistry.shortcutText(modelData.commandId || modelData.id || "") : ""
 
                         width: childList.width
-                        height: separator ? 9 : 40
+                        height: separator ? 9 : heading ? 28 : 40
                         radius: Theme.controlRadius
-                        color: !separator && (childHover.hovered || childTap.pressed) ? Theme.surfaceContainerHigh : "transparent"
+                        color: !separator && !heading && (childHover.hovered || childTap.pressed) ? Theme.surfaceContainerHigh : "transparent"
 
                         Rectangle {
                             visible: childItem.separator
@@ -228,20 +245,39 @@ Popup {
                                 avatarSize: 28
                             }
 
+                            SiteIcon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: childItem.faviconUrl.length > 0
+                                favicon: childItem.faviconUrl
+                            }
+
                             Icon {
                                 anchors.verticalCenter: parent.verticalCenter
-                                visible: childItem.avatarUrl.length === 0 && childItem.iconName.length > 0
+                                visible: childItem.avatarUrl.length === 0 && childItem.faviconUrl.length === 0 && childItem.iconName.length > 0
                                 name: childItem.iconName
                             }
 
                             Text {
                                 textFormat: Text.PlainText
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0))
+                                width: Math.max(0, parent.width - (childItem.avatarUrl.length > 0 || childItem.faviconUrl.length > 0 || childItem.iconName.length > 0 ? 38 : 0) - (childItem.trailingIconName.length > 0 ? 26 : 0) - (childShortcutHint.visible ? childShortcutHint.width + parent.spacing : 0))
                                 text: childItem.actionTitle
-                                color: Theme.surfaceText
-                                font: Theme.labelFont
+                                color: childItem.heading ? Theme.surfaceVariantText : Theme.surfaceText
+                                font.family: Theme.labelFont.family
+                                font.pixelSize: childItem.heading ? 11 : Theme.labelFont.pixelSize
+                                font.weight: Theme.labelFont.weight
                                 elide: Text.ElideRight
+                            }
+
+                            Text {
+                                id: childShortcutHint
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: text.length > 0
+                                text: childItem.shortcut
+                                textFormat: Text.PlainText
+                                color: Theme.surfaceVariantText
+                                font.family: Theme.bodyFont.family
+                                font.pixelSize: 11
                             }
 
                             Icon {
@@ -255,13 +291,13 @@ Popup {
                         HoverHandler {
                             id: childHover
 
-                            enabled: !childItem.separator && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
+                            enabled: !childItem.separator && !childItem.heading && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
                         }
 
                         TapHandler {
                             id: childTap
 
-                            enabled: !childItem.separator && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
+                            enabled: !childItem.separator && !childItem.heading && (childItem.modelData.enabled === undefined || childItem.modelData.enabled)
                             onTapped: {
                                 const rootMenu = menu;
                                 const subMenu = childMenu;

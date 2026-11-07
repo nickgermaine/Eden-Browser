@@ -57,7 +57,8 @@ namespace eden::core {
     }
 
     void TabStripNavigator::reveal(int index) {
-        if (m_view && index >= 0) {
+        m_currentIndex = index;
+        if (m_view && index >= 0 && !m_relayoutScheduled) {
             positionViewAtIndex(index, Contain);
         }
     }

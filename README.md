@@ -16,7 +16,7 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
 ## Features
 - Linux-first
-- Multi-engine, for real: pick the browser engine globally or per tab, and convert a live tab from one engine to another from its context menu. Ships with CEF (Blink) and QtWebEngine today, with a pluggable registry built for more.
+- Multi-engine, for real: pick the browser engine globally or per tab, and convert a live tab from one engine to another from its context menu. Supports CEF (Blink) and WPE WebKit through a pluggable registry.
 - Extensive theme configurations
 - Performance-obsessed: Explicit CEF GC on tab renderers, preventing resource bloat that exists inherently in CEF.
 - Tab previews: accurate and realtime resource usage reporting
@@ -44,10 +44,12 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
 - CMake ≥ 3.21, GCC 13+ or Clang 16+ (C++20)
 - Qt ≥ 6.8: Core, Gui, Network, Qml, Quick, QuickControls2, QuickEffects, QuickShapes, Sql, Test
-- Qt WebEngine ≥ 6.8 for the Blink (Qt) engine; on by default, skip with `-DEDEN_ENGINE_QTWEBENGINE=OFF`
+- WPE WebKit 2.52.6 or newer and Qt OpenGL; enabled by default, skip with `-DEDEN_ENGINE_WPE=OFF`. Build the patched runtime with `python3 scripts/build_wpe.py --mode performance --experiments --variant release` before configuring Eden, or follow [docs/building.md](docs/building.md) for the full LTO, PGO and BOLT pipeline. Run native GPU checks with `python3 scripts/test_wpe.py --build build`.
 - libpsl for recognizing complete domain suffixes in the address bar
 - Network access on first configure: CMake fetches the pinned CEF distribution (~300 MB) and the Solar icon set into `third_party/`, checksum-verified, no manual steps
 - Optional: Rust toolchain for the experimental Servo scaffold (`-DEDEN_ENGINE_SERVO=ON`, off by default), Python ≥ 3.10 for the benchmark harness in `scripts/bench/`
+
+The patched WebKit build uses a saved PGO profile when available. Eden enables two canvas replay workers for this runtime; explicit worker settings take precedence. Set `EDEN_WPE_TUNED_DEFAULTS=0` to disable automatic tuning.
 
 ### Runtime (Linux)
 
@@ -63,9 +65,11 @@ Project was initially written in python/qt5, then reimplemented in cpp, in 2017.
 
 ### Building
 
+Per-distro dependency commands and the complete optimized WebKit pipeline are in [docs/building.md](docs/building.md). These commands use eight workers on half the physical cores of the current development host. Recheck the CPU topology on other machines, and divide the worker budget between concurrent builds.
+
 ```
-cmake -S . -B build
-cmake --build build -j$(nproc)
+taskset --cpu-list 0-7,16-23 cmake -S . -B build -DCMAKE_AUTOGEN_PARALLEL=1
+taskset --cpu-list 0-7,16-23 cmake --build build --parallel 8
 ./build/eden-browser
 ```
 
@@ -76,7 +80,7 @@ cmake --build build -j$(nproc)
 
 ## License
 
-Eden Browser is free software, licensed under the [GNU General Public License v3.0](LICENSE). It bundles open source components under their own licenses: Qt 6 (LGPLv3), Chromium and CEF (BSD 3-Clause), and the Solar Icon Set (CC BY 4.0). The full texts ship with the app and are viewable at eden://settings/about.
+Eden Browser is free software, licensed under the [GNU General Public License v3.0](LICENSE). It bundles open source components under their own licenses: Qt 6 (LGPLv3), Chromium and CEF (BSD 3-Clause), WebKit (LGPL and BSD licenses), and the Solar Icon Set (CC BY 4.0). The full texts ship with the app and are viewable at eden://settings/about.
 
 ### Old Screenshots (2017)
 

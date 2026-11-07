@@ -15,6 +15,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QMouseEvent>
@@ -22,6 +23,7 @@
 #include <QQuickWindow>
 #include <QSaveFile>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -387,6 +389,75 @@ namespace eden::core {
                 return;
             }
             sendResult(socket, id, true);
+        } else if (method == "pointerWheel") {
+            const QPointF position(parameters.value("x").toDouble(), parameters.value("y").toDouble());
+            const int delta = parameters.value("delta").toInt(-120);
+            const int pixelDelta = parameters.value("pixelDelta").toInt(0);
+            QWheelEvent event(
+                position,
+                m_window->mapToGlobal(position),
+                QPoint(0, pixelDelta),
+                QPoint(0, delta),
+                Qt::NoButton,
+                Qt::NoModifier,
+                Qt::NoScrollPhase,
+                false
+            );
+            QCoreApplication::sendEvent(m_window, &event);
+            m_window->update();
+            sendResult(socket, id, true);
+        } else if (method == "pointerDrag") {
+            const QPointF from(parameters.value("x").toDouble(), parameters.value("y").toDouble());
+            const QPointF to(parameters.value("toX").toDouble(), parameters.value("toY").toDouble());
+            const auto send =
+                [this](QEvent::Type type, const QPointF &position, Qt::MouseButton button, Qt::MouseButtons buttons) {
+                    QMouseEvent event(
+                        type,
+                        position,
+                        position,
+                        m_window->mapToGlobal(position),
+                        button,
+                        buttons,
+                        Qt::NoModifier
+                    );
+                    QCoreApplication::sendEvent(m_window, &event);
+                };
+            send(QEvent::MouseMove, from, Qt::NoButton, Qt::NoButton);
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            for (int step = 1; step <= 12; ++step) {
+                send(QEvent::MouseMove, from + (to - from) * (step / 12.0), Qt::NoButton, Qt::LeftButton);
+            }
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+            m_window->update();
+            sendResult(socket, id, true);
+        } else if (method == "typeText" || method == "keyPress") {
+            QQuickItem *target = m_window->activeFocusItem();
+            if (!target) {
+                sendError(socket, id, -32000, "No item has keyboard focus");
+                return;
+            }
+            if (method == "typeText") {
+                for (const QChar character : parameters.value("text").toString()) {
+                    const QString value(character);
+                    QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, value);
+                    QCoreApplication::sendEvent(target, &press);
+                    QKeyEvent release(QEvent::KeyRelease, 0, Qt::NoModifier, value);
+                    QCoreApplication::sendEvent(target, &release);
+                }
+            } else {
+                const QKeySequence sequence(parameters.value("key").toString());
+                if (sequence.isEmpty()) {
+                    sendError(socket, id, -32602, "A key sequence is required");
+                    return;
+                }
+                const QKeyCombination combination = sequence[0];
+                QKeyEvent press(QEvent::KeyPress, combination.key(), combination.keyboardModifiers());
+                QCoreApplication::sendEvent(target, &press);
+                QKeyEvent release(QEvent::KeyRelease, combination.key(), combination.keyboardModifiers());
+                QCoreApplication::sendEvent(target, &release);
+            }
+            m_window->update();
+            sendResult(socket, id, true);
         } else if (method == "pointerMove" || method == "pointerClick") {
             if (!parameters.value("x").isDouble() || !parameters.value("y").isDouble()) {
                 sendError(socket, id, -32602, "Invalid pointer position");
@@ -399,8 +470,10 @@ namespace eden::core {
                     event(QEvent::MouseMove, position, position, global, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
                 QCoreApplication::sendEvent(m_window, &event);
             } else {
-                const Qt::MouseButton button =
-                    parameters.value("button").toString() == "right" ? Qt::RightButton : Qt::LeftButton;
+                const QString buttonName = parameters.value("button").toString();
+                const Qt::MouseButton button = buttonName == "right"    ? Qt::RightButton
+                                               : buttonName == "middle" ? Qt::MiddleButton
+                                                                        : Qt::LeftButton;
                 QMouseEvent press(QEvent::MouseButtonPress, position, position, global, button, button, Qt::NoModifier);
                 QMouseEvent release(
                     QEvent::MouseButtonRelease,
@@ -495,16 +568,20 @@ namespace eden::core {
     }
 
     void AutomationServer::recordNextFrame(const QString &name, std::chrono::steady_clock::time_point started) {
-        auto connection = std::make_shared<QMetaObject::Connection>();
-        *connection = connect(m_window, &QQuickWindow::frameSwapped, m_window, [connection, name, started] {
-            disconnect(*connection);
-            const double milliseconds =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-            PerformanceMetrics::record(name, milliseconds);
-            if (qEnvironmentVariableIsSet("EDEN_PERF")) {
-                qInfo().noquote() << "EDEN_PERF" << name + '=' + QString::number(milliseconds, 'f', 3);
-            }
-        });
+        connect(
+            m_window,
+            &QQuickWindow::frameSwapped,
+            m_window,
+            [name, started] {
+                const double milliseconds =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                PerformanceMetrics::record(name, milliseconds);
+                if (qEnvironmentVariableIsSet("EDEN_PERF")) {
+                    qInfo().noquote() << "EDEN_PERF" << name + '=' + QString::number(milliseconds, 'f', 3);
+                }
+            },
+            static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::SingleShotConnection)
+        );
     }
 
 }

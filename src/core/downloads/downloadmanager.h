@@ -18,7 +18,8 @@ namespace eden::core {
             TargetPathRole,
             ReceivedBytesRole,
             TotalBytesRole,
-            StateRole
+            StateRole,
+            StartedAtRole
         };
 
         explicit DownloadManager(const QString &databasePath = {}, QObject *parent = nullptr);

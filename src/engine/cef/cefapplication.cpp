@@ -1,5 +1,8 @@
 #include "engine/cef/cefapplication.h"
 
+#include "engine/cef/cefbrowsersettings.h"
+#include "engine/fontpolicy.h"
+
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -60,15 +63,25 @@ namespace eden::engine::cef {
         }
         disableFeature(commandLine, "ImmersiveReadAnything");
         appendListSwitch(commandLine, "disable-blink-features", "FileSystemAccessLocal");
+        if (processType.empty() && !commandLine->HasSwitch("system-font-family")) {
+            const std::string systemFamily = FontPolicy::systemFamily().toStdString();
+            if (!systemFamily.empty()) {
+                commandLine->AppendSwitchWithValue("system-font-family", systemFamily);
+            }
+        }
+        if (!commandLine->HasSwitch("enable-lcd-text") && !commandLine->HasSwitch("disable-lcd-text")) {
+            commandLine->AppendSwitch(FontPolicy::subpixelAntialiasing() ? "enable-lcd-text" : "disable-lcd-text");
+        }
         if (processType.empty() && !commandLine->HasSwitch("force-device-scale-factor") &&
             QGuiApplication::instance()) {
             QScreen *screen = QGuiApplication::primaryScreen();
             if (!screen) {
                 return;
             }
+            const bool waylandOzone = commandLine->GetSwitchValue("ozone-platform") == "wayland";
             commandLine->AppendSwitchWithValue(
                 "force-device-scale-factor",
-                QString::number(screen->devicePixelRatio()).toStdString()
+                QString::number(compositedDeviceScale(waylandOzone, screen->devicePixelRatio())).toStdString()
             );
         }
     }

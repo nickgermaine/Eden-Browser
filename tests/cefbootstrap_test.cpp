@@ -1,4 +1,5 @@
 #include "engine/cef/cefbrowsersettings.h"
+#include "engine/fontpolicy.h"
 #include "engine/cef/cefprofile.h"
 #include "engine/cef/cefruntime.h"
 #include "engine/cef/cefuibridge.h"
@@ -24,6 +25,8 @@ class CefBootstrapTest final : public QObject {
     void bridgeCancelsPendingWork();
     void bridgeSupportsNestedEventLoops();
     void alloyRuntimeIsExplicit();
+    void browserSettingsCarryTheSharedFontPolicy();
+    void compositedDeviceScaleMatchesWhatTheCaptureCanProduce();
     void privateContextSettingsAreInMemory();
     void runtimeCreatesIsolatedProfiles();
 };
@@ -123,6 +126,31 @@ void CefBootstrapTest::alloyRuntimeIsExplicit() {
     windowInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME;
     eden::engine::cef::configureAlloyRuntime(windowInfo);
     QCOMPARE(windowInfo.runtime_style, CEF_RUNTIME_STYLE_ALLOY);
+}
+
+void CefBootstrapTest::browserSettingsCarryTheSharedFontPolicy() {
+    CefBrowserSettings settings;
+    eden::engine::cef::applyFontPolicy(settings);
+    const auto family = [](const cef_string_t &value) {
+        return QString::fromStdString(CefString(&value).ToString());
+    };
+    QCOMPARE(family(settings.standard_font_family), eden::engine::FontPolicy::standardFamily());
+    QCOMPARE(family(settings.sans_serif_font_family), eden::engine::FontPolicy::sansSerifFamily());
+    QCOMPARE(family(settings.serif_font_family), eden::engine::FontPolicy::serifFamily());
+    QCOMPARE(family(settings.fixed_font_family), eden::engine::FontPolicy::monospaceFamily());
+    QCOMPARE(family(settings.cursive_font_family), eden::engine::FontPolicy::cursiveFamily());
+    QCOMPARE(family(settings.fantasy_font_family), eden::engine::FontPolicy::fantasyFamily());
+    QVERIFY(!family(settings.sans_serif_font_family).isEmpty());
+    QVERIFY(!eden::engine::FontPolicy::subpixelAntialiasing());
+}
+
+void CefBootstrapTest::compositedDeviceScaleMatchesWhatTheCaptureCanProduce() {
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(true, 2.0), 1.0);
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(true, 1.0), 1.0);
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(false, 2.0), 2.0);
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(false, 1.5), 1.5);
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(false, 0.0), 1.0);
+    QCOMPARE(eden::engine::cef::compositedDeviceScale(false, -3.0), 1.0);
 }
 
 void CefBootstrapTest::privateContextSettingsAreInMemory() {

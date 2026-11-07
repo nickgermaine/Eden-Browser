@@ -5,6 +5,7 @@
 #include "core/bookmarks/bookmarkstore.h"
 #include "core/downloads/downloadmanager.h"
 #include "core/history/historystore.h"
+#include "core/library/librarylistmodel.h"
 #include "core/omni/omniboxcontroller.h"
 #include "core/permissions/permissionstore.h"
 #include "core/profiles/cookiehandoffcoordinator.h"
@@ -46,8 +47,10 @@
 #include <QSet>
 #include <QStringList>
 #include <QUrlQuery>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 
@@ -86,6 +89,22 @@ namespace eden::core {
 
     static constexpr qreal kTabTearOffMargin = 48;
 
+    static constexpr std::array<qreal, 17>
+        kZoomFactors{0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0};
+
+    static qreal steppedZoomFactor(qreal current, int direction) {
+        if (direction > 0) {
+            const auto next = std::find_if(kZoomFactors.cbegin(), kZoomFactors.cend(), [current](qreal candidate) {
+                return candidate > current + 0.001;
+            });
+            return next == kZoomFactors.cend() ? kZoomFactors.back() : *next;
+        }
+        const auto previous = std::find_if(kZoomFactors.crbegin(), kZoomFactors.crend(), [current](qreal candidate) {
+            return candidate < current - 0.001;
+        });
+        return previous == kZoomFactors.crend() ? kZoomFactors.front() : *previous;
+    }
+
     static int credentialMatchScore(const QString &candidate, const QString &query) {
         const QString normalizedCandidate = candidate.toCaseFolded();
         const QString normalizedQuery = query.trimmed().toCaseFolded();
@@ -112,7 +131,7 @@ namespace eden::core {
         return 1000 - gaps * 4 - normalizedCandidate.size();
     }
 
-    static qint64 residentMemoryKiB(qint64 processId) {
+    static qint64 privateFootprintKiB(qint64 processId) {
         if (processId <= 0) {
             return -1;
         }
@@ -120,21 +139,39 @@ namespace eden::core {
         if (!status.open(QIODevice::ReadOnly)) {
             return -1;
         }
+        qint64 anonymous = -1;
+        qint64 swap = 0;
+        qint64 resident = -1;
         const QList<QByteArray> lines = status.readAll().split('\n');
         for (const QByteArray &line : lines) {
-            if (!line.startsWith("VmRSS:")) {
+            const bool isAnonymous = line.startsWith("RssAnon:");
+            const bool isSwap = line.startsWith("VmSwap:");
+            const bool isResident = line.startsWith("VmRSS:");
+            if (!isAnonymous && !isSwap && !isResident) {
                 continue;
             }
             const QList<QByteArray> fields = line.simplified().split(' ');
             bool valid = false;
             const qint64 value = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
-            return valid ? value : -1;
+            if (!valid || value < 0) {
+                continue;
+            }
+            if (isAnonymous) {
+                anonymous = value;
+            } else if (isSwap) {
+                swap = value;
+            } else {
+                resident = value;
+            }
         }
-        return -1;
+        if (anonymous >= 0) {
+            return anonymous + swap;
+        }
+        return resident;
     }
 
-    static qint64 browserResidentMemoryKiB() {
-        const qint64 value = residentMemoryKiB(QCoreApplication::applicationPid());
+    static qint64 browserFootprintKiB() {
+        const qint64 value = privateFootprintKiB(QCoreApplication::applicationPid());
         if (value >= 0) {
             return value;
         }
@@ -143,10 +180,15 @@ namespace eden::core {
             return -1;
         }
         const QList<QByteArray> fields = statm.readAll().simplified().split(' ');
-        bool valid = false;
-        const qint64 pages = fields.size() > 1 ? fields.at(1).toLongLong(&valid) : 0;
+        bool residentValid = false;
+        bool sharedValid = false;
+        const qint64 pages = fields.size() > 1 ? fields.at(1).toLongLong(&residentValid) : 0;
+        const qint64 shared = fields.size() > 2 ? fields.at(2).toLongLong(&sharedValid) : 0;
         const long pageBytes = sysconf(_SC_PAGESIZE);
-        return valid && pages >= 0 && pageBytes > 0 ? pages * pageBytes / 1024 : -1;
+        if (!residentValid || !sharedValid || pages < 0 || shared < 0 || pageBytes <= 0) {
+            return -1;
+        }
+        return std::max<qint64>(0, pages - shared) * pageBytes / 1024;
     }
 
     static QString memoryLabel(qint64 kibibytes) {
@@ -188,52 +230,42 @@ namespace eden::core {
         return value;
     }
 
-    struct RendererProcessSample {
-        qint64 memoryKiB = 0;
-        int processCount = 0;
-    };
-
-    static RendererProcessSample rendererProcessesMemory() {
-        RendererProcessSample sample;
-        for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
-            if (!processCommandLine(processId).contains("--type=renderer")) {
-                continue;
-            }
-            const qint64 memory = residentMemoryKiB(processId);
-            if (memory < 0) {
-                continue;
-            }
-            sample.memoryKiB += memory;
-            ++sample.processCount;
-        }
-        return sample;
-    }
-
-    static QVariantMap sharedProcessMemory() {
+    static QVariantMap sharedProcessMemory(const QString &engineName) {
+        const bool webkit = engineName == "WebKit";
         qint64 gpuMemory = 0;
         qint64 networkMemory = 0;
         bool gpuAvailable = false;
         bool networkAvailable = false;
         for (qint64 processId : processChildren(QCoreApplication::applicationPid())) {
             const QByteArray commandLine = processCommandLine(processId);
-            const qint64 memory = residentMemoryKiB(processId);
+            const QString executable =
+                QFileInfo(QFile::symLinkTarget(QString("/proc/%1/exe").arg(processId))).fileName();
+            const bool isGpu = webkit ? executable == "WPEGPUProcess" : commandLine.contains("--type=gpu-process");
+            const bool isNetwork = webkit ? executable == "WPENetworkProcess"
+                                          : commandLine.contains("--type=utility") &&
+                                                (commandLine.contains("network.mojom.NetworkService") ||
+                                                 commandLine.contains("network-service"));
+            if (!isGpu && !isNetwork) {
+                continue;
+            }
+            const qint64 memory = privateFootprintKiB(processId);
             if (memory < 0) {
                 continue;
             }
-            if (commandLine.contains("--type=gpu-process")) {
+            if (isGpu) {
                 gpuMemory += memory;
                 gpuAvailable = true;
-            } else if (
-                commandLine.contains("--type=utility") &&
-                (commandLine.contains("network.mojom.NetworkService") || commandLine.contains("network-service"))
-            ) {
+            } else {
                 networkMemory += memory;
                 networkAvailable = true;
             }
         }
         QVariantMap result;
-        result.insert("sharedBrowserMemory", memoryLabel(browserResidentMemoryKiB()));
-        result.insert("sharedGpuMemory", gpuAvailable ? memoryLabel(gpuMemory) : QString("Unavailable"));
+        result.insert("sharedBrowserMemory", memoryLabel(browserFootprintKiB()));
+        result.insert(
+            "sharedGpuMemory",
+            gpuAvailable ? memoryLabel(gpuMemory) : QString(webkit ? "In renderer" : "Unavailable")
+        );
         result.insert("sharedNetworkMemory", networkAvailable ? memoryLabel(networkMemory) : QString("Unavailable"));
         return result;
     }
@@ -310,6 +342,9 @@ namespace eden::core {
     }
 
     WindowController::~WindowController() {
+        if (m_navigationPreparationView) {
+            m_navigationPreparationView->prepareNavigation({}, {});
+        }
         if (m_window) {
             m_window->removeEventFilter(this);
         }
@@ -319,6 +354,7 @@ namespace eden::core {
         if (m_registeredAsWindow) {
             prepareToClose();
         }
+        m_tabs.reset();
     }
 
     TabModel *WindowController::tabs() const {
@@ -375,6 +411,14 @@ namespace eden::core {
             return m_privateDownloads.get();
         }
         return m_context ? m_context->downloads() : nullptr;
+    }
+
+    FaviconStore *WindowController::favicons() const {
+        return m_context ? m_context->favicons() : nullptr;
+    }
+
+    RecentlyClosedStore *WindowController::recentlyClosed() const {
+        return m_context ? m_context->recentlyClosed() : nullptr;
     }
 
     ProfileSettings *WindowController::profileSettings() const {
@@ -482,6 +526,10 @@ namespace eden::core {
         return m_autofillSuggestions;
     }
 
+    bool WindowController::autofillFieldFocused() const {
+        return !m_autofillField.isEmpty();
+    }
+
     QPoint WindowController::autofillPopupPosition() const {
         return {
             qRound(m_autofillField.value("x").toDouble()),
@@ -555,8 +603,7 @@ namespace eden::core {
         const QString requestedEngineName = engineName.isEmpty() ? context->settings()->defaultEngine() : engineName;
         const std::optional<engine::Backend> requestedBackend = registry->backendForId(requestedEngineName);
         m_defaultBackend = requestedBackend.value_or(
-            registry->descriptors().isEmpty() ? engine::Backend::QtWebEngine
-                                              : registry->descriptors().constFirst().backend
+            registry->descriptors().isEmpty() ? engine::Backend::Cef : registry->descriptors().constFirst().backend
         );
         m_engineName = registry->idForBackend(m_defaultBackend);
         QObject *windowCandidate = parent();
@@ -680,14 +727,57 @@ namespace eden::core {
             context->bookmarks(),
             context->settings()
         );
+        connect(
+            m_omnibox.get(),
+            &OmniboxController::navigationCandidatesChanged,
+            this,
+            [this](const QList<QUrl> &candidates, const QUrl &preferred) {
+                auto *view = qobject_cast<engine::EngineView *>(currentEngine());
+                if (m_navigationPreparationView && m_navigationPreparationView != view) {
+                    m_navigationPreparationView->prepareNavigation({}, {});
+                }
+                m_navigationPreparationView = view;
+                if (view) {
+                    view->prepareNavigation(candidates, preferred);
+                }
+            }
+        );
+        connect(this, &WindowController::currentEngineChanged, this, [this] {
+            if (m_navigationPreparationView) {
+                m_navigationPreparationView->prepareNavigation({}, {});
+                m_navigationPreparationView.clear();
+            }
+        });
         connect(m_tabs.get(), &TabModel::tabAdded, this, [this](int index, bool background) {
             if (!background) {
                 setActiveIndex(index);
             }
         });
-        connect(m_tabs.get(), &TabModel::tabEngineCreated, this, [this](int, engine::EngineView *view) {
+        connect(m_tabs.get(), &TabModel::tabEngineCreated, this, [this](int index, engine::EngineView *view) {
             connectEngine(view);
+            if (index == m_activeIndex) {
+                emit currentEngineChanged();
+                emit currentBookmarkedChanged();
+            }
         });
+        if (!privateWindow) {
+            if (FaviconStore *faviconStore = context->favicons()) {
+                m_tabs->setFaviconResolver([store = QPointer<FaviconStore>(faviconStore)](const QUrl &url) {
+                    return store ? store->iconFor(url) : QUrl();
+                });
+                connect(faviconStore, &FaviconStore::changed, m_tabs.get(), &TabModel::notifyFaviconsChanged);
+            }
+            connect(m_tabs.get(), &TabModel::tabClosed, this, [this](const QUrl &url, const QString &title) {
+                if (RecentlyClosedStore *store = recentlyClosed()) {
+                    store->add(url, title);
+                }
+            });
+            connect(m_tabs.get(), &TabModel::tabCloseUndone, this, [this](const QUrl &url) {
+                if (RecentlyClosedStore *store = recentlyClosed()) {
+                    store->removeLatest(url);
+                }
+            });
+        }
         connect(m_tabs.get(), &TabModel::tabTransferredOut, this, [this](engine::EngineView *view) {
             if (view) {
                 disconnect(view, nullptr, this, nullptr);
@@ -752,7 +842,9 @@ namespace eden::core {
                     }
                 } else {
                     const bool background = request->disposition() == engine::EngineView::Disposition::NewBackgroundTab;
+                    const quint64 openerId = m_tabs->tabIdAt(sourceIndex);
                     const int row = newTab(QUrl("about:blank"), background, backendId);
+                    m_tabs->setOpenerTabId(row, openerId);
                     target = m_tabs->engineViewAt(row);
                 }
                 if (!target) {
@@ -773,6 +865,7 @@ namespace eden::core {
             emit closeWindowRequested();
         });
         connect(m_tabs.get(), &QAbstractItemModel::rowsRemoved, this, [this](const QModelIndex &, int first, int last) {
+            const quint64 openerId = std::exchange(m_closingOpenerTabId, 0);
             if (!m_tabs || m_tabs->rowCount() == 0) {
                 setActiveIndex(-1);
                 return;
@@ -782,7 +875,8 @@ namespace eden::core {
             if (m_activeIndex > last) {
                 nextActiveIndex = m_activeIndex - (last - first + 1);
             } else if (activeRemoved) {
-                nextActiveIndex = first;
+                const int openerIndex = m_tabs->indexForTabId(openerId);
+                nextActiveIndex = openerIndex >= 0 ? openerIndex : first;
             }
             nextActiveIndex = std::min(nextActiveIndex, m_tabs->rowCount() - 1);
             if (nextActiveIndex == m_activeIndex) {
@@ -800,6 +894,8 @@ namespace eden::core {
             &QAbstractItemModel::rowsAboutToBeRemoved,
             this,
             [this](const QModelIndex &, int first, int last) {
+                m_closingOpenerTabId =
+                    m_activeIndex >= first && m_activeIndex <= last ? m_tabs->openerTabIdAt(m_activeIndex) : 0;
                 if (!m_thumbnailCache) {
                     return;
                 }
@@ -863,6 +959,8 @@ namespace eden::core {
         resolveDisplayCaptureRequest();
         resolveFileDialog(false);
         m_activeIndex = index;
+        m_autofillField.clear();
+        emit credentialStateChanged();
         emit activeIndexChanged();
         emit currentEngineChanged();
         emit currentBookmarkedChanged();
@@ -913,6 +1011,14 @@ namespace eden::core {
                 value.insert("id", id);
                 value.insert("title", title);
                 value.insert("icon", icon);
+                value.insert(
+                    "shortcut",
+                    ShortcutRegistry::shortcutText(
+                        id == "new"     ? "new_tab"
+                        : id == "close" ? "close_tab"
+                                        : id
+                    )
+                );
                 if (!children.isEmpty()) {
                     value.insert("children", children);
                 }
@@ -1011,7 +1117,7 @@ namespace eden::core {
             preview.insert("rendererAttribution", "Shell page");
         } else if (sampleMemory) {
             const qint64 processId = m_tabs->rendererProcessIdAt(index);
-            const qint64 memory = residentMemoryKiB(processId);
+            const qint64 memory = privateFootprintKiB(processId);
             preview.insert("rendererPid", processId);
             if (processId > 0 && memory >= 0) {
                 preview.insert("rendererMemory", memoryLabel(memory));
@@ -1020,31 +1126,20 @@ namespace eden::core {
                     m_tabs->rendererProcessUseCount(processId) > 1 ? "Shared renderer" : "Dedicated renderer"
                 );
             } else {
-                const RendererProcessSample sample = rendererProcessesMemory();
-                if (sample.processCount == 1) {
-                    preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
-                    preview.insert("rendererAttribution", "Dedicated renderer");
-                } else if (sample.processCount > 1) {
-                    preview.insert("rendererMemory", memoryLabel(sample.memoryKiB));
-                    preview.insert(
-                        "rendererAttribution",
-                        QString("All renderers (%1 processes)").arg(sample.processCount)
-                    );
-                } else {
-                    preview.insert("rendererMemory", "Unavailable");
-                    preview.insert("rendererAttribution", "Renderer mapping unavailable");
-                }
+                preview.insert("rendererMemory", "Unavailable");
+                preview.insert("rendererAttribution", "Renderer mapping unavailable");
             }
         } else {
             preview.insert("rendererMemory", "Unavailable");
             preview.insert("rendererAttribution", "Not sampled yet");
         }
-        const QVariantMap shared = sampleMemory ? sharedProcessMemory()
-                                                : QVariantMap{
-                                                      {"sharedBrowserMemory", "Unavailable"},
-                                                      {"sharedGpuMemory", "Unavailable"},
-                                                      {"sharedNetworkMemory", "Unavailable"}
-                                                  };
+        const QVariantMap shared =
+            sampleMemory ? sharedProcessMemory(m_tabs->data(modelIndex, TabModel::EngineNameRole).toString())
+                         : QVariantMap{
+                               {"sharedBrowserMemory", "Unavailable"},
+                               {"sharedGpuMemory", "Unavailable"},
+                               {"sharedNetworkMemory", "Unavailable"}
+                           };
         for (auto iterator = shared.cbegin(); iterator != shared.cend(); ++iterator) {
             preview.insert(iterator.key(), iterator.value());
         }
@@ -1275,6 +1370,27 @@ namespace eden::core {
             const QPointF position = static_cast<QMouseEvent *>(event)->position();
             if (view && !view->containsPageScenePoint(position)) {
                 view->releaseFocus();
+            }
+        }
+        if (watched == m_window && event->type() == QEvent::Wheel) {
+            auto *wheel = static_cast<QWheelEvent *>(event);
+            engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr;
+            if (view && wheel->modifiers() == Qt::ControlModifier && view->containsPageScenePoint(wheel->position())) {
+                const int delta = wheel->angleDelta().y() ? wheel->angleDelta().y() : wheel->pixelDelta().y() * 3;
+                if (delta && m_zoomWheelDelta && ((delta > 0) != (m_zoomWheelDelta > 0))) {
+                    m_zoomWheelDelta = 0;
+                }
+                m_zoomWheelDelta += delta;
+                while (m_zoomWheelDelta >= 120) {
+                    executeCommand("zoom_in");
+                    m_zoomWheelDelta -= 120;
+                }
+                while (m_zoomWheelDelta <= -120) {
+                    executeCommand("zoom_out");
+                    m_zoomWheelDelta += 120;
+                }
+                wheel->accept();
+                return true;
             }
         }
         TabDragSession &session = tabDragSession();
@@ -1674,6 +1790,12 @@ namespace eden::core {
         }
     }
 
+    void WindowController::reloadBypassingCache() {
+        if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+            view->reloadBypassingCache();
+        }
+    }
+
     void WindowController::stop() {
         if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
             view->stop();
@@ -1681,6 +1803,8 @@ namespace eden::core {
     }
 
     void WindowController::find(const QString &text, bool backward, bool caseSensitive) {
+        m_findText = text;
+        m_findCaseSensitive = caseSensitive;
         engine::EngineView::FindFlags flags;
         if (backward) {
             flags |= engine::EngineView::FindBackward;
@@ -1746,6 +1870,155 @@ namespace eden::core {
 
     void WindowController::openThemeEditorTab() {
         openInternalTab(QUrl("eden://theme-editor"));
+    }
+
+    void WindowController::openLibraryTab(const QString &page) {
+        if (page == "history" || page == "bookmarks" || page == "downloads") {
+            openInternalTab(QUrl("eden://" + page));
+        }
+    }
+
+    QObject *WindowController::createLibraryModel(const QString &kind, QObject *owner) {
+        LibraryListModel *model = nullptr;
+        if (kind == "history") {
+            model = new LibraryListModel(LibraryListModel::Mode::History, owner ? owner : this);
+            model->setHistory(history(), m_privateWindow ? nullptr : recentlyClosed());
+        } else if (kind == "bookmarks") {
+            model = new LibraryListModel(LibraryListModel::Mode::Bookmarks, owner ? owner : this);
+            model->setBookmarks(bookmarks());
+        } else if (kind == "downloads") {
+            model = new LibraryListModel(LibraryListModel::Mode::Downloads, owner ? owner : this);
+            model->setDownloads(downloads());
+        }
+        if (model) {
+            model->setFavicons(favicons());
+            QQmlEngine::setObjectOwnership(model, QQmlEngine::CppOwnership);
+        }
+        return model;
+    }
+
+    static QVariantMap libraryMenuItem(const QString &id, const QString &title, const QUrl &url, const QUrl &favicon) {
+        QVariantMap item;
+        item.insert("id", id);
+        item.insert("title", title.isEmpty() ? url.toString() : title);
+        item.insert("icon", "globe");
+        if (!favicon.isEmpty()) {
+            item.insert("faviconUrl", favicon.toString());
+        }
+        return item;
+    }
+
+    static QVariantMap libraryMenuSeparator() {
+        return {{"separator", true}};
+    }
+
+    static QVariantMap libraryMenuFooter(const QString &id) {
+        return {{"id", id}, {"title", "See More"}, {"icon", ""}, {"trailingIcon", "arrow-right"}, {"plain", true}};
+    }
+
+    QVariantList WindowController::historyMenuItems() const {
+        QVariantList items;
+        const FaviconStore *icons = favicons();
+        const auto iconFor = [icons](const QUrl &url) {
+            return icons ? icons->iconFor(url) : QUrl();
+        };
+        QSet<QUrl> listed;
+        if (const RecentlyClosedStore *closed = m_privateWindow ? nullptr : recentlyClosed()) {
+            const int count = std::min(closed->rowCount(), 5);
+            for (int row = 0; row < count; ++row) {
+                const QModelIndex index = closed->index(row);
+                const QUrl url = closed->data(index, RecentlyClosedStore::UrlRole).toUrl();
+                listed.insert(url);
+                items.append(libraryMenuItem(
+                    QString("library_closed:%1")
+                        .arg(closed->data(index, RecentlyClosedStore::ClosedIdRole).toLongLong()),
+                    closed->data(index, RecentlyClosedStore::TitleRole).toString(),
+                    url,
+                    iconFor(url)
+                ));
+            }
+            if (count > 0) {
+                items.prepend(QVariantMap{{"heading", true}, {"title", "Recently closed"}});
+                items.append(libraryMenuSeparator());
+            }
+        }
+        if (const HistoryStore *store = history()) {
+            int added = 0;
+            for (int row = 0; row < store->rowCount() && added < 6; ++row) {
+                const QModelIndex index = store->index(row);
+                const QUrl url = store->data(index, HistoryStore::UrlRole).toUrl();
+                if (listed.contains(url)) {
+                    continue;
+                }
+                items.append(libraryMenuItem(
+                    "library_open:" + url.toString(),
+                    store->data(index, HistoryStore::TitleRole).toString(),
+                    url,
+                    iconFor(url)
+                ));
+                ++added;
+            }
+            if (added > 0) {
+                items.append(libraryMenuSeparator());
+            }
+        }
+        items.append(libraryMenuFooter("history"));
+        return items;
+    }
+
+    QVariantList WindowController::bookmarkMenuItems() const {
+        QVariantList items;
+        const FaviconStore *icons = favicons();
+        if (const BookmarkStore *store = bookmarks()) {
+            const int count = std::min(store->rowCount(), 10);
+            for (int row = 0; row < count; ++row) {
+                const QModelIndex index = store->index(row);
+                const QUrl url = store->data(index, BookmarkStore::UrlRole).toUrl();
+                items.append(libraryMenuItem(
+                    "library_open:" + url.toString(),
+                    store->data(index, BookmarkStore::TitleRole).toString(),
+                    url,
+                    icons ? icons->iconFor(url) : QUrl()
+                ));
+            }
+            if (count > 0) {
+                items.append(libraryMenuSeparator());
+            }
+        }
+        items.append(libraryMenuFooter("bookmarks"));
+        return items;
+    }
+
+    bool WindowController::executeLibraryMenuCommand(const QString &command) {
+        if (command.startsWith("library_open:")) {
+            navigate(QUrl(command.sliced(13)));
+            return true;
+        }
+        if (command.startsWith("library_closed:")) {
+            reopenClosedTab(command.sliced(15).toLongLong());
+            return true;
+        }
+        return false;
+    }
+
+    void WindowController::reopenClosedTab(qint64 closedId) {
+        RecentlyClosedStore *store = recentlyClosed();
+        if (!store || m_privateWindow) {
+            return;
+        }
+        const QUrl url = store->take(closedId);
+        if (url.isValid() && !url.isEmpty()) {
+            newTab(url);
+        }
+    }
+
+    void WindowController::clearHistory() {
+        if (HistoryStore *store = history()) {
+            store->clear();
+        }
+        if (RecentlyClosedStore *store = recentlyClosed()) {
+            store->clear();
+        }
     }
 
     QString WindowController::settingsPath(const QUrl &url) const {
@@ -1879,8 +2152,26 @@ namespace eden::core {
             dismissPageContextMenu();
             return;
         }
-        if (command == "open_media_new_tab") {
-            newTab(m_pageContextMenuTarget, false, m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString());
+        if (command == "view_source") {
+            const QUrl url = currentUrl();
+            if (!url.isEmpty()) {
+                newTab(
+                    QUrl("view-source:" + url.toString()),
+                    false,
+                    m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString()
+                );
+            }
+            dismissPageContextMenu();
+            return;
+        }
+        if (command == "open_target_new_tab" || command == "open_link_new_tab" || command == "open_media_new_tab") {
+            if (!m_pageContextMenuTarget.isEmpty()) {
+                newTab(
+                    m_pageContextMenuTarget,
+                    command == "open_link_new_tab",
+                    m_tabs ? m_tabs->backendIdAt(m_activeIndex) : QString()
+                );
+            }
             dismissPageContextMenu();
             return;
         }
@@ -2274,9 +2565,9 @@ namespace eden::core {
         return m_devToolsPaneHeight;
     }
 
-    void WindowController::beginDevToolsPaneResize() {
-        m_devToolsResizeStartWidth = m_devToolsPaneWidth;
-        m_devToolsResizeStartHeight = m_devToolsPaneHeight;
+    void WindowController::beginDevToolsPaneResize(qreal displayedWidth, qreal displayedHeight) {
+        m_devToolsResizeStartWidth = std::clamp(qRound(displayedWidth), 280, 1600);
+        m_devToolsResizeStartHeight = std::clamp(qRound(displayedHeight), 180, 1200);
     }
 
     void WindowController::resizeDevToolsPane(qreal delta, bool horizontal) {
@@ -2360,11 +2651,23 @@ namespace eden::core {
             }
         });
         connect(view, &engine::EngineView::loadingChanged, this, [this, view] {
+            if (view->isLoading() && view == currentEngine() && !m_autofillField.isEmpty()) {
+                m_autofillField.clear();
+                emit credentialStateChanged();
+                refreshAutofillSuggestions();
+            }
             if (m_fullscreenEngine == view && view->isLoading()) {
                 exitContentFullscreen();
             }
             if (!m_privateWindow && !view->isLoading() && history()) {
-                history()->recordVisit(view->url(), view->title());
+                const QUrl visitedUrl = view->url();
+                if (view->property("edenRecordedVisit").toUrl() != visitedUrl) {
+                    view->setProperty("edenRecordedVisit", visitedUrl);
+                    history()->recordVisit(visitedUrl, view->title());
+                }
+            }
+            if (!m_privateWindow && !view->isLoading() && favicons()) {
+                favicons()->record(view->url(), view->faviconUrl());
             }
             if (!view->isLoading() && view == qobject_cast<engine::EngineView *>(currentEngine())) {
                 QTimer::singleShot(120, this, [this, view] { fillDefaultCredential(view); });
@@ -2373,6 +2676,11 @@ namespace eden::core {
                         captureTabPreview(m_activeIndex);
                     }
                 });
+            }
+        });
+        connect(view, &engine::EngineView::faviconUrlChanged, this, [this, view] {
+            if (!m_privateWindow && !view->isLoading() && favicons()) {
+                favicons()->record(view->url(), view->faviconUrl());
             }
         });
         connect(view, &engine::EngineView::urlChanged, this, [this, view] {
@@ -2391,6 +2699,7 @@ namespace eden::core {
             }
             if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
                 m_autofillField.clear();
+                emit credentialStateChanged();
                 emit currentUrlChanged();
                 emit currentBookmarkedChanged();
                 refreshAutofillSuggestions();
@@ -2464,12 +2773,14 @@ namespace eden::core {
             m_autofillField = field;
             emit credentialStateChanged();
             refreshAutofillSuggestions();
-            if (!m_autofillSuggestions.isEmpty()) {
+            if (autofillFieldFocused() && !m_autofillSuggestions.isEmpty()) {
                 emit autofillRequested();
             }
         });
-        connect(view, &engine::EngineView::shortcutRequested, this, [this](const QString &command) {
-            m_shortcuts->execute(command);
+        connect(view, &engine::EngineView::shortcutRequested, this, [this, view](const QString &command) {
+            if (view == qobject_cast<engine::EngineView *>(currentEngine())) {
+                m_shortcuts->execute(command);
+            }
         });
         connect(view, &engine::EngineView::fullscreenRequested, this, [this, view](bool fullscreen) {
             if (fullscreen && view == qobject_cast<engine::EngineView *>(currentEngine()) && m_window) {
@@ -2513,7 +2824,7 @@ namespace eden::core {
                     actions.append(action);
                 };
                 if (!providedActions && !info.linkUrl.isEmpty()) {
-                    append("open_link_new_tab", "Open link in new tab", "new-window");
+                    append("open_target_new_tab", "Open link in new tab", "new-window");
                     append("copy_link", "Copy link address", "copy");
                     append("download_link", "Save link as", "download");
                 }
@@ -2521,7 +2832,7 @@ namespace eden::core {
                     append("open_media_new_tab", "Open image in new tab", "new-window");
                 }
                 const QUrl contextTarget = !info.linkUrl.isEmpty() ? info.linkUrl : info.mediaUrl;
-                if (!providedActions && !contextTarget.isEmpty()) {
+                if (!contextTarget.isEmpty() && info.surface == "page") {
                     QVariantList engines;
                     for (const engine::EngineDescriptor &descriptor :
                          engine::EngineRegistry::instance()->descriptors()) {
@@ -2535,15 +2846,17 @@ namespace eden::core {
                     }
                     append("open_with", "Open with", "globe", true, engines);
                 }
-                if (!providedActions && info.editable) {
+                if (info.editable && info.surface == "page") {
                     refreshAutofillSuggestions();
                     if (!m_autofillSuggestions.isEmpty()) {
                         append("autofill", "Auto-fill", "password", true, m_autofillSuggestions);
                     }
-                    append("cut", "Cut", "cut");
-                    append("copy", "Copy", "copy");
-                    append("paste", "Paste", "clipboard");
-                    append("select_all", "Select all", "text-selection");
+                    if (!providedActions) {
+                        append("cut", "Cut", "cut");
+                        append("copy", "Copy", "copy");
+                        append("paste", "Paste", "clipboard");
+                        append("select_all", "Select all", "text-selection");
+                    }
                 } else if (!providedActions && !info.selectedText.isEmpty()) {
                     append("copy", "Copy", "copy");
                 }
@@ -2553,7 +2866,7 @@ namespace eden::core {
                     append("reload", "Reload", "refresh");
                     append("view_source", "View page source", "code");
                     if (view->capabilities() & engine::EngineView::DockedDevtools) {
-                        append("inspect", "Inspect", "code");
+                        append("inspect", "Inspect", "programming");
                     }
                 }
                 m_pageContextMenuActions = std::move(actions);
@@ -2759,8 +3072,14 @@ namespace eden::core {
     void WindowController::executeCommand(const QString &id) {
         if (id == "new_tab") {
             newTabAndFocusOmnibox();
+        } else if (id == "new_window") {
+            openNewWindow(false);
         } else if (id == "close_tab") {
             closeTab(m_activeIndex);
+        } else if (id == "close_window") {
+            if (m_window) {
+                m_window->close();
+            }
         } else if (id == "restore_tab") {
             if (m_tabs && m_tabs->undoClose()) {
                 setActiveIndex(std::max(0, m_tabs->rowCount() - 1));
@@ -2769,12 +3088,55 @@ namespace eden::core {
             setActiveIndex((m_activeIndex + 1) % m_tabs->rowCount());
         } else if (id == "previous_tab" && m_tabs && m_tabs->rowCount() > 0) {
             setActiveIndex((m_activeIndex + m_tabs->rowCount() - 1) % m_tabs->rowCount());
+        } else if (id.startsWith("activate_tab_") && m_tabs) {
+            bool valid = false;
+            const int tab = id.sliced(13).toInt(&valid) - 1;
+            if (valid && tab >= 0 && tab < m_tabs->rowCount()) {
+                setActiveIndex(tab);
+            }
+        } else if (id == "activate_last_tab" && m_tabs && m_tabs->rowCount() > 0) {
+            setActiveIndex(m_tabs->rowCount() - 1);
+        } else if (id == "move_tab_left" && m_tabs && m_activeIndex > 0) {
+            m_tabs->moveTab(m_activeIndex, m_activeIndex - 1);
+        } else if (id == "move_tab_right" && m_tabs && m_activeIndex >= 0 && m_activeIndex + 1 < m_tabs->rowCount()) {
+            m_tabs->moveTab(m_activeIndex, m_activeIndex + 1);
+        } else if (id == "back") {
+            back();
+        } else if (id == "forward") {
+            forward();
+        } else if (id == "home") {
+            if (m_context) {
+                navigate(m_context->settings()->homePageDestination());
+            }
         } else if (id == "focus_omnibox") {
             emit focusOmniboxRequested();
+        } else if (id == "reload") {
+            reload();
+        } else if (id == "reload_bypass_cache") {
+            reloadBypassingCache();
+        } else if (id == "zoom_in" || id == "zoom_out" || id == "zoom_reset") {
+            if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+                const qreal factor =
+                    id == "zoom_reset" ? 1.0 : steppedZoomFactor(view->zoomFactor(), id == "zoom_in" ? 1 : -1);
+                view->setZoomFactor(factor);
+                emit transientMessageRequested(QStringLiteral("Zoom: %1%").arg(qRound(factor * 100)));
+            }
         } else if (id == "bookmark") {
             toggleBookmark();
+        } else if (id == "bookmarks") {
+            setOpenPane("bookmarks");
         } else if (id == "find") {
             setFindVisible(true);
+        } else if (id == "find_next" || id == "find_previous") {
+            if (m_findText.isEmpty()) {
+                setFindVisible(true);
+            } else {
+                find(m_findText, id == "find_previous", m_findCaseSensitive);
+            }
+        } else if (id == "view_source") {
+            if (engine::EngineView *view = m_tabs ? m_tabs->engineViewAt(m_activeIndex) : nullptr) {
+                view->executeContextMenuCommand("view_source");
+            }
         } else if (id == "private_window") {
             openNewWindow(true);
         } else if (id == "fullscreen") {

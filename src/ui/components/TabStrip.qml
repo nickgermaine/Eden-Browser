@@ -27,6 +27,8 @@ Item {
     signal systemMoveRequested
     signal toggleMaximizedRequested
 
+    onRenderedTabWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
+    onTabCountChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     onRenderedTabsContentWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     onWidthChanged: navigator.scheduleRelayout(overflowing, controller.activeIndex)
     objectName: "tabDropArea"
@@ -80,16 +82,6 @@ Item {
         onWidthChanged: navigator.scheduleRelayout(strip.overflowing, currentIndex)
         Component.onCompleted: navigator.scheduleRelayout(strip.overflowing, currentIndex)
 
-        add: Transition {
-            NumberAnimation {
-                property: "opacity"
-                from: 0
-                to: 1
-                duration: Theme.shortDuration
-                easing.type: Easing.OutCubic
-            }
-        }
-
         remove: Transition {
             NumberAnimation {
                 property: "opacity"
@@ -120,7 +112,7 @@ Item {
             }
         }
 
-        displaced: Transition {
+        moveDisplaced: Transition {
             NumberAnimation {
                 properties: "x,y"
                 duration: Theme.shortDuration
@@ -155,6 +147,19 @@ Item {
             readonly property bool activeTab: ListView.isCurrentItem
             readonly property bool dragging: strip.controller.tabDragIndex === index
             property bool previewSuppressed: false
+
+            ListView.onAdd: insertionFade.restart()
+
+            NumberAnimation {
+                id: insertionFade
+
+                target: tab
+                property: "opacity"
+                from: 0
+                to: 1
+                duration: Theme.shortDuration
+                easing.type: Easing.OutCubic
+            }
 
             width: isPinned ? Theme.pinnedTabWidth : strip.renderedTabWidth
             height: 36
@@ -214,6 +219,7 @@ Item {
                     muted: tab.isMuted
                     audible: tab.isAudible
                     internalPage: tab.internalPage
+                    discarded: tab.discarded
                 }
 
                 Text {

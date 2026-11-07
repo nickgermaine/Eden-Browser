@@ -39,8 +39,8 @@ namespace eden::engine {
         if (backend == Backend::Cef) {
             return "eden-engine-cef";
         }
-        if (backend == Backend::QtWebEngine) {
-            return "eden-engine-qtwebengine";
+        if (backend == Backend::Wpe) {
+            return "eden-engine-wpe";
         }
         return {};
     }

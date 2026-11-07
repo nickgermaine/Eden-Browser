@@ -22,6 +22,10 @@ Window {
 
     }
 
+    ChromeBackground {
+        anchors.fill: parent
+    }
+
     Loader {
         id: devToolsLoader
 
@@ -49,7 +53,7 @@ Window {
             EdenMenu {
                 parent: devToolsWindow.contentItem
                 x: Math.max(8, Math.min(devToolsWindow.width - width - 8, Theme.contentBorderWidth + controller.pageContextMenuPosition.x))
-                y: Math.max(8, Math.min(devToolsWindow.height - height - 8, 52 + Theme.contentBorderWidth + controller.pageContextMenuPosition.y))
+                y: Math.max(8, Math.min(devToolsWindow.height - height - 8, (controller.currentEngine && controller.currentEngine.devToolsSelfFramed ? 0 : 52) + Theme.contentBorderWidth + controller.pageContextMenuPosition.y))
                 preferredWidth: 280
                 maximumHeight: devToolsWindow.height - 16
                 z: 20

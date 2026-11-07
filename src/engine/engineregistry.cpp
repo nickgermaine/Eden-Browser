@@ -21,8 +21,8 @@ namespace eden::engine {
 #if EDEN_ENGINE_CEF
             {Backend::Cef, "cef", "Blink", false},
 #endif
-#if EDEN_ENGINE_QTWEBENGINE
-            {Backend::QtWebEngine, "qtwebengine", "Blink (Qt)", false},
+#if EDEN_ENGINE_WPE
+            {Backend::Wpe, "wpe", "WebKit", false},
 #endif
         });
         return &registry;

@@ -150,7 +150,7 @@ void CookieHandoffTest::identityMatchesSpecTuple() {
 void CookieHandoffTest::handoffReplacesDestinationJarExactly() {
     const QString profileId = QStringLiteral("11111111-1111-4111-8111-111111111111");
     FakeCookieAdapter source(profileId, eden::engine::Backend::Cef);
-    FakeCookieAdapter destination(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter destination(profileId, eden::engine::Backend::Wpe);
     source.jar = {makeCookie("session", "abc", "slack.com", true, true), makeCookie("theme", "dark", "slack.com")};
     destination.jar = {makeCookie("stale", "old", "slack.com")};
     CookieHandoffCoordinator coordinator(profileId);
@@ -176,7 +176,7 @@ void CookieHandoffTest::handoffReplacesDestinationJarExactly() {
 void CookieHandoffTest::logoutPropagatesEmptyJar() {
     const QString profileId = QStringLiteral("11111111-1111-4111-8111-111111111111");
     FakeCookieAdapter source(profileId, eden::engine::Backend::Cef);
-    FakeCookieAdapter destination(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter destination(profileId, eden::engine::Backend::Wpe);
     destination.jar = {makeCookie("session", "still-signed-in", "slack.com")};
     CookieHandoffCoordinator coordinator(profileId);
     bool completed = false;
@@ -214,10 +214,10 @@ void CookieHandoffTest::rejectsPrivateEqualBackendCrossProfileAndUnsupported() {
         return std::shared_ptr<eden::engine::EngineProfile>(adapter, [](eden::engine::EngineProfile *) {});
     };
     FakeCookieAdapter privateSource(profileId, eden::engine::Backend::Cef, true);
-    FakeCookieAdapter destination(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter destination(profileId, eden::engine::Backend::Wpe);
     expectRejection(lease(&privateSource), lease(&destination), QStringLiteral("private_mode"));
 
-    FakeCookieAdapter sameBackendSource(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter sameBackendSource(profileId, eden::engine::Backend::Wpe);
     expectRejection(lease(&sameBackendSource), lease(&destination), QStringLiteral("equal_backend"));
 
     FakeCookieAdapter foreignSource(otherProfileId, eden::engine::Backend::Cef);
@@ -231,7 +231,7 @@ void CookieHandoffTest::rejectsPrivateEqualBackendCrossProfileAndUnsupported() {
 void CookieHandoffTest::serializesRequestsInOrder() {
     const QString profileId = QStringLiteral("11111111-1111-4111-8111-111111111111");
     FakeCookieAdapter blink(profileId, eden::engine::Backend::Cef);
-    FakeCookieAdapter qt(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter wpe(profileId, eden::engine::Backend::Wpe);
     FakeCookieAdapter servo(profileId, eden::engine::Backend::Servo);
     blink.jar = {makeCookie("winner", "blink", "example.com")};
     servo.jar = {makeCookie("winner", "servo", "example.com")};
@@ -240,24 +240,24 @@ void CookieHandoffTest::serializesRequestsInOrder() {
         return std::shared_ptr<eden::engine::EngineProfile>(adapter, [](eden::engine::EngineProfile *) {});
     };
     QStringList completionOrder;
-    coordinator.requestHandoff(lease(&blink), lease(&qt), [&completionOrder](ProfileError, const QString &) {
+    coordinator.requestHandoff(lease(&blink), lease(&wpe), [&completionOrder](ProfileError, const QString &) {
         completionOrder.append("first");
     });
-    coordinator.requestHandoff(lease(&servo), lease(&qt), [&completionOrder](ProfileError, const QString &) {
+    coordinator.requestHandoff(lease(&servo), lease(&wpe), [&completionOrder](ProfileError, const QString &) {
         completionOrder.append("second");
     });
     QCOMPARE(coordinator.pendingCount(), 2);
     QTRY_COMPARE(completionOrder.size(), 2);
     QCOMPARE(completionOrder, QStringList({"first", "second"}));
-    QCOMPARE(qt.jar.size(), 1);
-    QCOMPARE(qt.jar.constFirst().value, QByteArray("servo"));
+    QCOMPARE(wpe.jar.size(), 1);
+    QCOMPARE(wpe.jar.constFirst().value, QByteArray("servo"));
     QVERIFY(!coordinator.active());
 }
 
 void CookieHandoffTest::deadlineCompletesExactlyOnceAndDropsLateCallback() {
     const QString profileId = QStringLiteral("11111111-1111-4111-8111-111111111111");
     FakeCookieAdapter source(profileId, eden::engine::Backend::Cef);
-    FakeCookieAdapter destination(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter destination(profileId, eden::engine::Backend::Wpe);
     source.deferExport = true;
     destination.jar = {makeCookie("existing", "kept", "example.com")};
     CookieHandoffCoordinator coordinator(profileId);
@@ -287,7 +287,7 @@ void CookieHandoffTest::deadlineCompletesExactlyOnceAndDropsLateCallback() {
 void CookieHandoffTest::blockedCoordinatorRejectsNewRequests() {
     const QString profileId = QStringLiteral("11111111-1111-4111-8111-111111111111");
     FakeCookieAdapter source(profileId, eden::engine::Backend::Cef);
-    FakeCookieAdapter destination(profileId, eden::engine::Backend::QtWebEngine);
+    FakeCookieAdapter destination(profileId, eden::engine::Backend::Wpe);
     CookieHandoffCoordinator coordinator(profileId);
     coordinator.setBlocked(true);
     bool rejected = false;

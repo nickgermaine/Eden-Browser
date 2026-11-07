@@ -105,7 +105,7 @@ namespace eden::core {
 #if EDEN_ENGINE_CEF
         QString m_defaultEngine = "cef";
 #else
-        QString m_defaultEngine = "qtwebengine";
+        QString m_defaultEngine = "wpe";
 #endif
         bool m_customSearchEngine = false;
     };

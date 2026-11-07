@@ -34,11 +34,29 @@ namespace {
     }
 
     void allowCleanup(const eden::core::ProfilePaths::Roots &roots) {
-        QFile::setPermissions(roots.dataRoot + "/webengine", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
-        QFile::setPermissions(roots.cacheRoot + "/webengine", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
         QFile::setPermissions(roots.dataRoot + "/engine-data", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
         QFile::setPermissions(roots.cacheRoot + "/profiles", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     }
+
+    class ScopedEnvironment {
+      public:
+        ScopedEnvironment(const char *name, const QByteArray &value)
+            : m_name(name),
+              m_previous(qEnvironmentVariable(name)) {
+            qputenv(name, value);
+        }
+        ~ScopedEnvironment() {
+            if (m_previous.isEmpty()) {
+                qunsetenv(m_name);
+            } else {
+                qputenv(m_name, m_previous.toUtf8());
+            }
+        }
+
+      private:
+        const char *m_name;
+        QString m_previous;
+    };
 }
 
 extern "C" gchar *secret_password_lookup_sync(const SecretSchema *, GCancellable *, GError **error, ...) {
@@ -93,12 +111,10 @@ void EngineStorageTest::migrationPersistenceAndRevocation() {
     QVERIFY(directory.isValid());
     const eden::core::ProfilePaths::Roots roots{directory.filePath("data"), directory.filePath("cache")};
     const QString file = roots.dataRoot + "/engine-data/cef/profiles/fixture/Local Storage/secret-name";
-    const QString cache = roots.cacheRoot + "/profiles/fixture/qtwebengine/secret-cache";
+    const QString cache = roots.cacheRoot + "/profiles/fixture/wpe/secret-cache";
     const QByteArray marker("eden-private-engine-canary-7364eeff-2947");
     QVERIFY(writeFile(file, marker));
     QVERIFY(writeFile(cache, marker));
-    QVERIFY(writeFile(roots.dataRoot + "/webengine/legacy-site-data", marker));
-    QVERIFY(writeFile(roots.cacheRoot + "/webengine/legacy-site-cache", marker));
     eden::core::EngineStorage storage;
     std::optional<QString> result;
     QStringList progressMessages;
@@ -118,14 +134,12 @@ void EngineStorageTest::migrationPersistenceAndRevocation() {
     QVERIFY2(result->isEmpty(), qPrintable(*result));
     QVERIFY(progressMessages.contains("Encrypting existing site data"));
     QVERIFY(progressMessages.contains("Finishing verified storage migration"));
-    QVERIFY(progressBytes.last() >= marker.size() * 4);
+    QVERIFY(progressBytes.last() >= marker.size() * 2);
     for (qsizetype i = 1; i < progressBytes.size(); ++i) {
         QVERIFY(progressBytes.at(i) >= progressBytes.at(i - 1));
     }
     QVERIFY(storage.protects(file));
     QVERIFY(storage.protects(cache));
-    QVERIFY(storage.protects(roots.dataRoot + "/webengine/legacy-site-data"));
-    QVERIFY(storage.protects(roots.cacheRoot + "/webengine/legacy-site-cache"));
     QVERIFY(!storage.protects(directory.filePath("unprotected")));
     QCOMPARE(readFile(file), marker);
     QCOMPARE(readFile(cache), marker);
@@ -134,11 +148,7 @@ void EngineStorageTest::migrationPersistenceAndRevocation() {
     storage.shutdown();
     QVERIFY(!storage.protects(file));
     QVERIFY(!writeFile(file, "plaintext-fallback"));
-    for (const QString &cipher :
-         {roots.dataRoot + "/engine-data.encrypted",
-          roots.cacheRoot + "/profiles.encrypted",
-          roots.dataRoot + "/webengine.encrypted",
-          roots.cacheRoot + "/webengine.encrypted"}) {
+    for (const QString &cipher : {roots.dataRoot + "/engine-data.encrypted", roots.cacheRoot + "/profiles.encrypted"}) {
         QDirIterator entries(cipher, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
         while (entries.hasNext()) {
             const QString path = entries.next();
@@ -202,7 +212,8 @@ void EngineStorageTest::preservesSourceAndRetriesMigration() {
 void EngineStorageTest::resumesInterruptedLegacyCopy() {
     QTemporaryDir directory;
     const eden::core::ProfilePaths::Roots roots{directory.filePath("data"), directory.filePath("cache")};
-    const QString source = roots.dataRoot + "/webengine";
+    const ScopedEnvironment dataHome("XDG_DATA_HOME", QFile::encodeName(roots.dataRoot));
+    const QString source = roots.dataRoot + "/eden/cef/default";
     QVERIFY(writeFile(source + "/one", "first-complete-record"));
     QVERIFY(writeFile(source + "/sub/two", "second-complete-record"));
     eden::core::EngineStorage storage;
@@ -212,7 +223,7 @@ void EngineStorageTest::resumesInterruptedLegacyCopy() {
     QVERIFY2(result->isEmpty(), qPrintable(*result));
     const eden::core::ProfilePaths paths(roots, eden::core::ProfileId::generate());
     QVERIFY(paths.ensureBaseDirectories());
-    const QString target = paths.engineDataDirectory("qtwebengine");
+    const QString target = paths.engineDataDirectory("cef");
     QVERIFY(writeFile(target + "/one", "incomplete"));
     const QJsonObject journal{
         {"version", 1},
@@ -222,7 +233,7 @@ void EngineStorageTest::resumesInterruptedLegacyCopy() {
     QCOMPARE(eden::core::ProfileMigration::resume(paths), eden::core::ProfileError::None);
     QCOMPARE(readFile(target + "/one"), QByteArray("first-complete-record"));
     QCOMPARE(readFile(target + "/sub/two"), QByteArray("second-complete-record"));
-    QVERIFY(QDir(source).isEmpty());
+    QVERIFY(!QFileInfo::exists(source));
     QVERIFY(storage.protects(target));
     QCOMPARE(eden::core::ProfileMigration::resume(paths), eden::core::ProfileError::None);
     QCOMPARE(readFile(target + "/one"), QByteArray("first-complete-record"));

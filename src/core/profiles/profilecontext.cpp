@@ -2,7 +2,9 @@
 
 #include "core/bookmarks/bookmarkstore.h"
 #include "core/downloads/downloadmanager.h"
+#include "core/favicons/faviconstore.h"
 #include "core/history/historystore.h"
+#include "core/history/recentlyclosedstore.h"
 #include "core/permissions/permissionstore.h"
 #include "core/profiles/cookiehandoffcoordinator.h"
 #include "core/profiles/profiledatabase.h"
@@ -35,6 +37,8 @@ namespace eden::core {
           m_history(std::make_unique<HistoryStore>(paths.databasePath())),
           m_bookmarks(std::make_unique<BookmarkStore>(paths.databasePath())),
           m_downloads(std::make_unique<DownloadManager>(paths.databasePath())),
+          m_favicons(std::make_unique<FaviconStore>(paths.databasePath())),
+          m_recentlyClosed(std::make_unique<RecentlyClosedStore>(paths.databasePath())),
           m_sessions(std::make_unique<SessionStore>(paths.sessionPath())),
           m_cookieHandoff(std::make_unique<CookieHandoffCoordinator>(record.id.toString())) {
         m_credentialVault = std::make_unique<passwords::CredentialVault>(paths.vaultPath(), record.id.toString(), this);
@@ -129,6 +133,8 @@ namespace eden::core {
         if (!m_history->isInitialized() || !m_bookmarks->isInitialized() || !permissionsReady || !downloadsReady) {
             return ProfileError::DatabaseOpenFailed;
         }
+        m_favicons->initialize(databaseKey);
+        m_recentlyClosed->initialize(databaseKey);
         m_activated = true;
         return ProfileError::None;
     }
@@ -194,6 +200,14 @@ namespace eden::core {
 
     DownloadManager *ProfileContext::downloads() const {
         return m_downloads.get();
+    }
+
+    FaviconStore *ProfileContext::favicons() const {
+        return m_favicons.get();
+    }
+
+    RecentlyClosedStore *ProfileContext::recentlyClosed() const {
+        return m_recentlyClosed.get();
     }
 
     SessionStore *ProfileContext::sessions() const {
@@ -324,6 +338,8 @@ namespace eden::core {
         m_bookmarks.reset();
         m_permissions.reset();
         m_downloads.reset();
+        m_favicons.reset();
+        m_recentlyClosed.reset();
     }
 
     void ProfileContext::saveSessionNow() {

@@ -8,6 +8,7 @@ T.Button {
     property string iconName
     property string iconFamily: "solar"
     property bool filledIcon: false
+    property real iconRotation: 0
     property int horizontalContentAlignment: text.length > 0 ? Qt.AlignLeft : Qt.AlignHCenter
     property int buttonRadius: Theme.controlRadius
 
@@ -31,6 +32,14 @@ T.Button {
                 name: control.iconName
                 family: control.iconFamily
                 filled: control.filledIcon
+                rotation: control.iconRotation
+
+                Behavior on rotation {
+                    NumberAnimation {
+                        duration: Theme.shortDuration
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 color: control.enabled ? Theme.iconColor : Qt.alpha(Theme.disabledIconColor, Theme.disabledIconOpacity)
                 anchors.verticalCenter: parent.verticalCenter
             }
