@@ -22,6 +22,7 @@
 #include <QKeyEvent>
 #include <QLibrary>
 #include <QMimeData>
+#include <QPointingDevice>
 #include <QProcess>
 #include <QQuickWindow>
 #include <QRegularExpression>
@@ -39,6 +40,7 @@
 #include <QTest>
 #include <QThread>
 #include <QTimer>
+#include <QWheelEvent>
 #include <dlfcn.h>
 #include <signal.h>
 #include <unistd.h>
@@ -98,6 +100,134 @@ class WpeBackendTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void wheelNotchesScrollByLineSteps() {
+        const QPointF position(40, 40);
+        const auto wheel = [&position](
+                               QPoint pixelDelta,
+                               QPoint angleDelta,
+                               Qt::ScrollPhase phase,
+                               Qt::MouseEventSource source,
+                               const QPointingDevice *device
+                           ) {
+            return QWheelEvent(
+                position,
+                position,
+                pixelDelta,
+                angleDelta,
+                Qt::NoButton,
+                Qt::NoModifier,
+                phase,
+                false,
+                source,
+                device
+            );
+        };
+        const QPointingDevice *mouse = QPointingDevice::primaryPointingDevice();
+        const QPointingDevice touchpad(
+            "Eden test touchpad",
+            4242,
+            QInputDevice::DeviceType::TouchPad,
+            QPointingDevice::PointerType::Finger,
+            QInputDevice::Capability::Position | QInputDevice::Capability::Scroll,
+            1,
+            0
+        );
+
+        const QPointingDevice waylandGestureTouchpad(
+            "touchpad",
+            0,
+            QInputDevice::DeviceType::TouchPad,
+            QPointingDevice::PointerType::Finger,
+            QInputDevice::Capability::Position | QInputDevice::Capability::PixelScroll |
+                QInputDevice::Capability::Scroll,
+            10,
+            0
+        );
+        constexpr bool wayland = false;
+        constexpr bool x11 = true;
+
+        const WpeScrollDelta recordedGnomeNotch = wpeScrollDelta(
+            wheel(
+                QPoint(0, -10),
+                QPoint(0, -120),
+                Qt::NoScrollPhase,
+                Qt::MouseEventNotSynthesized,
+                &waylandGestureTouchpad
+            ),
+            wayland
+        );
+        QVERIFY(!recordedGnomeNotch.precise);
+        QCOMPARE(recordedGnomeNotch.delta, QPointF(0, -1));
+
+        const WpeScrollDelta waylandNotch = wpeScrollDelta(
+            wheel(QPoint(0, -10), QPoint(0, -120), Qt::NoScrollPhase, Qt::MouseEventNotSynthesized, mouse),
+            wayland
+        );
+        QVERIFY(!waylandNotch.precise);
+        QCOMPARE(waylandNotch.delta, QPointF(0, -1));
+
+        const WpeScrollDelta highResolutionNotch = wpeScrollDelta(
+            wheel(
+                QPoint(0, 3),
+                QPoint(0, 30),
+                Qt::NoScrollPhase,
+                Qt::MouseEventNotSynthesized,
+                &waylandGestureTouchpad
+            ),
+            wayland
+        );
+        QVERIFY(!highResolutionNotch.precise);
+        QCOMPARE(highResolutionNotch.delta, QPointF(0, 0.25));
+
+        const WpeScrollDelta x11Notch = wpeScrollDelta(
+            wheel(QPoint(), QPoint(120, 0), Qt::NoScrollPhase, Qt::MouseEventNotSynthesized, mouse),
+            x11
+        );
+        QVERIFY(!x11Notch.precise);
+        QCOMPARE(x11Notch.delta, QPointF(1, 0));
+
+        const WpeScrollDelta waylandFinger = wpeScrollDelta(
+            wheel(
+                QPoint(0, -7),
+                QPoint(0, -84),
+                Qt::ScrollUpdate,
+                Qt::MouseEventSynthesizedBySystem,
+                &waylandGestureTouchpad
+            ),
+            wayland
+        );
+        QVERIFY(waylandFinger.precise);
+        QCOMPARE(waylandFinger.delta, QPointF(0, -7));
+
+        const WpeScrollDelta waylandFingerEnd = wpeScrollDelta(
+            wheel(QPoint(), QPoint(), Qt::ScrollEnd, Qt::MouseEventSynthesizedBySystem, &waylandGestureTouchpad),
+            wayland
+        );
+        QVERIFY(waylandFingerEnd.precise);
+        QCOMPARE(waylandFingerEnd.delta, QPointF());
+
+        const WpeScrollDelta waylandContinuous = wpeScrollDelta(
+            wheel(QPoint(0, 4), QPoint(0, 48), Qt::NoScrollPhase, Qt::MouseEventSynthesizedBySystem, mouse),
+            wayland
+        );
+        QVERIFY(waylandContinuous.precise);
+        QCOMPARE(waylandContinuous.delta, QPointF(0, 4));
+
+        const WpeScrollDelta x11Touchpad = wpeScrollDelta(
+            wheel(QPoint(0, 12), QPoint(0, 60), Qt::NoScrollPhase, Qt::MouseEventNotSynthesized, &touchpad),
+            x11
+        );
+        QVERIFY(x11Touchpad.precise);
+        QCOMPARE(x11Touchpad.delta, QPointF(0, 12));
+
+        const WpeScrollDelta libinputTouchpad = wpeScrollDelta(
+            wheel(QPoint(), QPoint(0, 60), Qt::NoScrollPhase, Qt::MouseEventNotSynthesized, &touchpad),
+            x11
+        );
+        QVERIFY(!libinputTouchpad.precise);
+        QCOMPARE(libinputTouchpad.delta, QPointF(0, 0.5));
+    }
+
     void initTestCase() {
         const bool jscPolicyWasSet = qEnvironmentVariableIsSet("JSC_jitPolicyScale");
         const bool tunedDefaultsDisabled = qEnvironmentVariable("EDEN_WPE_TUNED_DEFAULTS") == "0";
@@ -981,7 +1111,10 @@ true
         window.resize(700, 500);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
+        );
         const bool maximizedFirst = qEnvironmentVariableIntValue("EDEN_TEST_DISPLAY_FRAMES_MAXIMIZE_FIRST") > 0;
         if (maximizedFirst) {
             QFile marker(QDir(control).filePath("maximize"));
@@ -995,7 +1128,11 @@ true
         options.insert("codec", qEnvironmentVariable("EDEN_TEST_DISPLAY_FRAMES_CODEC"));
         options.insert("hint", qEnvironmentVariable("EDEN_TEST_DISPLAY_FRAMES_HINT"));
         options.insert("maximizedFirst", maximizedFirst);
-        evaluate(view, "window.displayFramesOptions = " + QString::fromUtf8(QJsonDocument(options).toJson(QJsonDocument::Compact)) + "; true");
+        evaluate(
+            view,
+            "window.displayFramesOptions = " +
+                QString::fromUtf8(QJsonDocument(options).toJson(QJsonDocument::Compact)) + "; true"
+        );
         evaluate(view, R"JS(
 window.displayFrames = null;
 window.displayFramesStage = 'waiting for the share button';
@@ -1239,7 +1376,12 @@ document.title = 'display-frames';
             }
             QTest::qWait(100);
         }
-        const QString frames = evaluate(view, "JSON.stringify(window.displayFrames || {error: 'timed out', stage: window.displayFramesStage, partial: window.displayFramesPartial})").toString();
+        const QString frames = evaluate(
+                                   view,
+                                   "JSON.stringify(window.displayFrames || {error: 'timed out', stage: "
+                                   "window.displayFramesStage, partial: window.displayFramesPartial})"
+        )
+                                   .toString();
         qInfo("Display capture frames: %s", qPrintable(frames));
         const QJsonObject result = QJsonDocument::fromJson(frames.toUtf8()).object();
         QVERIFY2(!result.contains("error"), qPrintable(frames));
@@ -1256,13 +1398,13 @@ document.title = 'display-frames';
         window.resize(700, 500);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
         );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         view.load(QUrl(page));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("microphone-level"), 15000);
         QElapsedTimer waited;
@@ -1270,7 +1412,11 @@ document.title = 'display-frames';
         while (!evaluate(view, "!!window.microphoneLevel").toBool() && waited.elapsed() < 90000) {
             QTest::qWait(200);
         }
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.microphoneLevel || {error: 'no result'})").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(
+                evaluate(view, "JSON.stringify(window.microphoneLevel || {error: 'no result'})").toString().toUtf8()
+            )
+                .object();
         qInfo().noquote() << "Microphone level" << QJsonDocument(result).toJson(QJsonDocument::Compact);
         QVERIFY2(!result.contains("error"), qPrintable(result.value("error").toString()));
     }
@@ -1449,12 +1595,9 @@ window.voiceResult = null;
         auto *settings = webkit_web_view_get_settings(view.nativeView());
         webkit_settings_set_enable_mock_capture_devices(settings, TRUE);
         webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
-        );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         bool terminated = false;
         g_signal_connect(
             view.nativeView(),
@@ -1467,16 +1610,26 @@ window.voiceResult = null;
         view.load(url("camera-call"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("camera-call"), 15000);
         evaluate(view, cameraCallScript());
-        QTRY_VERIFY_WITH_TIMEOUT(!terminated && evaluate(view, "!!(window.cameraCall && (window.cameraCall.ready || window.cameraCall.error))").toBool(), 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !terminated &&
+                evaluate(view, "!!(window.cameraCall && (window.cameraCall.ready || window.cameraCall.error))")
+                    .toBool(),
+            20000
+        );
         QCOMPARE(evaluate(view, "String(window.cameraCall.error || '')").toString(), QString());
         const auto sample = [&]() -> QJsonObject {
-            evaluate(view, "window.cameraSample = null; window.cameraCall.sample().then(value => window.cameraSample = value)");
+            evaluate(
+                view,
+                "window.cameraSample = null; window.cameraCall.sample().then(value => window.cameraSample = value)"
+            );
             QElapsedTimer waited;
             waited.start();
             while (!terminated && !evaluate(view, "!!window.cameraSample").toBool() && waited.elapsed() < 5000) {
                 QTest::qWait(50);
             }
-            return QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.cameraSample || {})").toString().toUtf8())
+            return QJsonDocument::fromJson(
+                       evaluate(view, "JSON.stringify(window.cameraSample || {})").toString().toUtf8()
+            )
                 .object();
         };
         QTest::qWait(4000);
@@ -1500,12 +1653,22 @@ window.voiceResult = null;
             QTest::qWait(3000);
             QVERIFY2(!terminated, qPrintable(QString("The web process terminated after: %1").arg(step)));
             const QJsonObject current = sample();
-            qInfo().noquote() << "Camera call after" << (step.isEmpty() ? QString("idle") : step) << QJsonDocument(current).toJson(QJsonDocument::Compact);
+            qInfo().noquote() << "Camera call after" << (step.isEmpty() ? QString("idle") : step)
+                              << QJsonDocument(current).toJson(QJsonDocument::Compact);
             QVERIFY2(!current.isEmpty(), qPrintable(QString("No call statistics after: %1").arg(step)));
-            QVERIFY2(current.value("selfTime").toDouble() > previous.value("selfTime").toDouble() + 1, qPrintable(QString("The self view stalled after: %1").arg(step)));
-            QVERIFY2(current.value("audioBytes").toDouble() > previous.value("audioBytes").toDouble(), qPrintable(QString("Audio stopped after: %1").arg(step)));
+            QVERIFY2(
+                current.value("selfTime").toDouble() > previous.value("selfTime").toDouble() + 1,
+                qPrintable(QString("The self view stalled after: %1").arg(step))
+            );
+            QVERIFY2(
+                current.value("audioBytes").toDouble() > previous.value("audioBytes").toDouble(),
+                qPrintable(QString("Audio stopped after: %1").arg(step))
+            );
             if (!step.contains("replaceTrack(null)")) {
-                QVERIFY2(current.value("remoteFrames").toInt() > previous.value("remoteFrames").toInt(), qPrintable(QString("Remote video stalled after: %1").arg(step)));
+                QVERIFY2(
+                    current.value("remoteFrames").toInt() > previous.value("remoteFrames").toInt(),
+                    qPrintable(QString("Remote video stalled after: %1").arg(step))
+                );
             }
             previous = current;
         }
@@ -1522,7 +1685,10 @@ window.voiceResult = null;
         window.resize(400, 300);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
+        );
         view.load(url("audio-context-lifecycle"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("audio-context-lifecycle"), 15000);
         evaluate(view, R"JS(window.contextLifecycle = null;
@@ -1636,16 +1802,37 @@ window.contextLifecycleStage = 'starting';
         while (!evaluate(view, "!!window.contextLifecycle").toBool() && waited.elapsed() < 180000) {
             QTest::qWait(100);
         }
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.contextLifecycle || {stage: window.contextLifecycleStage, steps: window.contextLifecycleSteps})").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(evaluate(
+                                        view,
+                                        "JSON.stringify(window.contextLifecycle || {stage: "
+                                        "window.contextLifecycleStage, steps: window.contextLifecycleSteps})"
+                                    )
+                                        .toString()
+                                        .toUtf8())
+                .object();
         qInfo().noquote() << "AudioContext lifecycle" << QJsonDocument(result).toJson(QJsonDocument::Compact);
-        QVERIFY2(!result.contains("error") && !result.contains("stage"), qPrintable(QString("The lifecycle fixture stopped at %1: %2").arg(result.value("stage").toString(), result.value("error").toString())));
+        QVERIFY2(
+            !result.contains("error") && !result.contains("stage"),
+            qPrintable(QString("The lifecycle fixture stopped at %1: %2")
+                           .arg(result.value("stage").toString(), result.value("error").toString()))
+        );
         const QJsonObject lateActivation = result.value("single").toObject().value("activation").toObject();
-        QVERIFY2(!lateActivation.value("isActive").toBool() && lateActivation.value("hasBeenActive").toBool(), "The fixture must run after transient activation expired, with sticky activation left");
+        QVERIFY2(
+            !lateActivation.value("isActive").toBool() && lateActivation.value("hasBeenActive").toBool(),
+            "The fixture must run after transient activation expired, with sticky activation left"
+        );
         const auto expectRunning = [&](const QString &name, const QJsonObject &step) {
-            QVERIFY2(step.value("outcome").toString() == "resumed" && step.value("state").toString() == "running" && step.value("renders").toBool(),
-                qPrintable(QString("%1: resume() gave %2, state %3, rendering %4").arg(name, step.value("outcome").toString(), step.value("state").toString()).arg(step.value("renders").toBool())));
+            QVERIFY2(
+                step.value("outcome").toString() == "resumed" && step.value("state").toString() == "running" &&
+                    step.value("renders").toBool(),
+                qPrintable(QString("%1: resume() gave %2, state %3, rendering %4")
+                               .arg(name, step.value("outcome").toString(), step.value("state").toString())
+                               .arg(step.value("renders").toBool()))
+            );
         };
-        for (const char *name : {"first", "single", "concurrent", "afterPair", "afterTrio", "overlapping", "whileOneRuns", "last"}) {
+        for (const char *name :
+             {"first", "single", "concurrent", "afterPair", "afterTrio", "overlapping", "whileOneRuns", "last"}) {
             expectRunning(name, result.value(name).toObject());
         }
         for (const char *name : {"trio", "resumedPair"}) {
@@ -1681,7 +1868,10 @@ window.contextLifecycleStage = 'starting';
         window.resize(700, 500);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
+        );
         bool terminated = false;
         g_signal_connect(
             view.nativeView(),
@@ -1802,9 +1992,12 @@ window.resampledAudioStage = 'starting';
         QVERIFY2(!terminated, "The web process terminated while sending resampled audio");
         QVERIFY2(
             evaluate(view, "!!window.resampledAudio").toBool(),
-            qPrintable(QString("The audio fixture stalled at: %1").arg(evaluate(view, "String(window.resampledAudioStage)").toString()))
+            qPrintable(QString("The audio fixture stalled at: %1")
+                           .arg(evaluate(view, "String(window.resampledAudioStage)").toString()))
         );
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.resampledAudio)").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.resampledAudio)").toString().toUtf8())
+                .object();
         qInfo().noquote() << "Resampled audio" << QJsonDocument(result).toJson(QJsonDocument::Compact);
         QCOMPARE(result.value("error").toString(), QString());
         const QJsonObject resampled = result.value("44100").toObject();
@@ -1813,9 +2006,15 @@ window.resampledAudioStage = 'starting';
         QCOMPARE(native.value("contextRate").toInt(), 48000);
         for (const QJsonObject &run : {resampled, native}) {
             QCOMPARE(run.value("connection").toString(), QString("connected"));
-            QVERIFY2(run.value("quietestLevel").toDouble() > 0.1, qPrintable(QString("The tone arrived at level %1").arg(run.value("quietestLevel").toDouble())));
+            QVERIFY2(
+                run.value("quietestLevel").toDouble() > 0.1,
+                qPrintable(QString("The tone arrived at level %1").arg(run.value("quietestLevel").toDouble()))
+            );
             for (const QJsonValue &peak : run.value("peakFrequencies").toArray()) {
-                QVERIFY2(std::abs(peak.toDouble() - 997) <= 3, qPrintable(QString("The received audio peaked at %1 Hz instead of 997 Hz").arg(peak.toDouble())));
+                QVERIFY2(
+                    std::abs(peak.toDouble() - 997) <= 3,
+                    qPrintable(QString("The received audio peaked at %1 Hz instead of 997 Hz").arg(peak.toDouble()))
+                );
             }
         }
         const auto windowSnrs = [](const QJsonObject &run) {
@@ -1826,16 +2025,34 @@ window.resampledAudioStage = 'starting';
             std::sort(snrs.begin(), snrs.end());
             return snrs;
         };
-        for (const auto &[label, run] : {std::pair{QString("48 kHz"), native}, std::pair{QString("44.1 kHz"), resampled}}) {
+        for (const auto &[label, run] :
+             {std::pair{QString("48 kHz"), native}, std::pair{QString("44.1 kHz"), resampled}}) {
             const QList<double> snrs = windowSnrs(run);
-            QVERIFY2(snrs.size() == 5, qPrintable(QString("The %1 run measured %2 windows").arg(label).arg(snrs.size())));
-            QVERIFY2(snrs[2] >= 25, qPrintable(QString("A %1 tone arrived at a median of %2 dB SNR").arg(label).arg(snrs[2])));
-            QVERIFY2(snrs[1] >= 20, qPrintable(QString("A %1 tone fell below 20 dB SNR in more than one window: %2").arg(label, QString::fromUtf8(QJsonDocument(run.value("snrs").toArray()).toJson(QJsonDocument::Compact)))));
+            QVERIFY2(
+                snrs.size() == 5,
+                qPrintable(QString("The %1 run measured %2 windows").arg(label).arg(snrs.size()))
+            );
+            QVERIFY2(
+                snrs[2] >= 25,
+                qPrintable(QString("A %1 tone arrived at a median of %2 dB SNR").arg(label).arg(snrs[2]))
+            );
+            QVERIFY2(
+                snrs[1] >= 20,
+                qPrintable(
+                    QString("A %1 tone fell below 20 dB SNR in more than one window: %2")
+                        .arg(
+                            label,
+                            QString::fromUtf8(QJsonDocument(run.value("snrs").toArray()).toJson(QJsonDocument::Compact))
+                        )
+                )
+            );
         }
     }
 
     void cameraFramesLookTheSameOnEveryPath() {
-        for (const QString &constraints : {QString("{width: 640, height: 480, frameRate: 30}"), QString("{width: 1280, height: 720, frameRate: 30}")}) {
+        for (const QString &constraints :
+             {QString("{width: 640, height: 480, frameRate: 30}"),
+              QString("{width: 1280, height: 720, frameRate: 30}")}) {
             runFramePaths(constraints, true);
             if (QTest::currentTestFailed()) {
                 return;
@@ -1847,7 +2064,9 @@ window.resampledAudioStage = 'starting';
         if (qEnvironmentVariable("EDEN_TEST_REAL_CAPTURE") != "1") {
             QSKIP("Requires a real camera");
         }
-        for (const QString &constraints : {QString("{width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 30}}"), QString("{width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}}")}) {
+        for (const QString &constraints :
+             {QString("{width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 30}}"),
+              QString("{width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}}")}) {
             runFramePaths(constraints, false);
             if (QTest::currentTestFailed()) {
                 return;
@@ -1890,9 +2109,19 @@ window.resampledAudioStage = 'starting';
             window.show();
             view->load(url("webgl-teardown"));
             QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("webgl-teardown"), 15000);
-            QCOMPARE(evaluate(*view, "window.gl = document.createElement('canvas').getContext('webgl2'); gl.clearColor(1, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.getError() === gl.NO_ERROR && !gl.isContextLost()").toBool(), true);
+            QCOMPARE(
+                evaluate(
+                    *view,
+                    "window.gl = document.createElement('canvas').getContext('webgl2'); gl.clearColor(1, 0, 0, 1); "
+                    "gl.clear(gl.COLOR_BUFFER_BIT); gl.getError() === gl.NO_ERROR && !gl.isContextLost()"
+                )
+                    .toBool(),
+                true
+            );
             QTRY_VERIFY_WITH_TIMEOUT(
-                (gpuProcesses = descendantProcessesNamed("WPEGPUProcess"), gpuProcesses.removeIf([&](pid_t pid) { return !running(pid); }), !gpuProcesses.isEmpty()),
+                (gpuProcesses = descendantProcessesNamed("WPEGPUProcess"),
+                 gpuProcesses.removeIf([&](pid_t pid) { return !running(pid); }),
+                 !gpuProcesses.isEmpty()),
                 10000
             );
             webProcesses = descendantProcessesNamed("WPEWebProcess");
@@ -1912,7 +2141,15 @@ window.resampledAudioStage = 'starting';
         while (alive() && exiting.elapsed() < 5000) {
             QTest::qWait(50);
         }
-        QVERIFY2(!alive(), qPrintable(QString("%1 web process(es) were still running %2 ms after their profile closed while the GPU process was unresponsive").arg(alive()).arg(exiting.elapsed())));
+        QVERIFY2(
+            !alive(),
+            qPrintable(QString(
+                           "%1 web process(es) were still running %2 ms after their profile closed while the GPU "
+                           "process was unresponsive"
+            )
+                           .arg(alive())
+                           .arg(exiting.elapsed()))
+        );
     }
 
     void hangRecorderReportsMainThreadStalls() {
@@ -1944,7 +2181,11 @@ window.resampledAudioStage = 'starting';
             window.show();
             view.load(url("hang"));
             QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("hang"), 15000);
-            evaluate(view, "setTimeout(() => { const start = performance.now(); while (performance.now() - start < 1000) {} document.title = 'stalled'; }, 0); true");
+            evaluate(
+                view,
+                "setTimeout(() => { const start = performance.now(); while (performance.now() - start < 1000) {} "
+                "document.title = 'stalled'; }, 0); true"
+            );
             QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("stalled"), 15000);
             QTest::qWait(500);
         }
@@ -1953,17 +2194,32 @@ window.resampledAudioStage = 'starting';
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QString log = QString::fromUtf8(file.readAll());
         const auto excerpt = log.left(4000);
-        QVERIFY2(log.contains("Eden hang recorder: WPEWebProcess reports main thread stalls over 200 ms"), qPrintable(excerpt));
-        const QRegularExpression stall("Eden hang recorder: WPEWebProcess main thread has not run for \\d+ ms, thread stacks follow");
+        QVERIFY2(
+            log.contains("Eden hang recorder: WPEWebProcess reports main thread stalls over 200 ms"),
+            qPrintable(excerpt)
+        );
+        const QRegularExpression stall(
+            "Eden hang recorder: WPEWebProcess main thread has not run for \\d+ ms, thread stacks follow"
+        );
         const auto stallMatch = stall.match(log);
         QVERIFY2(stallMatch.hasMatch(), qPrintable(excerpt));
         const auto afterStall = log.mid(stallMatch.capturedEnd());
-        QVERIFY2(QRegularExpression("thread \\d+ \\(WPEWebProcess\\)").match(afterStall).hasMatch(), qPrintable(afterStall.left(4000)));
-        QVERIFY2(QRegularExpression("\\n    libWPEWebKit-2\\.0\\.so\\.1\\+0x[0-9a-f]+").match(afterStall).hasMatch(), qPrintable(afterStall.left(4000)));
-        const auto resumed = QRegularExpression("Eden hang recorder: WPEWebProcess main thread resumed after (\\d+) ms").match(afterStall);
+        QVERIFY2(
+            QRegularExpression("thread \\d+ \\(WPEWebProcess\\)").match(afterStall).hasMatch(),
+            qPrintable(afterStall.left(4000))
+        );
+        QVERIFY2(
+            QRegularExpression("\\n    libWPEWebKit-2\\.0\\.so\\.1\\+0x[0-9a-f]+").match(afterStall).hasMatch(),
+            qPrintable(afterStall.left(4000))
+        );
+        const auto resumed = QRegularExpression("Eden hang recorder: WPEWebProcess main thread resumed after (\\d+) ms")
+                                 .match(afterStall);
         QVERIFY2(resumed.hasMatch(), qPrintable(excerpt));
         const int stalledFor = resumed.captured(1).toInt();
-        QVERIFY2(stalledFor >= 700 && stalledFor <= 3000, qPrintable(QString("The recorder measured a %1 ms stall for a 1000 ms busy loop").arg(stalledFor)));
+        QVERIFY2(
+            stalledFor >= 700 && stalledFor <= 3000,
+            qPrintable(QString("The recorder measured a %1 ms stall for a 1000 ms busy loop").arg(stalledFor))
+        );
     }
 
     void animatedCanvasesKeepTheDisplayRate() {
@@ -2024,15 +2280,28 @@ window.resampledAudioStage = 'starting';
 })().catch(error => window.animationRates = {error: String(error)});
 )JS");
         QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "!!window.animationRates").toBool(), 60000);
-        const QJsonObject rates = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.animationRates)").toString().toUtf8()).object();
+        const QJsonObject rates =
+            QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.animationRates)").toString().toUtf8())
+                .object();
         qInfo().noquote() << "Animation rates" << QJsonDocument(rates).toJson(QJsonDocument::Compact);
         QCOMPARE(rates.value("error").toString(), QString());
         const double displayFps = rates.value("empty").toObject().value("fps").toDouble();
         QVERIFY2(displayFps >= 50, qPrintable(QString("An empty animation loop ran at %1 fps").arg(displayFps)));
         for (const char *name : {"webgl720", "webgl180", "canvas720"}) {
             const QJsonObject rate = rates.value(name).toObject();
-            QVERIFY2(rate.value("fps").toDouble() >= displayFps * 0.9, qPrintable(QString("A page redrawing a %1 canvas every frame ran at %2 of %3 fps").arg(name).arg(rate.value("fps").toDouble()).arg(displayFps)));
-            QVERIFY2(rate.value("p90").toDouble() <= 1500 / displayFps, qPrintable(QString("A page redrawing a %1 canvas every frame had a 90th percentile frame of %2 ms").arg(name).arg(rate.value("p90").toDouble())));
+            QVERIFY2(
+                rate.value("fps").toDouble() >= displayFps * 0.9,
+                qPrintable(QString("A page redrawing a %1 canvas every frame ran at %2 of %3 fps")
+                               .arg(name)
+                               .arg(rate.value("fps").toDouble())
+                               .arg(displayFps))
+            );
+            QVERIFY2(
+                rate.value("p90").toDouble() <= 1500 / displayFps,
+                qPrintable(QString("A page redrawing a %1 canvas every frame had a 90th percentile frame of %2 ms")
+                               .arg(name)
+                               .arg(rate.value("p90").toDouble()))
+            );
         }
     }
 
@@ -2055,15 +2324,19 @@ window.resampledAudioStage = 'starting';
             policyHandler = g_signal_connect(
                 view.nativeView(),
                 "decide-policy",
-                G_CALLBACK(+[](WebKitWebView *, WebKitPolicyDecision *decision, WebKitPolicyDecisionType type, gpointer) -> gboolean {
-                    if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
-                        return FALSE;
+                G_CALLBACK(
+                    +[](WebKitWebView *, WebKitPolicyDecision *decision, WebKitPolicyDecisionType type, gpointer)
+                        -> gboolean {
+                        if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
+                            return FALSE;
+                        }
+                        WebKitWebsitePolicies *policies =
+                            webkit_website_policies_new_with_policies("autoplay", WEBKIT_AUTOPLAY_DENY, nullptr);
+                        webkit_policy_decision_use_with_policies(decision, policies);
+                        g_object_unref(policies);
+                        return TRUE;
                     }
-                    WebKitWebsitePolicies *policies = webkit_website_policies_new_with_policies("autoplay", WEBKIT_AUTOPLAY_DENY, nullptr);
-                    webkit_policy_decision_use_with_policies(decision, policies);
-                    g_object_unref(policies);
-                    return TRUE;
-                }),
+                ),
                 nullptr
             );
         }
@@ -2074,7 +2347,14 @@ window.resampledAudioStage = 'starting';
         });
         view.load(url("media-autoplay"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("media-autoplay"), 15000);
-        QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "!!(window.initialAutoplay && window.initialAutoplay.audible && window.initialAutoplay.muted)").toBool(), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            evaluate(
+                view,
+                "!!(window.initialAutoplay && window.initialAutoplay.audible && window.initialAutoplay.muted)"
+            )
+                .toBool(),
+            15000
+        );
         evaluate(view, R"JS(window.mediaAutoplay = null;
 window.mediaAutoplayStage = 'starting';
 (async () => {
@@ -2168,22 +2448,47 @@ window.mediaAutoplayStage = 'starting';
         while (!evaluate(view, "!!window.mediaAutoplay").toBool() && waited.elapsed() < 120000) {
             QTest::qWait(100);
         }
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.mediaAutoplay || {stage: window.mediaAutoplayStage, partial: window.mediaAutoplayPartial})").toString().toUtf8()).object();
-        qInfo().noquote() << "Media autoplay" << (denyAutoplay ? "deny" : "default") << QJsonDocument(result).toJson(QJsonDocument::Compact);
-        QVERIFY2(!result.contains("error") && !result.contains("stage"), qPrintable(QString("The media fixture stopped at %1: %2").arg(result.value("stage").toString(), result.value("error").toString())));
+        const QJsonObject result =
+            QJsonDocument::fromJson(evaluate(
+                                        view,
+                                        "JSON.stringify(window.mediaAutoplay || {stage: window.mediaAutoplayStage, "
+                                        "partial: window.mediaAutoplayPartial})"
+                                    )
+                                        .toString()
+                                        .toUtf8())
+                .object();
+        qInfo().noquote() << "Media autoplay" << (denyAutoplay ? "deny" : "default")
+                          << QJsonDocument(result).toJson(QJsonDocument::Compact);
+        QVERIFY2(
+            !result.contains("error") && !result.contains("stage"),
+            qPrintable(QString("The media fixture stopped at %1: %2")
+                           .arg(result.value("stage").toString(), result.value("error").toString()))
+        );
         const QJsonObject initial = result.value("initial").toObject();
         QVERIFY2(!initial.value("hasBeenActive").toBool(true), "The page must try playback before any user activation");
         QCOMPARE(initial.value("audible").toString(), QString("NotAllowedError"));
         QCOMPARE(initial.value("muted").toString(), QString("played"));
         const QJsonObject activation = result.value("activation").toObject();
-        QVERIFY2(!activation.value("isActive").toBool(true) && activation.value("hasBeenActive").toBool(), "The checks must run after transient activation expired, with sticky activation left");
-        const auto describe = [](const QJsonObject &object) { return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)); };
+        QVERIFY2(
+            !activation.value("isActive").toBool(true) && activation.value("hasBeenActive").toBool(),
+            "The checks must run after transient activation expired, with sticky activation left"
+        );
+        const auto describe = [](const QJsonObject &object) {
+            return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+        };
         for (const char *name : {"audible", "element"}) {
             const QJsonObject step = result.value(name).toObject();
             if (denyAutoplay) {
-                QVERIFY2(step.value("outcome").toString() == "NotAllowedError" && step.value("paused").toBool(), qPrintable(QString("%1: %2").arg(name, describe(step))));
+                QVERIFY2(
+                    step.value("outcome").toString() == "NotAllowedError" && step.value("paused").toBool(),
+                    qPrintable(QString("%1: %2").arg(name, describe(step)))
+                );
             } else {
-                QVERIFY2(step.value("outcome").toString() == "played" && step.value("playingAtResolve").toBool() && !step.value("paused").toBool(true) && step.value("advanced").toBool(), qPrintable(QString("%1: %2").arg(name, describe(step))));
+                QVERIFY2(
+                    step.value("outcome").toString() == "played" && step.value("playingAtResolve").toBool() &&
+                        !step.value("paused").toBool(true) && step.value("advanced").toBool(),
+                    qPrintable(QString("%1: %2").arg(name, describe(step)))
+                );
             }
         }
         const QJsonObject autoplayAttribute = result.value("autoplayAttribute").toObject();
@@ -2191,7 +2496,10 @@ window.mediaAutoplayStage = 'starting';
         QVERIFY2(autoplayAttribute.value("paused").toBool() == denyAutoplay, qPrintable(describe(autoplayAttribute)));
         const QJsonObject unmute = result.value("unmute").toObject();
         QCOMPARE(unmute.value("mutedOutcome").toString(), QString("played"));
-        QVERIFY2(unmute.value("paused").toBool() == denyAutoplay && !unmute.value("muted").toBool(true), qPrintable(describe(unmute)));
+        QVERIFY2(
+            unmute.value("paused").toBool() == denyAutoplay && !unmute.value("muted").toBool(true),
+            qPrintable(describe(unmute))
+        );
         const auto expectFrame = [&](const QString &name, bool allowed) {
             const QJsonObject frame = result.value(name).toObject();
             QVERIFY2(!frame.contains("timeout") && !frame.contains("error"), qPrintable(name + ": " + describe(frame)));
@@ -2221,7 +2529,10 @@ window.mediaAutoplayStage = 'starting';
             window.resize(900, 600);
             view.attach(window.contentItem());
             window.show();
-            webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+            webkit_settings_set_media_playback_requires_user_gesture(
+                webkit_web_view_get_settings(view.nativeView()),
+                FALSE
+            );
             view.load(url("webgl-source"));
             QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("webgl-source"), 15000);
             evaluate(view, R"JS(window.webglSource = null;
@@ -2426,22 +2737,70 @@ window.webglSourceStage = 'starting';
             while (!evaluate(view, "!!window.webglSource").toBool() && waited.elapsed() < 60000) {
                 QTest::qWait(100);
             }
-            const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.webglSource || {stage: window.webglSourceStage, partial: window.webglSourcePartial})").toString().toUtf8()).object();
+            const QJsonObject result =
+                QJsonDocument::fromJson(evaluate(
+                                            view,
+                                            "JSON.stringify(window.webglSource || {stage: window.webglSourceStage, "
+                                            "partial: window.webglSourcePartial})"
+                                        )
+                                            .toString()
+                                            .toUtf8())
+                    .object();
             qInfo().noquote() << "WebGL source" << label << QJsonDocument(result).toJson(QJsonDocument::Compact);
             modes.append({label, result});
         }
         for (const auto &[label, result] : std::as_const(modes)) {
-            QVERIFY2(!result.contains("fatal") && !result.contains("stage"), qPrintable(QString("%1: the fixture stopped at %2 %3").arg(label, result.value("stage").toString(), result.value("fatal").toString())));
+            QVERIFY2(
+                !result.contains("fatal") && !result.contains("stage"),
+                qPrintable(QString("%1: the fixture stopped at %2 %3")
+                               .arg(label, result.value("stage").toString(), result.value("fatal").toString()))
+            );
             QVERIFY2(!result.value("contextLost").toBool(true), qPrintable(label + ": the WebGL context was lost"));
             const QJsonArray upright({"RG", "BY"});
-            for (const char *name : {"captureGrid", "videoFrameGrid", "videoFrameCanvasGrid", "workerGrid", "remoteGrid"}) {
-                QVERIFY2(result.value(name).toArray() == upright, qPrintable(QString("%1: %2 is %3 instead of upright RG/BY").arg(label, name, QString::fromUtf8(QJsonDocument(result.value(name).toArray()).toJson(QJsonDocument::Compact)))));
+            for (const char *name :
+                 {"captureGrid", "videoFrameGrid", "videoFrameCanvasGrid", "workerGrid", "remoteGrid"}) {
+                QVERIFY2(
+                    result.value(name).toArray() == upright,
+                    qPrintable(QString("%1: %2 is %3 instead of upright RG/BY")
+                                   .arg(
+                                       label,
+                                       name,
+                                       QString::fromUtf8(
+                                           QJsonDocument(result.value(name).toArray()).toJson(QJsonDocument::Compact)
+                                       )
+                                   ))
+                );
             }
-            QVERIFY2(!result.contains("videoFrameError") && !result.contains("remoteError"), qPrintable(label + ": " + result.value("videoFrameError").toString() + result.value("remoteError").toString()));
-            QVERIFY2(result.value("capturedFps").toInt() >= 25, qPrintable(QString("%1: a captured 720p WebGL canvas presented %2 fps").arg(label).arg(result.value("capturedFps").toInt())));
-            QVERIFY2(result.value("paintFps").toInt() >= 50, qPrintable(QString("%1: the page painted at %2 fps while capturing").arg(label).arg(result.value("paintFps").toInt())));
-            QVERIFY2(result.value("worstLagMs").toInt() <= 50, qPrintable(QString("%1: capturing stalled the main thread for %2 ms").arg(label).arg(result.value("worstLagMs").toInt())));
-            QVERIFY2(result.value("remoteFrames").toInt() >= 45, qPrintable(QString("%1: the remote side presented %2 frames").arg(label).arg(result.value("remoteFrames").toInt())));
+            QVERIFY2(
+                !result.contains("videoFrameError") && !result.contains("remoteError"),
+                qPrintable(
+                    label + ": " + result.value("videoFrameError").toString() + result.value("remoteError").toString()
+                )
+            );
+            QVERIFY2(
+                result.value("capturedFps").toInt() >= 25,
+                qPrintable(QString("%1: a captured 720p WebGL canvas presented %2 fps")
+                               .arg(label)
+                               .arg(result.value("capturedFps").toInt()))
+            );
+            QVERIFY2(
+                result.value("paintFps").toInt() >= 50,
+                qPrintable(QString("%1: the page painted at %2 fps while capturing")
+                               .arg(label)
+                               .arg(result.value("paintFps").toInt()))
+            );
+            QVERIFY2(
+                result.value("worstLagMs").toInt() <= 50,
+                qPrintable(QString("%1: capturing stalled the main thread for %2 ms")
+                               .arg(label)
+                               .arg(result.value("worstLagMs").toInt()))
+            );
+            QVERIFY2(
+                result.value("remoteFrames").toInt() >= 45,
+                qPrintable(QString("%1: the remote side presented %2 frames")
+                               .arg(label)
+                               .arg(result.value("remoteFrames").toInt()))
+            );
         }
     }
 
@@ -2456,7 +2815,8 @@ window.webglSourceStage = 'starting';
         QProcess inspect;
         inspect.start("gst-inspect-1.0", {"va"});
         QVERIFY(inspect.waitForFinished(60000));
-        const auto filename = QRegularExpression("Filename\\s+(\\S+)").match(QString::fromUtf8(inspect.readAllStandardOutput()));
+        const auto filename =
+            QRegularExpression("Filename\\s+(\\S+)").match(QString::fromUtf8(inspect.readAllStandardOutput()));
         const QString videoAccelerationPlugin = filename.hasMatch() ? filename.captured(1) : QString();
         if (!hideVideoAcceleration && videoAccelerationPlugin.isEmpty()) {
             QSKIP("The GStreamer VA plugin is not installed");
@@ -2465,8 +2825,12 @@ window.webglSourceStage = 'starting';
         QTemporaryDir workspace;
         QVERIFY(workspace.isValid());
         QVERIFY(QDir().mkpath(workspace.filePath("logs")));
-        QList<QPair<QByteArray, QByteArray>> environment {
-            {"GST_DEBUG", "webkitvideoframe:5,webkitvideoframeconverter:4,webkitlibwebrtcvideoencoder:4,webkitvideoencoderprivate:4" + (qEnvironmentVariableIsSet("EDEN_TEST_GST_DEBUG") ? "," + qgetenv("EDEN_TEST_GST_DEBUG") : QByteArray())},
+        QList<QPair<QByteArray, QByteArray>> environment{
+            {"GST_DEBUG",
+             "webkitvideoframe:5,webkitvideoframeconverter:4,webkitlibwebrtcvideoencoder:4,webkitvideoencoderprivate:"
+             "4" +
+                 (qEnvironmentVariableIsSet("EDEN_TEST_GST_DEBUG") ? "," + qgetenv("EDEN_TEST_GST_DEBUG")
+                                                                   : QByteArray())},
             {"GST_DEBUG_NO_COLOR", "1"},
             {"GST_DEBUG_FILE", workspace.filePath("logs/gst-%r.log").toUtf8()},
         };
@@ -2474,7 +2838,8 @@ window.webglSourceStage = 'starting';
             const QFileInfo plugin(videoAccelerationPlugin);
             QVERIFY(QDir().mkpath(workspace.filePath("plugins")));
             QVERIFY(QDir().mkpath(workspace.filePath("registry")));
-            for (const QFileInfo &entry : QDir(plugin.absolutePath()).entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+            for (const QFileInfo &entry :
+                 QDir(plugin.absolutePath()).entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
                 if (entry.fileName() != plugin.fileName()) {
                     QVERIFY(QFile::link(entry.absoluteFilePath(), workspace.filePath("plugins/" + entry.fileName())));
                 }
@@ -2497,7 +2862,9 @@ window.webglSourceStage = 'starting';
         }
         QList<QPair<QByteArray, QByteArray>> previous;
         for (const auto &[name, value] : std::as_const(environment)) {
-            previous.append({name, qEnvironmentVariableIsSet(name.constData()) ? qgetenv(name.constData()) : QByteArray()});
+            previous.append(
+                {name, qEnvironmentVariableIsSet(name.constData()) ? qgetenv(name.constData()) : QByteArray()}
+            );
             qputenv(name.constData(), value);
         }
         const QByteArray previousMode = qgetenv("EDEN_WPE_GPU_PROCESS");
@@ -2527,7 +2894,10 @@ window.webglSourceStage = 'starting';
                 window.resize(1400, 900);
                 view.attach(window.contentItem());
                 window.show();
-                webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+                webkit_settings_set_media_playback_requires_user_gesture(
+                    webkit_web_view_get_settings(view.nativeView()),
+                    FALSE
+                );
                 view.load(url("webgl-dmabuf"));
                 QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("webgl-dmabuf"), 15000);
                 evaluate(view, R"JS(window.dmabufFrames = null;
@@ -2880,7 +3250,15 @@ window.dmabufFramesStage = 'starting';
                 while (!evaluate(view, "!!window.dmabufFrames").toBool() && waited.elapsed() < 120000) {
                     QTest::qWait(100);
                 }
-                const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.dmabufFrames || {stage: window.dmabufFramesStage, partial: window.dmabufFramesPartial})").toString().toUtf8()).object();
+                const QJsonObject result =
+                    QJsonDocument::fromJson(evaluate(
+                                                view,
+                                                "JSON.stringify(window.dmabufFrames || {stage: "
+                                                "window.dmabufFramesStage, partial: window.dmabufFramesPartial})"
+                                            )
+                                                .toString()
+                                                .toUtf8())
+                        .object();
                 qInfo().noquote() << "DMA-BUF frames" << label << QJsonDocument(result).toJson(QJsonDocument::Compact);
                 modes.append({label, result});
             }
@@ -2895,72 +3273,179 @@ window.dmabufFramesStage = 'starting';
                 log += QString::fromUtf8(file.readAll());
             }
             if (!artifacts.isEmpty() && QDir().mkpath(artifacts)) {
-                QFile::copy(entry.absoluteFilePath(), QDir(artifacts).filePath(QString(QTest::currentDataTag()).replace(' ', '-') + "-" + entry.fileName()));
+                QFile::copy(
+                    entry.absoluteFilePath(),
+                    QDir(artifacts).filePath(
+                        QString(QTest::currentDataTag()).replace(' ', '-') + "-" + entry.fileName()
+                    )
+                );
             }
         }
         const auto describe = [](const QJsonValue &value) {
             return value.isArray() ? QString::fromUtf8(QJsonDocument(value.toArray()).toJson(QJsonDocument::Compact))
-                                   : value.isObject() ? QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact))
-                                                      : value.toVariant().toString();
+                   : value.isObject()
+                       ? QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact))
+                       : value.toVariant().toString();
         };
         const QJsonArray upright({"RG", "BY"});
         for (const auto &[label, result] : std::as_const(modes)) {
-            QVERIFY2(!result.contains("fatal") && !result.contains("stage"), qPrintable(QString("%1: the fixture stopped at %2 %3").arg(label, result.value("stage").toString(), result.value("fatal").toString())));
+            QVERIFY2(
+                !result.contains("fatal") && !result.contains("stage"),
+                qPrintable(QString("%1: the fixture stopped at %2 %3")
+                               .arg(label, result.value("stage").toString(), result.value("fatal").toString()))
+            );
             QVERIFY2(!result.value("contextLost").toBool(true), qPrintable(label + ": the WebGL context was lost"));
-            QVERIFY2(!result.contains("remoteError") && !result.contains("recorderError"), qPrintable(label + ": " + result.value("remoteError").toString() + result.value("recorderError").toString()));
+            QVERIFY2(
+                !result.contains("remoteError") && !result.contains("recorderError"),
+                qPrintable(
+                    label + ": " + result.value("remoteError").toString() + result.value("recorderError").toString()
+                )
+            );
             for (const char *name : {"localGrid", "remoteGrid", "recordedGrid", "resizedGrid"}) {
-                QVERIFY2(result.value(name).toArray() == upright, qPrintable(QString("%1: %2 is %3 instead of upright RG/BY").arg(label, name, describe(result.value(name)))));
+                QVERIFY2(
+                    result.value(name).toArray() == upright,
+                    qPrintable(
+                        QString("%1: %2 is %3 instead of upright RG/BY").arg(label, name, describe(result.value(name)))
+                    )
+                );
             }
-            QVERIFY2(result.value("localFrames").toInt() >= 60, qPrintable(QString("%1: the local preview presented %2 frames").arg(label).arg(result.value("localFrames").toInt())));
-            QVERIFY2(result.value("remoteFrames").toInt() >= 45, qPrintable(QString("%1: the remote side presented %2 frames").arg(label).arg(result.value("remoteFrames").toInt())));
+            QVERIFY2(
+                result.value("localFrames").toInt() >= 60,
+                qPrintable(QString("%1: the local preview presented %2 frames")
+                               .arg(label)
+                               .arg(result.value("localFrames").toInt()))
+            );
+            QVERIFY2(
+                result.value("remoteFrames").toInt() >= 45,
+                qPrintable(QString("%1: the remote side presented %2 frames")
+                               .arg(label)
+                               .arg(result.value("remoteFrames").toInt()))
+            );
             const QJsonArray remoteSize = result.value("remoteSize").toArray();
             const QJsonArray remoteSentSize = result.value("remoteSentSize").toArray();
-            QVERIFY2(remoteSize.size() == 2 && remoteSize[0].toInt() > 0 && remoteSize[0].toInt() <= 640 && remoteSize[1].toInt() > 0 && remoteSize[1].toInt() <= 360 && qAbs(remoteSize[0].toInt() * 9 - remoteSize[1].toInt() * 16) <= 32, qPrintable(QString("%1: a half size 1280x720 send arrived as %2").arg(label, describe(remoteSize))));
-            QVERIFY2(remoteSentSize.size() == 2 && remoteSentSize[0].toInt() > 0 && remoteSentSize[0].toInt() <= 640, qPrintable(QString("%1: the sender encoded %2 for a half size 1280x720 track").arg(label, describe(remoteSentSize))));
+            QVERIFY2(
+                remoteSize.size() == 2 && remoteSize[0].toInt() > 0 && remoteSize[0].toInt() <= 640 &&
+                    remoteSize[1].toInt() > 0 && remoteSize[1].toInt() <= 360 &&
+                    qAbs(remoteSize[0].toInt() * 9 - remoteSize[1].toInt() * 16) <= 32,
+                qPrintable(QString("%1: a half size 1280x720 send arrived as %2").arg(label, describe(remoteSize)))
+            );
+            QVERIFY2(
+                remoteSentSize.size() == 2 && remoteSentSize[0].toInt() > 0 && remoteSentSize[0].toInt() <= 640,
+                qPrintable(QString("%1: the sender encoded %2 for a half size 1280x720 track")
+                               .arg(label, describe(remoteSentSize)))
+            );
             if (result.value("h264Offered").toBool()) {
                 QCOMPARE(result.value("remoteCodec").toString(), QString("video/H264"));
             }
             const QJsonObject resizedCall = result.value("resizedCall").toObject();
-            QVERIFY2(resizedCall.value("before").toInt() >= 20 && resizedCall.value("after").toInt() >= 20, qPrintable(QString("%1: a call from a 2D canvas stopped when the canvas was resized: %2").arg(label, describe(resizedCall))));
-            const double bytesPerFrame = result.value("remoteBytesSent").toDouble() / qMax(1, result.value("remoteFramesEncoded").toInt());
-            QVERIFY2(result.value("remoteFramesEncoded").toInt() > 0 && bytesPerFrame < 2000, qPrintable(QString("%1: a call sending a still picture spent %2 bytes per frame over %3 frames").arg(label).arg(bytesPerFrame, 0, 'f', 0).arg(result.value("remoteFramesEncoded").toInt())));
-            QVERIFY2(result.value("recordedBytes").toInt() > 10000, qPrintable(QString("%1: the recording holds %2 bytes").arg(label).arg(result.value("recordedBytes").toInt())));
+            QVERIFY2(
+                resizedCall.value("before").toInt() >= 20 && resizedCall.value("after").toInt() >= 20,
+                qPrintable(QString("%1: a call from a 2D canvas stopped when the canvas was resized: %2")
+                               .arg(label, describe(resizedCall)))
+            );
+            const double bytesPerFrame =
+                result.value("remoteBytesSent").toDouble() / qMax(1, result.value("remoteFramesEncoded").toInt());
+            QVERIFY2(
+                result.value("remoteFramesEncoded").toInt() > 0 && bytesPerFrame < 2000,
+                qPrintable(QString("%1: a call sending a still picture spent %2 bytes per frame over %3 frames")
+                               .arg(label)
+                               .arg(bytesPerFrame, 0, 'f', 0)
+                               .arg(result.value("remoteFramesEncoded").toInt()))
+            );
+            QVERIFY2(
+                result.value("recordedBytes").toInt() > 10000,
+                qPrintable(
+                    QString("%1: the recording holds %2 bytes").arg(label).arg(result.value("recordedBytes").toInt())
+                )
+            );
             const QJsonObject mp4Recording = result.value("mp4Recording").toObject();
             if (!mp4Recording.contains("unsupported")) {
-                QVERIFY2(mp4Recording.value("bytes").toInt() > 2000 && mp4Recording.value("grid").toArray() == upright, qPrintable(QString("%1: an MP4 recording came out as %2").arg(label, describe(mp4Recording))));
-                QVERIFY2(mp4Recording.value("bytes").toInt() < 400000, qPrintable(QString("%1: 2.5 seconds of a still picture recorded as %2 bytes of MP4, so the encoder is padding its output").arg(label).arg(mp4Recording.value("bytes").toInt())));
+                QVERIFY2(
+                    mp4Recording.value("bytes").toInt() > 2000 && mp4Recording.value("grid").toArray() == upright,
+                    qPrintable(QString("%1: an MP4 recording came out as %2").arg(label, describe(mp4Recording)))
+                );
+                QVERIFY2(
+                    mp4Recording.value("bytes").toInt() < 400000,
+                    qPrintable(QString(
+                                   "%1: 2.5 seconds of a still picture recorded as %2 bytes of MP4, so the encoder is "
+                                   "padding its output"
+                    )
+                                   .arg(label)
+                                   .arg(mp4Recording.value("bytes").toInt()))
+                );
             }
             QCOMPARE(result.value("resizedSize").toArray(), QJsonArray({640, 360}));
             const QJsonObject encoders = result.value("encoders").toObject();
-            QVERIFY2(!encoders.value("vp8").toObject().contains("unsupported"), qPrintable(label + ": WebCodecs cannot encode VP8"));
+            QVERIFY2(
+                !encoders.value("vp8").toObject().contains("unsupported"),
+                qPrintable(label + ": WebCodecs cannot encode VP8")
+            );
             for (const QString &codec : encoders.keys()) {
                 const QJsonObject encoder = encoders.value(codec).toObject();
                 if (encoder.contains("unsupported")) {
                     continue;
                 }
-                QVERIFY2(encoder.value("chunks").toInt() == 10 && encoder.value("error").toString().isEmpty(), qPrintable(QString("%1: %2 encoding produced %3").arg(label, codec, describe(encoder))));
-                QVERIFY2(encoder.value("decodedGrid").toArray() == upright, qPrintable(QString("%1: %2 decoded as %3").arg(label, codec, describe(encoder.value("decodedGrid")))));
+                QVERIFY2(
+                    encoder.value("chunks").toInt() == 10 && encoder.value("error").toString().isEmpty(),
+                    qPrintable(QString("%1: %2 encoding produced %3").arg(label, codec, describe(encoder)))
+                );
+                QVERIFY2(
+                    encoder.value("decodedGrid").toArray() == upright,
+                    qPrintable(
+                        QString("%1: %2 decoded as %3").arg(label, codec, describe(encoder.value("decodedGrid")))
+                    )
+                );
             }
             const QJsonObject quality = result.value("qualityBitrate").toObject();
             if (!quality.contains("unsupported")) {
-                const double ratio = quality.value("steadyBytes").toDouble() / qMax(1.0, quality.value("steadyTargetBytes").toDouble());
-                QVERIFY2(quality.value("error").toString().isEmpty() && quality.value("chunks").toInt() == 90, qPrintable(QString("%1: quality mode H.264 encoding produced %2").arg(label, describe(quality))));
-                QVERIFY2(ratio >= 0.2 && ratio <= 2.0, qPrintable(QString("%1: quality mode H.264 asked for 200 kbps and settled at %2 times that: %3").arg(label).arg(ratio, 0, 'f', 2).arg(describe(quality))));
+                const double ratio =
+                    quality.value("steadyBytes").toDouble() / qMax(1.0, quality.value("steadyTargetBytes").toDouble());
+                QVERIFY2(
+                    quality.value("error").toString().isEmpty() && quality.value("chunks").toInt() == 90,
+                    qPrintable(QString("%1: quality mode H.264 encoding produced %2").arg(label, describe(quality)))
+                );
+                QVERIFY2(
+                    ratio >= 0.2 && ratio <= 2.0,
+                    qPrintable(QString("%1: quality mode H.264 asked for 200 kbps and settled at %2 times that: %3")
+                                   .arg(label)
+                                   .arg(ratio, 0, 'f', 2)
+                                   .arg(describe(quality)))
+                );
             }
             const QStringList canvasFormats{"BGRA", "BGRX", "RGBA", "RGBX"};
-            QVERIFY2(canvasFormats.contains(result.value("opaqueFormat").toString()) && result.value("opaqueCopy").toString() == "ok", qPrintable(QString("%1: a WebGL canvas frame has format %2 and copyTo() gave %3").arg(label, result.value("opaqueFormat").toString(), result.value("opaqueCopy").toString())));
+            QVERIFY2(
+                canvasFormats.contains(result.value("opaqueFormat").toString()) &&
+                    result.value("opaqueCopy").toString() == "ok",
+                qPrintable(
+                    QString("%1: a WebGL canvas frame has format %2 and copyTo() gave %3")
+                        .arg(label, result.value("opaqueFormat").toString(), result.value("opaqueCopy").toString())
+                )
+            );
             const QJsonObject alphaFormats = result.value("alphaFormats").toObject();
             for (const char *name : {"premultiplied", "straight"}) {
-                QVERIFY2(QStringList({"BGRA", "RGBA"}).contains(alphaFormats.value(name).toString()), qPrintable(QString("%1: a translucent %2 WebGL canvas frame has format %3").arg(label, name, alphaFormats.value(name).toString())));
+                QVERIFY2(
+                    QStringList({"BGRA", "RGBA"}).contains(alphaFormats.value(name).toString()),
+                    qPrintable(QString("%1: a translucent %2 WebGL canvas frame has format %3")
+                                   .arg(label, name, alphaFormats.value(name).toString()))
+                );
             }
             const QJsonObject alpha = result.value("alpha").toObject();
             for (const char *name : {"premultiplied", "straight"}) {
                 const QJsonArray pixel = alpha.value(name).toArray();
-                QVERIFY2(pixel.size() == 4 && pixel[0].toInt() >= 245 && pixel[1].toInt() <= 8 && pixel[2].toInt() <= 8 && qAbs(pixel[3].toInt() - 128) <= 3, qPrintable(QString("%1: a half transparent red %2 canvas copied as %3 instead of straight 255,0,0,128").arg(label, name, describe(pixel))));
+                QVERIFY2(
+                    pixel.size() == 4 && pixel[0].toInt() >= 245 && pixel[1].toInt() <= 8 && pixel[2].toInt() <= 8 &&
+                        qAbs(pixel[3].toInt() - 128) <= 3,
+                    qPrintable(
+                        QString("%1: a half transparent red %2 canvas copied as %3 instead of straight 255,0,0,128")
+                            .arg(label, name, describe(pixel))
+                    )
+                );
             }
         }
 
-        const QRegularExpression wrapped("Wrapped DMA-BUF pool buffer (\\d+) as a (\\d+)x(\\d+) (\\w+) video frame with modifier 0x([0-9a-f]+)");
+        const QRegularExpression wrapped(
+            "Wrapped DMA-BUF pool buffer (\\d+) as a (\\d+)x(\\d+) (\\w+) video frame with modifier 0x([0-9a-f]+)"
+        );
         QHash<QString, QSet<QString>> buffersBySize;
         int wrappedFrames = 0;
         int tiledFrames = 0;
@@ -2971,22 +3456,55 @@ window.dmabufFramesStage = 'starting';
             buffersBySize[frame.captured(2) + "x" + frame.captured(3)].insert(frame.captured(1));
         }
         const auto excerpt = log.right(6000);
-        QVERIFY2(wrappedFrames >= 200, qPrintable(QString("Only %1 video frames wrapped a DMA-BUF\n%2").arg(wrappedFrames).arg(excerpt)));
-        QVERIFY2(buffersBySize.contains("1280x720") && buffersBySize.contains("640x360"), qPrintable(QStringList(buffersBySize.keys()).join(", ")));
+        QVERIFY2(
+            wrappedFrames >= 200,
+            qPrintable(QString("Only %1 video frames wrapped a DMA-BUF\n%2").arg(wrappedFrames).arg(excerpt))
+        );
+        QVERIFY2(
+            buffersBySize.contains("1280x720") && buffersBySize.contains("640x360"),
+            qPrintable(QStringList(buffersBySize.keys()).join(", "))
+        );
         for (auto it = buffersBySize.cbegin(); it != buffersBySize.cend(); ++it) {
-            QVERIFY2(it.value().size() <= 12, qPrintable(QString("%1 frames used %2 distinct pool buffers across both WebGL modes").arg(it.key()).arg(it.value().size())));
+            QVERIFY2(
+                it.value().size() <= 12,
+                qPrintable(QString("%1 frames used %2 distinct pool buffers across both WebGL modes")
+                               .arg(it.key())
+                               .arg(it.value().size()))
+            );
         }
         QVERIFY2(!log.contains("through the CPU"), qPrintable(excerpt));
-        QVERIFY2(!log.contains("on the GPU failed") && !log.contains("Unable to build a GPU pipeline"), qPrintable(excerpt));
-        QVERIFY2(QRegularExpression("Built a GPU pipeline converting video/x-raw\\(memory:DMABuf\\)[^\\n]* to video/x-raw, format=\\(string\\)I420").match(log).hasMatch(), qPrintable(excerpt));
+        QVERIFY2(
+            !log.contains("on the GPU failed") && !log.contains("Unable to build a GPU pipeline"),
+            qPrintable(excerpt)
+        );
+        QVERIFY2(
+            QRegularExpression(
+                "Built a GPU pipeline converting video/x-raw\\(memory:DMABuf\\)[^\\n]* to video/x-raw, "
+                "format=\\(string\\)I420"
+            )
+                .match(log)
+                .hasMatch(),
+            qPrintable(excerpt)
+        );
         if (hideVideoAcceleration) {
-            QVERIFY2(!tiledFrames, qPrintable(QString("%1 frames used a tiled layout without video acceleration").arg(tiledFrames)));
+            QVERIFY2(
+                !tiledFrames,
+                qPrintable(QString("%1 frames used a tiled layout without video acceleration").arg(tiledFrames))
+            );
             QVERIFY2(!log.contains("through the video post-processor"), qPrintable(excerpt));
         } else {
-            QVERIFY2(tiledFrames == wrappedFrames, qPrintable(QString("Only %1 of %2 frames used the layout the video post-processor imports").arg(tiledFrames).arg(wrappedFrames)));
+            QVERIFY2(
+                tiledFrames == wrappedFrames,
+                qPrintable(QString("Only %1 of %2 frames used the layout the video post-processor imports")
+                               .arg(tiledFrames)
+                               .arg(wrappedFrames))
+            );
             QVERIFY2(log.contains("Feeding vah264enc through the video post-processor"), qPrintable(excerpt));
             if (log.contains("The H.264 encoder is")) {
-                QVERIFY2(log.contains("The H.264 encoder is hardware accelerated and takes DMA-BUF frames"), qPrintable(excerpt));
+                QVERIFY2(
+                    log.contains("The H.264 encoder is hardware accelerated and takes DMA-BUF frames"),
+                    qPrintable(excerpt)
+                );
             }
         }
     }
@@ -3001,12 +3519,9 @@ window.dmabufFramesStage = 'starting';
         auto *settings = webkit_web_view_get_settings(view.nativeView());
         webkit_settings_set_enable_mock_capture_devices(settings, TRUE);
         webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
-        );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         view.load(url("video-effects"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("video-effects"), 15000);
         evaluate(view, R"JS(window.effectsResult = null;
@@ -3312,43 +3827,107 @@ window.dmabufFramesStage = 'starting';
         while (!evaluate(view, "!!window.effectsResult").toBool() && waited.elapsed() < 150000) {
             QTest::qWait(200);
         }
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.effectsResult || {stage: window.effectsStage})").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(
+                evaluate(view, "JSON.stringify(window.effectsResult || {stage: window.effectsStage})")
+                    .toString()
+                    .toUtf8()
+            )
+                .object();
         qInfo().noquote() << "Video effects" << QJsonDocument(result).toJson(QJsonDocument::Compact);
-        QVERIFY2(!result.contains("stage") && !result.contains("fatal"), qPrintable(QString("The effects fixture stopped at %1").arg(result.value("stage").toString())));
+        QVERIFY2(
+            !result.contains("stage") && !result.contains("fatal"),
+            qPrintable(QString("The effects fixture stopped at %1").arg(result.value("stage").toString()))
+        );
         const QJsonObject globals = result.value("globals").toObject();
-        for (const char *name : {"VideoFrame", "OffscreenCanvas", "RTCRtpScriptTransform", "requestVideoFrameCallback", "captureStream"}) {
+        for (const char *name :
+             {"VideoFrame", "OffscreenCanvas", "RTCRtpScriptTransform", "requestVideoFrameCallback", "captureStream"}) {
             QCOMPARE(globals.value(name).toString(), QString("function"));
         }
         const QJsonObject webgl = result.value("webgl2").toObject();
         QVERIFY(webgl.value("halfFloatTarget").toBool());
         QVERIFY(webgl.value("floatTarget").toBool());
         QCOMPARE(result.value("videoElementToWebGL").toObject().value("glError").toInt(-1), 0);
-        QVERIFY2(result.value("canvasCaptureStream").toObject().value("framesPresented").toInt() >= 20, "canvas.captureStream() presented too few frames");
+        QVERIFY2(
+            result.value("canvasCaptureStream").toObject().value("framesPresented").toInt() >= 20,
+            "canvas.captureStream() presented too few frames"
+        );
         const QJsonObject webglFrames = result.value("webglCanvasFrames").toObject();
         const auto closeTo = [](const QJsonArray &pixel, int red, int green, int blue) {
-            return pixel.size() == 4 && std::abs(pixel[0].toInt() - red) <= 8 && std::abs(pixel[1].toInt() - green) <= 8 && std::abs(pixel[2].toInt() - blue) <= 8;
+            return pixel.size() == 4 && std::abs(pixel[0].toInt() - red) <= 8 &&
+                   std::abs(pixel[1].toInt() - green) <= 8 && std::abs(pixel[2].toInt() - blue) <= 8;
         };
-        QVERIFY2(!webglFrames.value("contextLost").toBool(true), qPrintable(QString("Capturing a WebGL canvas lost the context: %1").arg(QString::fromUtf8(QJsonDocument(webglFrames).toJson(QJsonDocument::Compact)))));
-        QVERIFY2(webglFrames.value("presented").toInt() >= 20, qPrintable(QString("A captured WebGL canvas presented %1 frames").arg(webglFrames.value("presented").toInt())));
-        QVERIFY2(closeTo(webglFrames.value("capturedPixel").toArray(), 204, 51, 102), qPrintable(QString("A captured WebGL canvas showed %1").arg(QString::fromUtf8(QJsonDocument(webglFrames.value("capturedPixel").toArray()).toJson(QJsonDocument::Compact)))));
-        QVERIFY2(webglFrames.value("frameError").isNull() && closeTo(webglFrames.value("framePixel").toArray(), 204, 51, 102),
-            qPrintable(QString("new VideoFrame(webglCanvas) gave %1 %2").arg(webglFrames.value("frameError").toString(), QString::fromUtf8(QJsonDocument(webglFrames.value("framePixel").toArray()).toJson(QJsonDocument::Compact)))));
+        QVERIFY2(
+            !webglFrames.value("contextLost").toBool(true),
+            qPrintable(QString("Capturing a WebGL canvas lost the context: %1")
+                           .arg(QString::fromUtf8(QJsonDocument(webglFrames).toJson(QJsonDocument::Compact))))
+        );
+        QVERIFY2(
+            webglFrames.value("presented").toInt() >= 20,
+            qPrintable(
+                QString("A captured WebGL canvas presented %1 frames").arg(webglFrames.value("presented").toInt())
+            )
+        );
+        QVERIFY2(
+            closeTo(webglFrames.value("capturedPixel").toArray(), 204, 51, 102),
+            qPrintable(QString("A captured WebGL canvas showed %1")
+                           .arg(
+                               QString::fromUtf8(QJsonDocument(webglFrames.value("capturedPixel").toArray())
+                                                     .toJson(QJsonDocument::Compact))
+                           ))
+        );
+        QVERIFY2(
+            webglFrames.value("frameError").isNull() &&
+                closeTo(webglFrames.value("framePixel").toArray(), 204, 51, 102),
+            qPrintable(QString("new VideoFrame(webglCanvas) gave %1 %2")
+                           .arg(
+                               webglFrames.value("frameError").toString(),
+                               QString::fromUtf8(QJsonDocument(webglFrames.value("framePixel").toArray())
+                                                     .toJson(QJsonDocument::Compact))
+                           ))
+        );
         const QJsonObject worker = result.value("workerPipeline").toObject();
         QCOMPARE(worker.value("hasProcessor").toString(), QString("function"));
         QCOMPARE(worker.value("hasGenerator").toString(), QString("function"));
-        QVERIFY2(worker.value("offscreenWebGL2").toBool(), "A worker could not create a WebGL2 context on an OffscreenCanvas");
-        for (const char *failure : {"error", "workerError", "transferError", "texImageError", "texImageException", "newVideoFrame", "write", "timeout"}) {
-            QVERIFY2(!worker.contains(failure), qPrintable(QString("Worker pipeline %1: %2").arg(failure, worker.value(failure).toVariant().toString())));
+        QVERIFY2(
+            worker.value("offscreenWebGL2").toBool(),
+            "A worker could not create a WebGL2 context on an OffscreenCanvas"
+        );
+        for (const char *failure :
+             {"error",
+              "workerError",
+              "transferError",
+              "texImageError",
+              "texImageException",
+              "newVideoFrame",
+              "write",
+              "timeout"}) {
+            QVERIFY2(
+                !worker.contains(failure),
+                qPrintable(QString("Worker pipeline %1: %2").arg(failure, worker.value(failure).toVariant().toString()))
+            );
         }
-        QVERIFY2(worker.value("frames").toInt() >= 30, qPrintable(QString("The worker read %1 camera frames").arg(worker.value("frames").toInt())));
+        QVERIFY2(
+            worker.value("frames").toInt() >= 30,
+            qPrintable(QString("The worker read %1 camera frames").arg(worker.value("frames").toInt()))
+        );
         QVERIFY(worker.value("copyTo").toObject().value("planes").toInt() >= 1);
         QVERIFY(worker.value("copyToRGBA").toInt() == 640 * 480 * 4);
         QCOMPARE(worker.value("imageBitmap").toArray(), QJsonArray({640, 480}));
-        QVERIFY2(worker.value("generatedFramesPresented").toInt() >= 20, qPrintable(QString("The page presented %1 generated frames").arg(worker.value("generatedFramesPresented").toInt())));
+        QVERIFY2(
+            worker.value("generatedFramesPresented").toInt() >= 20,
+            qPrintable(
+                QString("The page presented %1 generated frames").arg(worker.value("generatedFramesPresented").toInt())
+            )
+        );
         QCOMPARE(worker.value("generatedSize").toArray(), QJsonArray({320, 240}));
         const QJsonArray pixel = worker.value("generatedPixel").toArray();
-        QVERIFY2(pixel.size() == 4 && std::abs(pixel[0].toInt() - 51) <= 6 && std::abs(pixel[1].toInt() - 102) <= 6 && std::abs(pixel[2].toInt() - 153) <= 6,
-            qPrintable(QString("Generated frames showed %1 instead of the WebGL clear color").arg(QString::fromUtf8(QJsonDocument(pixel).toJson(QJsonDocument::Compact)))));
+        QVERIFY2(
+            pixel.size() == 4 && std::abs(pixel[0].toInt() - 51) <= 6 && std::abs(pixel[1].toInt() - 102) <= 6 &&
+                std::abs(pixel[2].toInt() - 153) <= 6,
+            qPrintable(QString("Generated frames showed %1 instead of the WebGL clear color")
+                           .arg(QString::fromUtf8(QJsonDocument(pixel).toJson(QJsonDocument::Compact))))
+        );
     }
 
     void joiningWithRealDevicesIsQuick() {
@@ -3361,13 +3940,13 @@ window.dmabufFramesStage = 'starting';
         window.resize(900, 600);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
         );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         view.load(url("join-latency"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("join-latency"), 15000);
         evaluate(view, R"JS(window.joinResult = null;
@@ -3436,24 +4015,53 @@ window.dmabufFramesStage = 'starting';
 })().catch(error => window.joinResult = {error: String(error)});
 )JS");
         QTRY_VERIFY_WITH_TIMEOUT(evaluate(view, "!!window.joinResult").toBool(), 60000);
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.joinResult)").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.joinResult)").toString().toUtf8()).object();
         qInfo().noquote() << "Join latency" << QJsonDocument(result).toJson(QJsonDocument::Compact);
         QCOMPARE(result.value("error").toString(), QString());
         QCOMPARE(result.value("connectionState").toString(), QString("connected"));
         QVERIFY2(result.value("coldListsAgree").toBool(), "Concurrent first enumerations disagreed about the devices");
-        QVERIFY2(result.value("coldKinds").toString().contains("audioinput") && result.value("coldKinds").toString().contains("videoinput"), qPrintable(QString("The first enumeration listed %1").arg(result.value("coldKinds").toString())));
-        QVERIFY2(result.value("warmKinds").toString().contains("audioinput") && result.value("warmKinds").toString().contains("videoinput"), qPrintable(QString("Enumeration after capture listed %1").arg(result.value("warmKinds").toString())));
+        QVERIFY2(
+            result.value("coldKinds").toString().contains("audioinput") &&
+                result.value("coldKinds").toString().contains("videoinput"),
+            qPrintable(QString("The first enumeration listed %1").arg(result.value("coldKinds").toString()))
+        );
+        QVERIFY2(
+            result.value("warmKinds").toString().contains("audioinput") &&
+                result.value("warmKinds").toString().contains("videoinput"),
+            qPrintable(QString("Enumeration after capture listed %1").arg(result.value("warmKinds").toString()))
+        );
         QCOMPARE(result.value("warmDuplicates").toInt(-1), 0);
         const QList<QPair<QString, int>> budgets = {
-            {"enumerateColdMs", 400}, {"audioGetUserMedia", 300}, {"videoGetUserMedia", 600}, {"enumerateWarm", 100},
-            {"firstFrame", 300}, {"combinedGetUserMedia", 400}, {"peerConnection", 400},
+            {"enumerateColdMs", 400},
+            {"audioGetUserMedia", 300},
+            {"videoGetUserMedia", 600},
+            {"enumerateWarm", 100},
+            {"firstFrame", 300},
+            {"combinedGetUserMedia", 400},
+            {"peerConnection", 400},
         };
         for (const auto &[step, budget] : budgets) {
             const QJsonObject mark = result.value(step).toObject();
-            QVERIFY2(mark.value("ms").toInt() <= budget, qPrintable(QString("%1 took %2 ms against a %3 ms budget").arg(step).arg(mark.value("ms").toInt()).arg(budget)));
-            QVERIFY2(mark.value("worstLag").toInt() <= 50, qPrintable(QString("%1 stalled the main thread for %2 ms").arg(step).arg(mark.value("worstLag").toInt())));
+            QVERIFY2(
+                mark.value("ms").toInt() <= budget,
+                qPrintable(
+                    QString("%1 took %2 ms against a %3 ms budget").arg(step).arg(mark.value("ms").toInt()).arg(budget)
+                )
+            );
+            QVERIFY2(
+                mark.value("worstLag").toInt() <= 50,
+                qPrintable(
+                    QString("%1 stalled the main thread for %2 ms").arg(step).arg(mark.value("worstLag").toInt())
+                )
+            );
         }
-        QVERIFY2(result.value("steadyWorstLag").toInt() <= 50, qPrintable(QString("The main thread stalled for %1 ms during the call").arg(result.value("steadyWorstLag").toInt())));
+        QVERIFY2(
+            result.value("steadyWorstLag").toInt() <= 50,
+            qPrintable(
+                QString("The main thread stalled for %1 ms during the call").arg(result.value("steadyWorstLag").toInt())
+            )
+        );
     }
 
     void cameraSelfViewWithRealDeviceKeepsCaptureRate() {
@@ -3466,13 +4074,13 @@ window.dmabufFramesStage = 'starting';
         window.resize(900, 600);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
         );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         view.load(url("camera-self-view"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("camera-self-view"), 15000);
         evaluate(view, R"JS(
@@ -3503,9 +4111,14 @@ window.selfView = null;
         QTest::qWait(10000);
         const double presentedFps = (evaluate(view, "window.selfView.presented()").toInt() - before) / 10.0;
         const double captureFps = evaluate(view, "window.selfView.frameRate()").toDouble();
-        qInfo().noquote() << QString("Real camera self view: %1 fps presented, capture set to %2 fps").arg(presentedFps).arg(captureFps);
+        qInfo().noquote() << QString("Real camera self view: %1 fps presented, capture set to %2 fps")
+                                 .arg(presentedFps)
+                                 .arg(captureFps);
         evaluate(view, "window.selfView.stream.getTracks().forEach(track => track.stop())");
-        QVERIFY2(presentedFps >= captureFps * 0.8, qPrintable(QString("The self view presented %1 of %2 fps").arg(presentedFps).arg(captureFps)));
+        QVERIFY2(
+            presentedFps >= captureFps * 0.8,
+            qPrintable(QString("The self view presented %1 of %2 fps").arg(presentedFps).arg(captureFps))
+        );
     }
 
     void cameraCallWithRealDevicesStaysSmooth() {
@@ -3518,13 +4131,13 @@ window.selfView = null;
         window.resize(900, 600);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
         );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         bool terminated = false;
         g_signal_connect(
             view.nativeView(),
@@ -3537,16 +4150,26 @@ window.selfView = null;
         view.load(url("camera-call"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("camera-call"), 15000);
         evaluate(view, cameraCallScript());
-        QTRY_VERIFY_WITH_TIMEOUT(!terminated && evaluate(view, "!!(window.cameraCall && (window.cameraCall.ready || window.cameraCall.error))").toBool(), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !terminated &&
+                evaluate(view, "!!(window.cameraCall && (window.cameraCall.ready || window.cameraCall.error))")
+                    .toBool(),
+            30000
+        );
         QCOMPARE(evaluate(view, "String(window.cameraCall.error || '')").toString(), QString());
         const auto sample = [&]() -> QJsonObject {
-            evaluate(view, "window.cameraSample = null; window.cameraCall.sample().then(value => window.cameraSample = value)");
+            evaluate(
+                view,
+                "window.cameraSample = null; window.cameraCall.sample().then(value => window.cameraSample = value)"
+            );
             QElapsedTimer waited;
             waited.start();
             while (!terminated && !evaluate(view, "!!window.cameraSample").toBool() && waited.elapsed() < 5000) {
                 QTest::qWait(50);
             }
-            return QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.cameraSample || {})").toString().toUtf8())
+            return QJsonDocument::fromJson(
+                       evaluate(view, "JSON.stringify(window.cameraSample || {})").toString().toUtf8()
+            )
                 .object();
         };
         QTest::qWait(4000);
@@ -3560,16 +4183,24 @@ window.selfView = null;
             QVERIFY2(!terminated, "The web process terminated");
             const QJsonObject current = sample();
             QVERIFY(!current.isEmpty());
-            const double selfFps = (current.value("selfTime").toDouble() - previous.value("selfTime").toDouble()) > 0
-                                       ? (current.value("selfFrames").toInt() - previous.value("selfFrames").toInt()) / 2.0
-                                       : 0;
-            const double remoteFps = (current.value("remoteFrames").toInt() - previous.value("remoteFrames").toInt()) / 2.0;
-            const double encodedFps = (current.value("encodedFrames").toInt() - previous.value("encodedFrames").toInt()) / 2.0;
-            const double directFps = (current.value("directEncoded").toInt() - previous.value("directEncoded").toInt()) / 2.0;
-            const double sourceFps = (current.value("sourceFrames").toInt() - previous.value("sourceFrames").toInt()) / 2.0;
+            const double selfFps =
+                (current.value("selfTime").toDouble() - previous.value("selfTime").toDouble()) > 0
+                    ? (current.value("selfFrames").toInt() - previous.value("selfFrames").toInt()) / 2.0
+                    : 0;
+            const double remoteFps =
+                (current.value("remoteFrames").toInt() - previous.value("remoteFrames").toInt()) / 2.0;
+            const double encodedFps =
+                (current.value("encodedFrames").toInt() - previous.value("encodedFrames").toInt()) / 2.0;
+            const double directFps =
+                (current.value("directEncoded").toInt() - previous.value("directEncoded").toInt()) / 2.0;
+            const double sourceFps =
+                (current.value("sourceFrames").toInt() - previous.value("sourceFrames").toInt()) / 2.0;
             const double timerLag = current.value("timerLag").toDouble();
             qInfo().noquote() << "Real camera call sample" << QJsonDocument(current).toJson(QJsonDocument::Compact);
-            qInfo().noquote() << QString("Real camera call %1: source %2 fps, self %3 fps, remote %4 fps, direct encoded %5 fps, simulcast top layer %6 fps, timer lag %7 ms")
+            qInfo().noquote() << QString(
+                                     "Real camera call %1: source %2 fps, self %3 fps, remote %4 fps, direct encoded "
+                                     "%5 fps, simulcast top layer %6 fps, timer lag %7 ms"
+            )
                                      .arg(round)
                                      .arg(sourceFps)
                                      .arg(selfFps)
@@ -3577,15 +4208,29 @@ window.selfView = null;
                                      .arg(directFps)
                                      .arg(encodedFps)
                                      .arg(timerLag, 0, 'f', 1);
-            slowest = {std::min(slowest[0], selfFps), std::min(slowest[1], remoteFps), std::min(slowest[2], directFps), std::min(slowest[3], encodedFps)};
+            slowest = {
+                std::min(slowest[0], selfFps),
+                std::min(slowest[1], remoteFps),
+                std::min(slowest[2], directFps),
+                std::min(slowest[3], encodedFps)
+            };
             slowestSource = std::min(slowestSource, sourceFps);
             worstTimerLag = std::max(worstTimerLag, timerLag);
             previous = current;
         }
-        QVERIFY2(slowestSource >= 20, qPrintable(QString("The camera delivered %1 fps to the sender").arg(slowestSource)));
+        QVERIFY2(
+            slowestSource >= 20,
+            qPrintable(QString("The camera delivered %1 fps to the sender").arg(slowestSource))
+        );
         QVERIFY2(slowest[0] >= 0.8 * slowestSource, qPrintable(QString("The self view ran at %1 fps").arg(slowest[0])));
-        QVERIFY2(slowest[1] >= 0.8 * slowestSource, qPrintable(QString("Remote video decoded at %1 fps").arg(slowest[1])));
-        QVERIFY2(slowest[2] >= 0.8 * slowestSource, qPrintable(QString("The single-layer sender encoded at %1 fps").arg(slowest[2])));
+        QVERIFY2(
+            slowest[1] >= 0.8 * slowestSource,
+            qPrintable(QString("Remote video decoded at %1 fps").arg(slowest[1]))
+        );
+        QVERIFY2(
+            slowest[2] >= 0.8 * slowestSource,
+            qPrintable(QString("The single-layer sender encoded at %1 fps").arg(slowest[2]))
+        );
         QVERIFY2(slowest[3] >= 20, qPrintable(QString("The simulcast top layer encoded at %1 fps").arg(slowest[3])));
         QVERIFY2(worstTimerLag < 100, qPrintable(QString("Main thread timers ran %1 ms late").arg(worstTimerLag)));
         evaluate(view, "window.cameraCall.stream.getTracks().forEach(track => track.stop())");
@@ -3814,11 +4459,19 @@ window.selfView = null;
             WpeFrame frame(native, buffer);
             frame.rendered();
             const auto acknowledged = pump(1);
-            QVERIFY2(acknowledged < 200, qPrintable(QString("A frame acknowledged on the main thread reached WebKit after %1 ms").arg(acknowledged)));
+            QVERIFY2(
+                acknowledged < 200,
+                qPrintable(
+                    QString("A frame acknowledged on the main thread reached WebKit after %1 ms").arg(acknowledged)
+                )
+            );
             QCOMPARE(lifecycle, QList<QByteArray>{"rendered"});
         }
         const auto released = pump(2);
-        QVERIFY2(released < 200, qPrintable(QString("A frame released on the main thread reached WebKit after %1 ms").arg(released)));
+        QVERIFY2(
+            released < 200,
+            qPrintable(QString("A frame released on the main thread reached WebKit after %1 ms").arg(released))
+        );
         QCOMPARE(lifecycle, (QList<QByteArray>{"rendered", "released"}));
     }
 
@@ -4191,16 +4844,31 @@ window.selfView = null;
         const auto excerpt = log.left(4000);
         QVERIFY2(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, qPrintable(excerpt));
         const QString name = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
-        QVERIFY2(log.contains(QString("Eden hang recorder: %1 reports main thread stalls over 200 ms").arg(name)), qPrintable(excerpt));
+        QVERIFY2(
+            log.contains(QString("Eden hang recorder: %1 reports main thread stalls over 200 ms").arg(name)),
+            qPrintable(excerpt)
+        );
         const auto stallMatch =
-            QRegularExpression(QString("Eden hang recorder: %1 main thread has not run for \\d+ ms, thread stacks follow").arg(QRegularExpression::escape(name))).match(log);
+            QRegularExpression(
+                QString("Eden hang recorder: %1 main thread has not run for \\d+ ms, thread stacks follow")
+                    .arg(QRegularExpression::escape(name))
+            )
+                .match(log);
         QVERIFY2(stallMatch.hasMatch(), qPrintable(excerpt));
         const auto afterStall = log.mid(stallMatch.capturedEnd());
-        QVERIFY2(QRegularExpression("\\n    libWPEWebKit-2\\.0\\.so\\.1\\+0x[0-9a-f]+").match(afterStall).hasMatch(), qPrintable(afterStall.left(4000)));
-        const auto resumed = QRegularExpression(QString("Eden hang recorder: %1 main thread resumed after (\\d+) ms").arg(QRegularExpression::escape(name))).match(afterStall);
+        QVERIFY2(
+            QRegularExpression("\\n    libWPEWebKit-2\\.0\\.so\\.1\\+0x[0-9a-f]+").match(afterStall).hasMatch(),
+            qPrintable(afterStall.left(4000))
+        );
+        const auto resumed = QRegularExpression(QString("Eden hang recorder: %1 main thread resumed after (\\d+) ms")
+                                                    .arg(QRegularExpression::escape(name)))
+                                 .match(afterStall);
         QVERIFY2(resumed.hasMatch(), qPrintable(excerpt));
         const int stalledFor = resumed.captured(1).toInt();
-        QVERIFY2(stalledFor >= 700 && stalledFor <= 3000, qPrintable(QString("The recorder measured a %1 ms stall for a 1000 ms busy loop").arg(stalledFor)));
+        QVERIFY2(
+            stalledFor >= 700 && stalledFor <= 3000,
+            qPrintable(QString("The recorder measured a %1 ms stall for a 1000 ms busy loop").arg(stalledFor))
+        );
     }
 
     void endingPlayedTracksDoesNotBlockThePage() {
@@ -4210,7 +4878,10 @@ window.selfView = null;
         window.resize(900, 600);
         view.attach(window.contentItem());
         window.show();
-        webkit_settings_set_media_playback_requires_user_gesture(webkit_web_view_get_settings(view.nativeView()), FALSE);
+        webkit_settings_set_media_playback_requires_user_gesture(
+            webkit_web_view_get_settings(view.nativeView()),
+            FALSE
+        );
         view.load(url("track-ending"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("track-ending"), 15000);
         evaluate(view, R"JS(window.trackEnding = null;
@@ -4292,8 +4963,14 @@ window.selfView = null;
             QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.trackEnding)").toString().toUtf8()).object();
         const QByteArray summary = QJsonDocument(result).toJson(QJsonDocument::Compact);
         QVERIFY2(!result.contains("fatal"), summary.constData());
-        QVERIFY2(result.value("stopBlocked").toDouble() < 100, qPrintable("Stopping 12 playing tracks blocked the page: " + summary));
-        QVERIFY2(result.value("closeBlocked").toDouble() < 100, qPrintable("Closing a call with 4 playing remote tracks blocked the page: " + summary));
+        QVERIFY2(
+            result.value("stopBlocked").toDouble() < 100,
+            qPrintable("Stopping 12 playing tracks blocked the page: " + summary)
+        );
+        QVERIFY2(
+            result.value("closeBlocked").toDouble() < 100,
+            qPrintable("Closing a call with 4 playing remote tracks blocked the page: " + summary)
+        );
         QVERIFY2(result.value("ended").toBool(), summary.constData());
         QVERIFY2(result.value("remoteEnded").toBool(), summary.constData());
     }
@@ -4444,7 +5121,10 @@ window.selfView = null;
         QVERIFY(directory.isValid());
         const auto restore = qScopeGuard([] { qunsetenv("WEBKIT_WEBRTC_JSON_EVENTS_FILE"); });
         qputenv("WEBKIT_WEBRTC_JSON_EVENTS_FILE", "relative-events.jsonl");
-        QTest::ignoreMessage(QtWarningMsg, "WEBKIT_WEBRTC_JSON_EVENTS_FILE must be an absolute path in a directory Eden can create");
+        QTest::ignoreMessage(
+            QtWarningMsg,
+            "WEBKIT_WEBRTC_JSON_EVENTS_FILE must be an absolute path in a directory Eden can create"
+        );
         {
             WpeProfile rejected(privateParameters());
         }
@@ -5931,7 +6611,8 @@ true
                  ) < 5),
                 15000
             );
-            qInfo() << "pool step" << index << "imports" << view.surface()->textureImportCount() - imports << "frames" << view.surface()->frameImportCount() << "held peak" << WpeFrame::heldPeak();
+            qInfo() << "pool step" << index << "imports" << view.surface()->textureImportCount() - imports << "frames"
+                    << view.surface()->frameImportCount() << "held peak" << WpeFrame::heldPeak();
         }
         QVERIFY(view.surface()->accelerated());
         QVERIFY2(
@@ -5960,7 +6641,8 @@ true
                 (captured = window.grabWindow(),
                  !captured.isNull() &&
                      qAbs(
-                         captured.pixelColor(qRound(50 * window.devicePixelRatio()), qRound(50 * window.devicePixelRatio()))
+                         captured
+                             .pixelColor(qRound(50 * window.devicePixelRatio()), qRound(50 * window.devicePixelRatio()))
                              .red() -
                          red
                      ) < 5),
@@ -6338,12 +7020,9 @@ true
         auto *settings = webkit_web_view_get_settings(view.nativeView());
         webkit_settings_set_enable_mock_capture_devices(settings, mockDevices);
         webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
-        QObject::connect(
-            &view,
-            &EngineView::permissionRequested,
-            &view,
-            [&view](const PermissionRequestInfo &info) { view.resolvePermissionRequest(info.id, true); }
-        );
+        QObject::connect(&view, &EngineView::permissionRequested, &view, [&view](const PermissionRequestInfo &info) {
+            view.resolvePermissionRequest(info.id, true);
+        });
         view.load(url("frame-paths"));
         QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("frame-paths"), 15000);
         evaluate(view, QString("window.framePathsConstraints = %1;").arg(constraints) + framePathsScript());
@@ -6352,18 +7031,42 @@ true
         while (!evaluate(view, "!!window.framePaths").toBool() && waited.elapsed() < 60000) {
             QTest::qWait(200);
         }
-        const QJsonObject result = QJsonDocument::fromJson(evaluate(view, "JSON.stringify(window.framePaths || {stage: window.framePathsStage})").toString().toUtf8()).object();
+        const QJsonObject result =
+            QJsonDocument::fromJson(
+                evaluate(view, "JSON.stringify(window.framePaths || {stage: window.framePathsStage})")
+                    .toString()
+                    .toUtf8()
+            )
+                .object();
         const QString label = QString("%1 camera %2").arg(mockDevices ? "Mock" : "Real", constraints);
         qInfo().noquote() << "Frame paths" << label << QJsonDocument(result).toJson(QJsonDocument::Compact);
-        QVERIFY2(!result.contains("stage") && !result.contains("fatal"), qPrintable(QString("%1: the fixture stopped at %2 %3").arg(label, result.value("stage").toString(), result.value("fatal").toString())));
+        QVERIFY2(
+            !result.contains("stage") && !result.contains("fatal"),
+            qPrintable(QString("%1: the fixture stopped at %2 %3")
+                           .arg(label, result.value("stage").toString(), result.value("fatal").toString()))
+        );
         const QJsonObject worker = result.value("worker").toObject();
         for (const char *failure : {"error", "writeError", "workerError", "timeout"}) {
-            QVERIFY2(!worker.contains(failure), qPrintable(QString("%1: worker %2: %3").arg(label, failure, worker.value(failure).toVariant().toString())));
+            QVERIFY2(
+                !worker.contains(failure),
+                qPrintable(
+                    QString("%1: worker %2: %3").arg(label, failure, worker.value(failure).toVariant().toString())
+                )
+            );
         }
         const QStringList formats = {"I420", "I420A", "I422", "I444", "NV12", "RGBA", "RGBX", "BGRA", "BGRX"};
-        QVERIFY2(formats.contains(worker.value("format").toString()), qPrintable(QString("%1: camera frames have format %2").arg(label, worker.value("format").toVariant().toString())));
+        QVERIFY2(
+            formats.contains(worker.value("format").toString()),
+            qPrintable(
+                QString("%1: camera frames have format %2").arg(label, worker.value("format").toVariant().toString())
+            )
+        );
         const QJsonObject reference = worker.value("native").toObject();
-        QVERIFY2(reference.contains("mean"), qPrintable(QString("%1: copyTo() failed: %2").arg(label, QString::fromUtf8(QJsonDocument(reference).toJson(QJsonDocument::Compact)))));
+        QVERIFY2(
+            reference.contains("mean"),
+            qPrintable(QString("%1: copyTo() failed: %2")
+                           .arg(label, QString::fromUtf8(QJsonDocument(reference).toJson(QJsonDocument::Compact))))
+        );
         const double referenceMean = reference.value("mean").toDouble();
         const double referenceDeviation = reference.value("deviation").toDouble();
         const auto correlation = [](const QJsonArray &first, const QJsonArray &second, bool flipSecond) {
@@ -6389,21 +7092,43 @@ true
                 varianceFirst += a * a;
                 varianceSecond += b * b;
             }
-            return varianceFirst > 0 && varianceSecond > 0 ? covariance / std::sqrt(varianceFirst * varianceSecond) : 0.0;
+            return varianceFirst > 0 && varianceSecond > 0 ? covariance / std::sqrt(varianceFirst * varianceSecond)
+                                                           : 0.0;
         };
         const auto expectSameImage = [&](const QString &name, const QJsonObject &path) {
-            QVERIFY2(path.contains("mean"), qPrintable(QString("%1: %2 failed: %3").arg(label, name, QString::fromUtf8(QJsonDocument(path).toJson(QJsonDocument::Compact)))));
+            QVERIFY2(
+                path.contains("mean"),
+                qPrintable(QString("%1: %2 failed: %3")
+                               .arg(label, name, QString::fromUtf8(QJsonDocument(path).toJson(QJsonDocument::Compact))))
+            );
             if (referenceDeviation > 8) {
-                const double upright = correlation(path.value("grid").toArray(), reference.value("grid").toArray(), false);
-                const double flipped = correlation(path.value("grid").toArray(), reference.value("grid").toArray(), true);
-                QVERIFY2(upright >= 0.8 && upright > flipped,
-                    qPrintable(QString("%1: %2 does not match the frame's layout (correlation %3 upright, %4 flipped)").arg(label, name).arg(upright, 0, 'f', 2).arg(flipped, 0, 'f', 2)));
+                const double upright =
+                    correlation(path.value("grid").toArray(), reference.value("grid").toArray(), false);
+                const double flipped =
+                    correlation(path.value("grid").toArray(), reference.value("grid").toArray(), true);
+                QVERIFY2(
+                    upright >= 0.8 && upright > flipped,
+                    qPrintable(QString("%1: %2 does not match the frame's layout (correlation %3 upright, %4 flipped)")
+                                   .arg(label, name)
+                                   .arg(upright, 0, 'f', 2)
+                                   .arg(flipped, 0, 'f', 2))
+                );
             }
-            QVERIFY2(std::abs(path.value("mean").toDouble() - referenceMean) <= 20,
-                qPrintable(QString("%1: %2 has mean luma %3, the frame data has %4").arg(label, name).arg(path.value("mean").toDouble()).arg(referenceMean)));
+            QVERIFY2(
+                std::abs(path.value("mean").toDouble() - referenceMean) <= 20,
+                qPrintable(QString("%1: %2 has mean luma %3, the frame data has %4")
+                               .arg(label, name)
+                               .arg(path.value("mean").toDouble())
+                               .arg(referenceMean))
+            );
             if (referenceDeviation > 8) {
-                QVERIFY2(path.value("deviation").toDouble() >= referenceDeviation * 0.4,
-                    qPrintable(QString("%1: %2 is flat (deviation %3, the frame data has %4)").arg(label, name).arg(path.value("deviation").toDouble()).arg(referenceDeviation)));
+                QVERIFY2(
+                    path.value("deviation").toDouble() >= referenceDeviation * 0.4,
+                    qPrintable(QString("%1: %2 is flat (deviation %3, the frame data has %4)")
+                                   .arg(label, name)
+                                   .arg(path.value("deviation").toDouble())
+                                   .arg(referenceDeviation))
+                );
             }
         };
         for (const char *name : {"bitmap", "canvas2d", "webgl", "output", "rgba", "bgrx"}) {
@@ -6416,19 +7141,54 @@ true
         QCOMPARE(worker.value("rejectsYuvTarget").toObject().value("name").toString(), QString("NotSupportedError"));
         const QJsonObject trackSettings = result.value("settings").toObject();
         const QJsonArray settingsSize({trackSettings.value("width").toInt(), trackSettings.value("height").toInt()});
-        QVERIFY2(frameSize == settingsSize, qPrintable(QString("%1: frames are %2x%3 but the track reports %4x%5").arg(label).arg(frameSize.at(0).toInt()).arg(frameSize.at(1).toInt()).arg(settingsSize.at(0).toInt()).arg(settingsSize.at(1).toInt())));
+        QVERIFY2(
+            frameSize == settingsSize,
+            qPrintable(QString("%1: frames are %2x%3 but the track reports %4x%5")
+                           .arg(label)
+                           .arg(frameSize.at(0).toInt())
+                           .arg(frameSize.at(1).toInt())
+                           .arg(settingsSize.at(0).toInt())
+                           .arg(settingsSize.at(1).toInt()))
+        );
         const QJsonObject page = result.value("page").toObject();
-        QVERIFY2(page.value("size").toArray() == settingsSize, qPrintable(QString("%1: the camera video element is %2x%3 but the track reports %4x%5").arg(label).arg(page.value("size").toArray().at(0).toInt()).arg(page.value("size").toArray().at(1).toInt()).arg(settingsSize.at(0).toInt()).arg(settingsSize.at(1).toInt())));
+        QVERIFY2(
+            page.value("size").toArray() == settingsSize,
+            qPrintable(QString("%1: the camera video element is %2x%3 but the track reports %4x%5")
+                           .arg(label)
+                           .arg(page.value("size").toArray().at(0).toInt())
+                           .arg(page.value("size").toArray().at(1).toInt())
+                           .arg(settingsSize.at(0).toInt())
+                           .arg(settingsSize.at(1).toInt()))
+        );
         for (const char *name : {"canvas", "readbackCanvas", "webgl", "bitmap", "generated", "remote"}) {
             expectSameImage(QString("page %1").arg(name), page.value(name).toObject());
         }
         expectSameImage("page remote readback", page.value("remote").toObject().value("readback").toObject());
         const QJsonObject resized = page.value("resized").toObject();
-        QVERIFY2(resized.value("settings").toArray() == QJsonArray({320, 240}) && resized.value("element").toArray() == QJsonArray({320, 240}),
-            qPrintable(QString("%1: after applyConstraints the camera reported %2").arg(label, QString::fromUtf8(QJsonDocument(resized).toJson(QJsonDocument::Compact)))));
-        QVERIFY2(worker.value("frames").toInt() >= 30, qPrintable(QString("%1: the worker read %2 frames in 4 seconds").arg(label).arg(worker.value("frames").toInt())));
-        QVERIFY2(page.value("generatedPresented").toInt() >= 20, qPrintable(QString("%1: the page presented %2 generated frames").arg(label).arg(page.value("generatedPresented").toInt())));
-        QVERIFY2(worker.value("processingMs").toDouble() <= 16, qPrintable(QString("%1: a WebGL effects step took %2 ms per frame").arg(label).arg(worker.value("processingMs").toDouble())));
+        QVERIFY2(
+            resized.value("settings").toArray() == QJsonArray({320, 240}) &&
+                resized.value("element").toArray() == QJsonArray({320, 240}),
+            qPrintable(QString("%1: after applyConstraints the camera reported %2")
+                           .arg(label, QString::fromUtf8(QJsonDocument(resized).toJson(QJsonDocument::Compact))))
+        );
+        QVERIFY2(
+            worker.value("frames").toInt() >= 30,
+            qPrintable(
+                QString("%1: the worker read %2 frames in 4 seconds").arg(label).arg(worker.value("frames").toInt())
+            )
+        );
+        QVERIFY2(
+            page.value("generatedPresented").toInt() >= 20,
+            qPrintable(QString("%1: the page presented %2 generated frames")
+                           .arg(label)
+                           .arg(page.value("generatedPresented").toInt()))
+        );
+        QVERIFY2(
+            worker.value("processingMs").toDouble() <= 16,
+            qPrintable(QString("%1: a WebGL effects step took %2 ms per frame")
+                           .arg(label)
+                           .arg(worker.value("processingMs").toDouble()))
+        );
     }
 
     static QString framePathsScript() {

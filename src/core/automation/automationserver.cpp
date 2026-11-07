@@ -16,7 +16,6 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QKeySequence>
-#include <QWheelEvent>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QMouseEvent>
@@ -24,6 +23,7 @@
 #include <QQuickWindow>
 #include <QSaveFile>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -392,10 +392,11 @@ namespace eden::core {
         } else if (method == "pointerWheel") {
             const QPointF position(parameters.value("x").toDouble(), parameters.value("y").toDouble());
             const int delta = parameters.value("delta").toInt(-120);
+            const int pixelDelta = parameters.value("pixelDelta").toInt(0);
             QWheelEvent event(
                 position,
                 m_window->mapToGlobal(position),
-                QPoint(),
+                QPoint(0, pixelDelta),
                 QPoint(0, delta),
                 Qt::NoButton,
                 Qt::NoModifier,
@@ -408,10 +409,19 @@ namespace eden::core {
         } else if (method == "pointerDrag") {
             const QPointF from(parameters.value("x").toDouble(), parameters.value("y").toDouble());
             const QPointF to(parameters.value("toX").toDouble(), parameters.value("toY").toDouble());
-            const auto send = [this](QEvent::Type type, const QPointF &position, Qt::MouseButton button, Qt::MouseButtons buttons) {
-                QMouseEvent event(type, position, position, m_window->mapToGlobal(position), button, buttons, Qt::NoModifier);
-                QCoreApplication::sendEvent(m_window, &event);
-            };
+            const auto send =
+                [this](QEvent::Type type, const QPointF &position, Qt::MouseButton button, Qt::MouseButtons buttons) {
+                    QMouseEvent event(
+                        type,
+                        position,
+                        position,
+                        m_window->mapToGlobal(position),
+                        button,
+                        buttons,
+                        Qt::NoModifier
+                    );
+                    QCoreApplication::sendEvent(m_window, &event);
+                };
             send(QEvent::MouseMove, from, Qt::NoButton, Qt::NoButton);
             send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
             for (int step = 1; step <= 12; ++step) {

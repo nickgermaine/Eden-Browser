@@ -12,6 +12,7 @@
 #include "core/profiles/windowregistry.h"
 #include "core/settings/settingsstore.h"
 #include "core/settings/theme/thememanager.h"
+#include "core/window/popupdismissal.h"
 #include "core/window/tabstripnavigator.h"
 #include "core/window/windowcontroller.h"
 #include "core/window/windowframe.h"
@@ -201,6 +202,7 @@ int main(int argc, char *argv[]) {
     logStartupStage("qgui_application_constructed_ms");
     Q_INIT_RESOURCE(eden_ui_raw_res_0);
     QQuickStyle::setStyle("Basic");
+    eden::core::PopupDismissal popupDismissal;
     QFontDatabase::addApplicationFont(":/qt/qml/Eden/Ui/resources/fonts/RobotoFlex.ttf");
 
     std::unique_ptr<eden::platform::WaylandGlibEventDispatcher> waylandGlibDispatcher;

@@ -12,6 +12,7 @@
 #include <QOpenGLExtraFunctions>
 #include <QPainter>
 #include <QPalette>
+#include <QPointingDevice>
 #include <QQuickPaintedItem>
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
@@ -510,6 +511,16 @@ namespace eden::engine {
         emit renderingFailed(message);
     }
 
+    WpeScrollDelta wpeScrollDelta(const QWheelEvent &event, bool trustDeviceType) {
+        const QPointingDevice *device = event.pointingDevice();
+        const bool touchpad = trustDeviceType && device && device->type() == QInputDevice::DeviceType::TouchPad;
+        const bool continuous = event.source() != Qt::MouseEventNotSynthesized || touchpad;
+        if (event.phase() != Qt::NoScrollPhase || (continuous && !event.pixelDelta().isNull())) {
+            return {QPointF(event.pixelDelta()), true};
+        }
+        return {QPointF(event.angleDelta()) / 120.0, false};
+    }
+
     FrameAcknowledgement frameAcknowledgementPolicy() {
         const QString policy = qEnvironmentVariable("EDEN_WPE_FRAME_ACK");
         if (policy == QLatin1String("swap")) {
@@ -874,16 +885,16 @@ namespace eden::engine {
     }
 
     void WpeSurface::wheelEvent(QWheelEvent *event) {
-        const bool precise = !event->pixelDelta().isNull() || event->phase() != Qt::NoScrollPhase;
-        const QPointF delta = precise ? QPointF(event->pixelDelta()) : QPointF(event->angleDelta()) / 120.0;
+        static const bool trustDeviceType = QGuiApplication::platformName() != QLatin1String("wayland");
+        const WpeScrollDelta scroll = wpeScrollDelta(*event, trustDeviceType);
         dispatch(wpe_event_scroll_new(
             m_view,
-            precise ? WPE_INPUT_SOURCE_TOUCHPAD : WPE_INPUT_SOURCE_MOUSE,
+            scroll.precise ? WPE_INPUT_SOURCE_TOUCHPAD : WPE_INPUT_SOURCE_MOUSE,
             event->timestamp(),
             modifiers(event->modifiers()),
-            delta.x(),
-            delta.y(),
-            precise,
+            scroll.delta.x(),
+            scroll.delta.y(),
+            scroll.precise,
             event->phase() == Qt::ScrollEnd,
             event->position().x(),
             event->position().y()

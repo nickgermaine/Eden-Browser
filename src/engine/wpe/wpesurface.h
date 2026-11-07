@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/wpe/wpeapi.h"
+#include <QPointF>
 #include <QPointer>
 #include <QQuickItem>
 #include <QRect>
 #include <QSet>
+#include <QWheelEvent>
 #include <atomic>
 #include <memory>
 
@@ -26,6 +28,13 @@ namespace eden::engine {
     };
 
     enum class FrameAcknowledgement { Arrival, Import, Swap };
+
+    struct WpeScrollDelta {
+        QPointF delta;
+        bool precise = false;
+    };
+
+    WpeScrollDelta wpeScrollDelta(const QWheelEvent &event, bool trustDeviceType);
 
     FrameAcknowledgement frameAcknowledgementPolicy();
     QString frameAcknowledgementName(FrameAcknowledgement policy);

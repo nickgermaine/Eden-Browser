@@ -130,6 +130,8 @@ set(EDEN_CORE_SOURCES
     src/core/window/tabstripnavigator.h
     src/core/window/windowcontroller.cpp
     src/core/window/windowcontroller.h
+    src/core/window/popupdismissal.cpp
+    src/core/window/popupdismissal.h
     src/core/window/windowframe.cpp
     src/core/window/windowframe.h
     src/passwords/credentialvault.cpp
@@ -891,6 +893,11 @@ qt_add_executable(eden-window-frame-tests tests/windowframe_test.cpp)
 target_link_libraries(eden-window-frame-tests PRIVATE eden-core Qt6::Test)
 add_test(NAME eden-window-frame-tests COMMAND eden-window-frame-tests)
 set_tests_properties(eden-window-frame-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(eden-popup-dismissal-tests tests/popupdismissal_test.cpp)
+target_link_libraries(eden-popup-dismissal-tests PRIVATE eden-core Qt6::QuickControls2 Qt6::Test)
+add_test(NAME eden-popup-dismissal-tests COMMAND eden-popup-dismissal-tests)
+set_tests_properties(eden-popup-dismissal-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 qt_add_executable(eden-window-input-tests tests/windowinputregion_test.cpp)
 target_link_libraries(eden-window-input-tests PRIVATE eden-ui Qt6::Test)
